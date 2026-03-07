@@ -159,6 +159,18 @@ def test_registration_order_is_lexicographic() -> None:
     assert np.allclose(_read_loc(state_first), _read_loc(state_second))
 
 
+def test_get_values_returns_plain_name_to_value_mapping() -> None:
+    optimizer = Optimizer(pop_size=12)
+    zeta = optimizer.add("zeta", loc=3.0, scale=1.0)
+    alpha = optimizer.add("alpha", loc=-2.0, scale=2.0)
+
+    values = optimizer.get_values()
+    assert isinstance(values, dict)
+    assert list(values) == ["alpha", "zeta"]
+    assert values["alpha"] == alpha.value
+    assert values["zeta"] == zeta.value
+
+
 def test_add_remove_between_operations() -> None:
     optimizer = Optimizer(pop_size=16)
     a = optimizer.add("a", loc=1.0, scale=2.0)

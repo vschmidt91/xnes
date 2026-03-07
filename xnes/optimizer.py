@@ -250,6 +250,15 @@ class Optimizer:
         for row, name in enumerate(self._state_names):
             self._registry[name].value = float(self._xnes.loc[row])
 
+    def get_values(self) -> Mapping[str, float]:
+        """Return a mapping of current parameter values by name.
+
+        Returns:
+            A new name-to-value dictionary in lexicographic name order.
+        """
+
+        return {name: float(self._registry[name].value) for name in self._ordered_names()}
+
     def _ordered_names(self) -> list[str]:
         return sorted(self._registry)
 
