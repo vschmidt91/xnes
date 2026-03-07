@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "xnes"
+version = "0.1.0"
+description = "Evolutionary black-box optimizer with named dynamic parameters."
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+  "numpy>=1.26",
+  "scipy>=1.11",
+]
+
+[project.optional-dependencies]
+dev = [
+  "mypy>=1.10",
+  "pytest>=8.0",
+  "ruff>=0.11",
+  "scipy-stubs>=1.15",
+]
+benchmark = [
+  "cma>=4.4.4,<5.0.0",
+  "coco-experiment>=2.8.2,<3.0.0",
+  "cocopp>=2.8.2,<3.0.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["test"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+src = ["src", "test"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.10"
+files = ["src", "test"]
+disallow_untyped_defs = true
+check_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+strict_equality = true
+no_implicit_optional = true
+ignore_missing_imports = true
+
+[tool.poetry.group.benchmark.dependencies]
+pandas = "^3.0.1"
+

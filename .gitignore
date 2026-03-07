@@ -174,6 +174,12 @@ cython_debug/
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
+.idea/modules.xml
+.idea/misc.xml
+.idea/vcs.xml
+.idea/webResources.xml
+.idea/*.iml
+.idea/inspectionProfiles/
 
 # Abstra
 # Abstra is an AI-powered process automation framework.
@@ -205,3 +211,8 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# COCO
+/notebooks/exdata/
+/notebooks/ppdata/
+/resources/
