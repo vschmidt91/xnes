@@ -1,14 +1,15 @@
 .PHONY: fix check docs docs-serve
 PYTHON ?= python
+SOURCES = xnes tests
 
 fix:
-	$(PYTHON) -m ruff check --fix xnes test
-	$(PYTHON) -m ruff format xnes test
+	$(PYTHON) -m ruff check --fix $(SOURCES)
+	$(PYTHON) -m ruff format $(SOURCES)
 
 check:
-	$(PYTHON) -m ruff check xnes test
-	$(PYTHON) -m ruff format --check xnes test
-	$(PYTHON) -m mypy xnes test
+	$(PYTHON) -m ruff check $(SOURCES)
+	$(PYTHON) -m ruff format --check $(SOURCES)
+	$(PYTHON) -m mypy $(SOURCES)
 	$(PYTHON) -m pytest -q
 
 docs:

@@ -38,22 +38,22 @@ py-modules = []
 
 [tool.setuptools.packages.find]
 include = ["xnes*"]
-exclude = ["test*"]
+exclude = ["tests*"]
 
 [tool.pytest.ini_options]
-testpaths = ["test"]
+testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 120
 target-version = "py311"
-src = ["xnes", "test"]
+src = ["xnes", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 
 [tool.mypy]
 python_version = "3.11"
-files = ["xnes", "test"]
+files = ["xnes", "tests"]
 disallow_untyped_defs = true
 check_untyped_defs = true
 warn_unused_ignores = true

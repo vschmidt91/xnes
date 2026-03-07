@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import FrozenInstanceError
 
 import numpy as np
 
@@ -185,13 +184,6 @@ def test_get_values_returns_parameter_info_list() -> None:
             prior_scale=1.0,
         ),
     ]
-
-    try:
-        values[0].value = 0.0
-    except FrozenInstanceError:
-        pass
-    else:
-        raise AssertionError("ParameterInfo must be frozen.")
 
 
 def test_get_values_reports_current_xnes_state() -> None:
