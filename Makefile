@@ -2,13 +2,13 @@
 PYTHON ?= python
 
 fix:
-	$(PYTHON) -m ruff check --fix src test
-	$(PYTHON) -m ruff format src test
+	$(PYTHON) -m ruff check --fix xnes test
+	$(PYTHON) -m ruff format xnes test
 
 check:
-	$(PYTHON) -m ruff check src test
-	$(PYTHON) -m ruff format --check src test
-	$(PYTHON) -m mypy src test
+	$(PYTHON) -m ruff check xnes test
+	$(PYTHON) -m ruff format --check xnes test
+	$(PYTHON) -m mypy xnes test
 	$(PYTHON) -m pytest -q
 
 docs:

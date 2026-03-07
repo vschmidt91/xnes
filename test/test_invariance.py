@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import numpy as np
-from src.xnes import XNES
+
+from xnes import XNES
 
 
 def _ranking(scores: np.ndarray) -> list[int]:

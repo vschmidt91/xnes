@@ -3,7 +3,8 @@ from __future__ import annotations
 from collections.abc import Callable
 
 import numpy as np
-from src import Optimizer
+
+from xnes import Optimizer
 
 
 def _read_loc(state: object) -> np.ndarray:

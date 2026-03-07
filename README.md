@@ -10,7 +10,7 @@ Evolutionary black-box optimizer with serialization and dynamic named parameters
 ```python
 import numpy as np
 
-from src import Optimizer
+from xnes import Optimizer
 
 opt = Optimizer(pop_size=32)
 coeff_1 = opt.add("coeff_1", loc=2.0, scale=3.0)
@@ -29,6 +29,8 @@ state = opt.save()
 
 ## Interface
 ```python
+import numpy as np
+
 from dataclasses import dataclass
 from collections.abc import Sequence
 
@@ -36,9 +38,6 @@ from collections.abc import Sequence
 class Parameter:
     name: str
     value: float
-
-type JSON = dict[str, "JSON"] | list["JSON"] | str | int | float | bool | None
-type Result = float | Sequence[float]
 
 class Optimizer:
     def __init__(
@@ -49,17 +48,30 @@ class Optimizer:
         eta_mu: float = 1.0,
         eta_sigma: float = 1.0,
         eta_B: float | None = None,
-        min_sigma: float = 1e-20,
-        max_sigma: float = 1e20,
-        max_condition: float = 1e14,
     ) -> None: ...
     def add(self, name: str, loc: float = 0.0, scale: float = 1.0) -> Parameter: ...
     def remove(self, name: str) -> None: ...
-    def save(self) -> JSON: ...
-    def load(self, state: JSON) -> None: ...
-    def tell(self, result: Result) -> bool: ...
-    def diagnostics(self) -> dict[str, JSON]: ...
+    def save(self) -> dict[str, object]: ...
+    def load(self, state: object) -> None: ...
+    def tell(self, result: float | Sequence[float] | np.ndarray) -> bool: ...
+
+class XNES:
+    def __init__(
+        self,
+        x0: np.ndarray,
+        sigma0: np.ndarray | float,
+        p_sigma: np.ndarray | None = None,
+        *,
+        csa_enabled: bool = True,
+        eta_mu: float = 1.0,
+        eta_sigma: float = 1.0,
+        eta_B: float | None = None,
+    ) -> None: ...
+    def ask(self, num_samples: int | None = None, rng: np.random.Generator | None = None) -> tuple[np.ndarray, np.ndarray]: ...
+    def tell(self, samples: np.ndarray, ranking: list[int], eps: float = 1e-10) -> bool: ...
 ```
+
+Public imports come from `xnes`, not `src`.
 
 ## Result Ordering
 - Scalar results are treated as 1-tuples.

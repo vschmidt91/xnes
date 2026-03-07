@@ -3,7 +3,7 @@
 ```python
 import numpy as np
 
-from src import Optimizer
+from xnes import Optimizer
 
 opt = Optimizer(pop_size=32)
 coeff_1 = opt.add("coeff_1", loc=2.0, scale=3.0)

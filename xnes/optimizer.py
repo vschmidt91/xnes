@@ -9,14 +9,11 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import TypeAlias, cast
+from typing import cast
 
 import numpy as np
 
-from src.xnes import XNES
-
-JSON: TypeAlias = dict[str, "JSON"] | list["JSON"] | str | int | float | bool | None
-Result: TypeAlias = float | Sequence[float]
+from .xnes import XNES
 
 
 @dataclass
@@ -139,7 +136,7 @@ class Optimizer:
         del self._priors[name]
         self._reconcile_after_registry_change()
 
-    def save(self) -> JSON:
+    def save(self) -> dict[str, object]:
         """Serialize the current optimizer state.
 
         Returns:
@@ -158,10 +155,10 @@ class Optimizer:
             "batch_z": None if self._batch_z is None else self._batch_z.tolist(),
             "batch_x": None if self._batch_x is None else self._batch_x.tolist(),
             "results": [list(item) for item in self._results],
-            "rng_state": cast(JSON, self._rng.bit_generator.state),
+            "rng_state": dict(self._rng.bit_generator.state),
         }
 
-    def load(self, state: JSON) -> None:
+    def load(self, state: object) -> None:
         """Restore optimizer state from `save`.
 
         If no parameters are registered yet, the registry is reconstructed from
@@ -174,7 +171,7 @@ class Optimizer:
 
         if not isinstance(state, Mapping):
             return
-        state_obj = cast(Mapping[str, JSON], state)
+        state_obj = cast(Mapping[str, object], state)
 
         names = cast(list[str], state_obj["names"])
         loc = np.asarray(state_obj["loc"], dtype=float)
@@ -216,7 +213,7 @@ class Optimizer:
             old_results=results,
         )
 
-    def tell(self, result: Result) -> bool:
+    def tell(self, result: float | Sequence[float] | np.ndarray) -> bool:
         """Submit one objective result for the current sample.
 
         Scalar results are treated as one-element tuples. Sequence results are
@@ -414,7 +411,7 @@ class Optimizer:
             return float("inf")
 
 
-def _normalize_result(result: Result) -> tuple[float, ...]:
+def _normalize_result(result: float | Sequence[float] | np.ndarray) -> tuple[float, ...]:
     if isinstance(result, (int, float)):
         return (float(result),)
     if isinstance(result, np.ndarray):

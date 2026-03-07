@@ -21,7 +21,7 @@ dev = [
   "scipy-stubs>=1.15",
 ]
 docs = [
-  "mkdocs>=1.6",
+  "mkdocs>=1.6,<2.0",
   "mkdocs-autorefs>=1.0",
   "mkdocs-material>=9.5",
   "mkdocstrings[python]>=0.26",
@@ -33,20 +33,27 @@ benchmark = [
   "pandas>=3.0.1,<4.0.0",
 ]
 
+[tool.setuptools]
+py-modules = []
+
+[tool.setuptools.packages.find]
+include = ["xnes*"]
+exclude = ["test*"]
+
 [tool.pytest.ini_options]
 testpaths = ["test"]
 
 [tool.ruff]
 line-length = 120
-target-version = "py310"
-src = ["src", "test"]
+target-version = "py311"
+src = ["xnes", "test"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 
 [tool.mypy]
-python_version = "3.10"
-files = ["src", "test"]
+python_version = "3.11"
+files = ["xnes", "test"]
 disallow_untyped_defs = true
 check_untyped_defs = true
 warn_unused_ignores = true
