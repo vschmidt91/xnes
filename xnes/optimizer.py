@@ -140,8 +140,7 @@ class Optimizer:
         """Serialize the current optimizer state.
 
         Returns:
-            A JSON-compatible object containing registry order, xNES state,
-            partially evaluated batch data, accumulated results, and RNG state.
+            JSON-compatible snapshot of registry order, xNES state, batch data, results, and RNG state.
         """
 
         self._ensure_runtime_ready()
@@ -223,8 +222,7 @@ class Optimizer:
             result: Objective value for the current sample.
 
         Returns:
-            `True` when the current batch has been fully consumed and an xNES
-            update or restart step has completed, otherwise `False`.
+            `True` when the current batch has been fully consumed and an update or restart step completed.
 
         Raises:
             TypeError: If `result` is neither a scalar nor a numeric sequence.

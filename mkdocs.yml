@@ -10,6 +10,7 @@ plugins:
   - mkdocstrings:
       handlers:
         python:
+          paths: ["."]
           options:
             docstring_style: google
             show_root_heading: true

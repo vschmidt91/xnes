@@ -112,8 +112,7 @@ class XNES:
             rng: Optional NumPy random generator.
 
         Returns:
-            A tuple `(z, x)` where `z` contains standardized samples and `x`
-            contains transformed candidate points.
+            Standardized samples `z` together with transformed candidate points `x`.
         """
 
         if self.dim == 0:
@@ -151,8 +150,7 @@ class XNES:
             eps: Numerical stopping threshold.
 
         Returns:
-            `True` if the distribution should be considered numerically stopped
-            or unstable, otherwise `False`.
+            `True` if the distribution should be considered numerically stopped or unstable, else `False`.
 
         Raises:
             ValueError: If sample shapes are inconsistent, samples are not
