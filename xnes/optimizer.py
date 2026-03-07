@@ -30,6 +30,18 @@ class Parameter:
 
 
 @dataclass(frozen=True)
+class ParameterInfo:
+    """Immutable snapshot of a registered parameter."""
+
+    name: str
+    value: float
+    loc: float
+    scale: float
+    prior_loc: float
+    prior_scale: float
+
+
+@dataclass(frozen=True)
 class _Prior:
     loc: float
     scale: float
@@ -250,14 +262,29 @@ class Optimizer:
         for row, name in enumerate(self._state_names):
             self._registry[name].value = float(self._xnes.loc[row])
 
-    def get_values(self) -> Mapping[str, float]:
-        """Return a mapping of current parameter values by name.
+    def get_values(self) -> list[ParameterInfo]:
+        """Return immutable snapshots of all registered parameters.
 
         Returns:
-            A new name-to-value dictionary in lexicographic name order.
+            A new list of :class:`ParameterInfo` items in lexicographic name
+            order. `value` is the current sampled parameter value, `loc` is the
+            current xNES mean, `scale` is the corresponding diagonal entry of
+            the current xNES scale matrix, and `prior_*` values come from the
+            parameter registration.
         """
 
-        return {name: float(self._registry[name].value) for name in self._ordered_names()}
+        scale_diag = np.diag(self._xnes.scale)
+        return [
+            ParameterInfo(
+                name=name,
+                value=float(self._registry[name].value),
+                loc=float(self._xnes.loc[row]),
+                scale=float(scale_diag[row]),
+                prior_loc=self._priors[name].loc,
+                prior_scale=self._priors[name].scale,
+            )
+            for row, name in enumerate(self._state_names)
+        ]
 
     def _ordered_names(self) -> list[str]:
         return sorted(self._registry)

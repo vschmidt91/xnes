@@ -4,4 +4,6 @@
 
 ::: xnes.Parameter
 
+::: xnes.ParameterInfo
+
 ::: xnes.XNES

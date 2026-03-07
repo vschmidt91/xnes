@@ -12,7 +12,7 @@ Example:
     ```
 """
 
-from .optimizer import Optimizer, Parameter
+from .optimizer import Optimizer, Parameter, ParameterInfo
 from .xnes import XNES
 
-__all__ = ["Optimizer", "Parameter", "XNES"]
+__all__ = ["Optimizer", "Parameter", "ParameterInfo", "XNES"]

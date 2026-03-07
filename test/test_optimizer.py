@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import FrozenInstanceError
 
 import numpy as np
 
-from xnes import Optimizer
+from xnes import Optimizer, ParameterInfo
 
 
 def _read_loc(state: object) -> np.ndarray:
@@ -159,16 +160,59 @@ def test_registration_order_is_lexicographic() -> None:
     assert np.allclose(_read_loc(state_first), _read_loc(state_second))
 
 
-def test_get_values_returns_plain_name_to_value_mapping() -> None:
+def test_get_values_returns_parameter_info_list() -> None:
     optimizer = Optimizer(pop_size=12)
     zeta = optimizer.add("zeta", loc=3.0, scale=1.0)
     alpha = optimizer.add("alpha", loc=-2.0, scale=2.0)
 
     values = optimizer.get_values()
-    assert isinstance(values, dict)
-    assert list(values) == ["alpha", "zeta"]
-    assert values["alpha"] == alpha.value
-    assert values["zeta"] == zeta.value
+    assert isinstance(values, list)
+    assert values == [
+        ParameterInfo(
+            name="alpha",
+            value=alpha.value,
+            loc=-2.0,
+            scale=2.0,
+            prior_loc=-2.0,
+            prior_scale=2.0,
+        ),
+        ParameterInfo(
+            name="zeta",
+            value=zeta.value,
+            loc=3.0,
+            scale=1.0,
+            prior_loc=3.0,
+            prior_scale=1.0,
+        ),
+    ]
+
+    try:
+        values[0].value = 0.0
+    except FrozenInstanceError:
+        pass
+    else:
+        raise AssertionError("ParameterInfo must be frozen.")
+
+
+def test_get_values_reports_current_xnes_state() -> None:
+    optimizer = Optimizer(pop_size=12)
+    alpha = optimizer.add("alpha", loc=-2.0, scale=2.0)
+    zeta = optimizer.add("zeta", loc=3.0, scale=1.0)
+
+    for _ in range(12):
+        optimizer.tell(-(alpha.value**2 + zeta.value**2))
+
+    state = optimizer.save()
+    info = optimizer.get_values()
+
+    loc = _read_loc(state)
+    scale = np.diag(_read_scale(state))
+    assert [item.name for item in info] == ["alpha", "zeta"]
+    assert [item.value for item in info] == [alpha.value, zeta.value]
+    assert np.allclose([item.loc for item in info], loc)
+    assert np.allclose([item.scale for item in info], scale)
+    assert [item.prior_loc for item in info] == [-2.0, 3.0]
+    assert [item.prior_scale for item in info] == [2.0, 1.0]
 
 
 def test_add_remove_between_operations() -> None:
