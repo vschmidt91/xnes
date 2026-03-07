@@ -11,7 +11,3 @@
 ## Core Distribution
 
 ::: xnes.XNES
-
-## State Snapshot
-
-::: xnes.XNESState

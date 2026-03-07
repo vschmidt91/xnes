@@ -13,6 +13,6 @@ Example:
 """
 
 from .optimizer import Optimizer, Parameter
-from .xnes import XNES, XNESState
+from .xnes import XNES
 
-__all__ = ["Optimizer", "Parameter", "XNES", "XNESState"]
+__all__ = ["Optimizer", "Parameter", "XNES"]

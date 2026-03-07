@@ -7,28 +7,9 @@ optional CSA step-size control.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 import numpy as np
 from numpy.linalg import cond, norm
 from scipy.linalg import expm, qr
-
-
-@dataclass(frozen=True)
-class XNESState:
-    """Serializable xNES state snapshot.
-
-    This type is currently informational and not used directly by the
-    higher-level optimizer serialization path.
-    """
-
-    names: list[str]
-    loc: np.ndarray
-    scale: np.ndarray
-    p_sigma: np.ndarray
-    batch_z: np.ndarray | None = None
-    batch_x: np.ndarray | None = None
-    results: list[tuple[float, ...]] | None = None
 
 
 def _default_eta_B(dim: int) -> float:
