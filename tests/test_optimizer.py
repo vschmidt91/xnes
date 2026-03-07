@@ -159,12 +159,12 @@ def test_registration_order_is_lexicographic() -> None:
     assert np.allclose(_read_loc(state_first), _read_loc(state_second))
 
 
-def test_get_values_returns_parameter_info_list() -> None:
+def test_get_info_returns_parameter_info_list() -> None:
     optimizer = Optimizer(pop_size=12)
     zeta = optimizer.add("zeta", loc=3.0, scale=1.0)
     alpha = optimizer.add("alpha", loc=-2.0, scale=2.0)
 
-    values = optimizer.get_values()
+    values = optimizer.get_info()
     assert isinstance(values, list)
     assert values == [
         ParameterInfo(
@@ -186,7 +186,7 @@ def test_get_values_returns_parameter_info_list() -> None:
     ]
 
 
-def test_get_values_reports_current_xnes_state() -> None:
+def test_get_info_reports_current_xnes_state() -> None:
     optimizer = Optimizer(pop_size=12)
     alpha = optimizer.add("alpha", loc=-2.0, scale=2.0)
     zeta = optimizer.add("zeta", loc=3.0, scale=1.0)
@@ -195,7 +195,7 @@ def test_get_values_reports_current_xnes_state() -> None:
         optimizer.tell(-(alpha.value**2 + zeta.value**2))
 
     state = optimizer.save()
-    info = optimizer.get_values()
+    info = optimizer.get_info()
 
     loc = _read_loc(state)
     scale = np.diag(_read_scale(state))

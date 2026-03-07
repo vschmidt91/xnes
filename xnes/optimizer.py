@@ -262,7 +262,7 @@ class Optimizer:
         for row, name in enumerate(self._state_names):
             self._registry[name].value = float(self._xnes.loc[row])
 
-    def get_values(self) -> list[ParameterInfo]:
+    def get_info(self) -> list[ParameterInfo]:
         """Return immutable snapshots of all registered parameters.
 
         Returns:
