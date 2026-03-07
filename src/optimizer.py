@@ -1,3 +1,10 @@
+"""Named-parameter optimizer built on top of the xNES update rule.
+
+The wrapper manages a dynamic registry of scalar parameters, preserves a stable
+lexicographic parameter order, and exposes a serializable ask/tell style loop
+through mutable :class:`Parameter` views.
+"""
+
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
@@ -14,6 +21,13 @@ Result: TypeAlias = float | Sequence[float]
 
 @dataclass
 class Parameter:
+    """Mutable scalar parameter view exposed to the user.
+
+    Attributes:
+        name: Stable parameter identifier.
+        value: Current sample value for the active candidate.
+    """
+
     name: str
     value: float
 
@@ -25,6 +39,26 @@ class _Prior:
 
 
 class Optimizer:
+    """Maximizing optimizer with dynamic named parameters.
+
+    Parameters are registered by name and sampled in lexicographic order so the
+    optimization state is independent of registration order. Calls to `tell`
+    consume one result for the current sample and advance the batch until an
+    xNES update is applied.
+
+    Args:
+        pop_size: Optional batch size. Odd values are rounded up to the next
+            even value.
+        csa_enabled: Enable cumulative step-size adaptation.
+        eta_mu: Learning rate for the mean update.
+        eta_sigma: Learning rate for the global scale update.
+        eta_B: Optional learning rate for the normalized shape matrix update.
+
+    Raises:
+        ValueError: If `pop_size` is non-positive or any learning rate is not a
+            positive finite float.
+    """
+
     _RESTART_ON_FAILURE = True
     _MIN_SIGMA = 1e-20
     _MAX_SIGMA = 1e20
@@ -60,6 +94,20 @@ class Optimizer:
         self._results: list[tuple[float, ...]] = []
 
     def add(self, name: str, loc: float = 0.0, scale: float = 1.0) -> Parameter:
+        """Register a parameter or return the existing one.
+
+        Args:
+            name: Unique parameter name.
+            loc: Initial mean used for new parameters.
+            scale: Initial standard deviation used for new parameters.
+
+        Returns:
+            The mutable parameter view stored in the registry.
+
+        Raises:
+            ValueError: If `scale <= 0`.
+        """
+
         if scale <= 0:
             msg = "scale must be > 0."
             raise ValueError(msg)
@@ -75,6 +123,15 @@ class Optimizer:
         return parameter
 
     def remove(self, name: str) -> None:
+        """Remove a parameter from the registry and reconcile optimizer state.
+
+        Args:
+            name: Registered parameter name.
+
+        Raises:
+            KeyError: If the parameter is unknown.
+        """
+
         if name not in self._registry:
             msg = f"Unknown parameter '{name}'."
             raise KeyError(msg)
@@ -83,6 +140,13 @@ class Optimizer:
         self._reconcile_after_registry_change()
 
     def save(self) -> JSON:
+        """Serialize the current optimizer state.
+
+        Returns:
+            A JSON-compatible object containing registry order, xNES state,
+            partially evaluated batch data, accumulated results, and RNG state.
+        """
+
         self._ensure_runtime_ready()
         assert self._xnes is not None
 
@@ -98,6 +162,16 @@ class Optimizer:
         }
 
     def load(self, state: JSON) -> None:
+        """Restore optimizer state from `save`.
+
+        If no parameters are registered yet, the registry is reconstructed from
+        the serialized names and diagonal scale entries. Non-mapping inputs are
+        ignored.
+
+        Args:
+            state: Serialized optimizer state.
+        """
+
         if not isinstance(state, Mapping):
             return
         state_obj = cast(Mapping[str, JSON], state)
@@ -143,6 +217,23 @@ class Optimizer:
         )
 
     def tell(self, result: Result) -> bool:
+        """Submit one objective result for the current sample.
+
+        Scalar results are treated as one-element tuples. Sequence results are
+        ranked lexicographically, with larger tuples considered better.
+
+        Args:
+            result: Objective value for the current sample.
+
+        Returns:
+            `True` when the current batch has been fully consumed and an xNES
+            update or restart step has completed, otherwise `False`.
+
+        Raises:
+            TypeError: If `result` is neither a scalar nor a numeric sequence.
+            ValueError: If `result` is an empty sequence.
+        """
+
         self._ensure_runtime_ready()
         assert self._xnes is not None
         assert self._batch_z is not None

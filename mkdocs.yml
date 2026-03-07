@@ -1,0 +1,28 @@
+site_name: xnes
+repo_name: xnes
+
+theme:
+  name: material
+
+plugins:
+  - search
+  - autorefs
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            docstring_style: google
+            show_root_heading: true
+            show_root_full_path: false
+            show_source: false
+            separate_signature: true
+
+markdown_extensions:
+  - admonition
+  - pymdownx.highlight
+  - pymdownx.superfences
+
+nav:
+  - Overview: index.md
+  - Quickstart: quickstart.md
+  - API Reference: reference/api.md

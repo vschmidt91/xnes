@@ -20,10 +20,17 @@ dev = [
   "ruff>=0.11",
   "scipy-stubs>=1.15",
 ]
+docs = [
+  "mkdocs>=1.6",
+  "mkdocs-autorefs>=1.0",
+  "mkdocs-material>=9.5",
+  "mkdocstrings[python]>=0.26",
+]
 benchmark = [
   "cma>=4.4.4,<5.0.0",
   "coco-experiment>=2.8.2,<3.0.0",
   "cocopp>=2.8.2,<3.0.0",
+  "pandas>=3.0.1,<4.0.0",
 ]
 
 [tool.pytest.ini_options]
@@ -47,7 +54,3 @@ warn_redundant_casts = true
 strict_equality = true
 no_implicit_optional = true
 ignore_missing_imports = true
-
-[tool.poetry.group.benchmark.dependencies]
-pandas = "^3.0.1"
-

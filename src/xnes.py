@@ -1,3 +1,10 @@
+"""Core xNES distribution update implementation.
+
+The class maintains the search distribution in factored form `sigma * B`,
+generates mirrored orthogonal samples, and applies canonical xNES updates with
+optional CSA step-size control.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -9,6 +16,12 @@ from scipy.linalg import expm, qr
 
 @dataclass(frozen=True)
 class XNESState:
+    """Serializable xNES state snapshot.
+
+    This type is currently informational and not used directly by the
+    higher-level optimizer serialization path.
+    """
+
     names: list[str]
     loc: np.ndarray
     scale: np.ndarray
@@ -25,6 +38,23 @@ def _default_eta_B(dim: int) -> float:
 
 
 class XNES:
+    """Exponential Natural Evolution Strategies distribution state.
+
+    Args:
+        x0: Initial mean vector.
+        sigma0: Initial scale, either scalar, diagonal vector, or full matrix.
+        p_sigma: Optional CSA evolution path.
+        csa_enabled: Enable cumulative step-size adaptation.
+        eta_mu: Learning rate for the mean update.
+        eta_sigma: Learning rate for the global scale update.
+        eta_B: Optional learning rate for the shape update.
+
+    Raises:
+        ValueError: If the supplied shapes are inconsistent, the scale matrix is
+            not positive with finite determinant, or any learning rate is not a
+            positive finite float.
+    """
+
     def __init__(
         self,
         x0: np.ndarray,
@@ -78,10 +108,14 @@ class XNES:
 
     @property
     def dim(self) -> int:
+        """Dimension of the search space."""
+
         return int(self.loc.size)
 
     @property
     def scale(self) -> np.ndarray:
+        """Current full scale matrix `sigma * B`."""
+
         return self.sigma * self.B
 
     def ask(
@@ -89,6 +123,18 @@ class XNES:
         num_samples: int | None = None,
         rng: np.random.Generator | None = None,
     ) -> tuple[np.ndarray, np.ndarray]:
+        """Sample a mirrored candidate batch.
+
+        Args:
+            num_samples: Optional batch size. Values below two are clamped, and
+                odd values are rounded up to keep mirrored pairs.
+            rng: Optional NumPy random generator.
+
+        Returns:
+            A tuple `(z, x)` where `z` contains standardized samples and `x`
+            contains transformed candidate points.
+        """
+
         if self.dim == 0:
             n = int(num_samples) if num_samples is not None else 4
             return np.zeros((0, n)), np.zeros((0, n))
@@ -116,6 +162,22 @@ class XNES:
         return z, x
 
     def tell(self, samples: np.ndarray, ranking: list[int], eps: float = 1e-10) -> bool:
+        """Apply one xNES update from ranked standardized samples.
+
+        Args:
+            samples: Standardized sample matrix with shape `(dim, n)`.
+            ranking: Permutation of sample indices ordered from best to worst.
+            eps: Numerical stopping threshold.
+
+        Returns:
+            `True` if the distribution should be considered numerically stopped
+            or unstable, otherwise `False`.
+
+        Raises:
+            ValueError: If sample shapes are inconsistent, samples are not
+                finite, or the ranking is not a valid permutation.
+        """
+
         if self.dim == 0:
             return True
 
