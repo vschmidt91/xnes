@@ -54,7 +54,7 @@ class XNES:
         self.csa_enabled = bool(csa_enabled)
         self.eta_mu = _validate_positive_finite(eta_mu, "eta_mu")
         self.eta_sigma = _validate_positive_finite(eta_sigma, "eta_sigma")
-        self.eta_B = None if eta_B is None else _validate_positive_finite(eta_B, "eta_B")
+        self.eta_B = _default_eta_B(self.dim) if eta_B is None else _validate_positive_finite(eta_B, "eta_B")
 
         if self.dim == 0:
             self.sigma = 1.0
@@ -206,8 +206,7 @@ class XNES:
 
         self.sigma *= float(np.exp(sigma_log_step))
 
-        eta_B = self.eta_B if self.eta_B is not None else _default_eta_B(d)
-        self.B = self.B @ expm(0.5 * eta_B * grad_B_shape)
+        self.B = self.B @ expm(0.5 * self.eta_B * grad_B_shape)
 
         sign, logdet = np.linalg.slogdet(self.B)
         if sign <= 0 or not np.isfinite(logdet):

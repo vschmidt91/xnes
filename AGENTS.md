@@ -24,6 +24,7 @@ in decreasing priority:
 
 # Notes
 
+- `make fix check` to fix simple errors and run lint+tests
 - xnes is a settled choice, having it exchangable for another algorithm later is nice to have but not worth extra effort
 - optimizer and xnes will be coupled anyway
 - parameter ordering in matrix form is arbitrary

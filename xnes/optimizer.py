@@ -84,11 +84,12 @@ class Optimizer:
         self._registry: dict[str, Parameter] = {}
         self._priors: dict[str, _Prior] = {}
 
-        self._xnes: XNES | None = None
+        self._xnes = self._new_xnes(np.zeros(0), np.eye(0), np.zeros(0))
         self._state_names: list[str] = []
-        self._batch_z: np.ndarray | None = None
-        self._batch_x: np.ndarray | None = None
+        self._batch_z = np.zeros((0, 0))
+        self._batch_x = np.zeros((0, 0))
         self._results: list[tuple[float, ...]] = []
+        self._reset_batch()
 
     def add(self, name: str, loc: float = 0.0, scale: float = 1.0) -> Parameter:
         """Register a parameter or return the existing one.
@@ -143,16 +144,13 @@ class Optimizer:
             JSON-compatible snapshot of registry order, xNES state, batch data, results, and RNG state.
         """
 
-        self._ensure_runtime_ready()
-        assert self._xnes is not None
-
         return {
             "names": list(self._state_names),
             "loc": self._xnes.loc.tolist(),
             "scale": self._xnes.scale.tolist(),
             "p_sigma": self._xnes.p_sigma.tolist(),
-            "batch_z": None if self._batch_z is None else self._batch_z.tolist(),
-            "batch_x": None if self._batch_x is None else self._batch_x.tolist(),
+            "batch_z": self._batch_z.tolist(),
+            "batch_x": self._batch_x.tolist(),
             "results": [list(item) for item in self._results],
             "rng_state": dict(self._rng.bit_generator.state),
         }
@@ -176,18 +174,10 @@ class Optimizer:
         loc = np.asarray(state_obj["loc"], dtype=float)
         scale = np.asarray(state_obj["scale"], dtype=float)
         p_sigma = np.asarray(state_obj["p_sigma"], dtype=float)
-
-        raw_batch_z = state_obj.get("batch_z")
-        raw_batch_x = state_obj.get("batch_x")
-        batch_z = None if raw_batch_z is None else np.asarray(raw_batch_z, dtype=float)
-        batch_x = None if raw_batch_x is None else np.asarray(raw_batch_x, dtype=float)
-
-        raw_results = state_obj.get("results")
-        if raw_results is None:
-            results: list[tuple[float, ...]] = []
-        else:
-            result_rows = cast(Sequence[Sequence[float]], raw_results)
-            results = [tuple(float(value) for value in row) for row in result_rows]
+        batch_z = np.asarray(state_obj["batch_z"], dtype=float)
+        batch_x = np.asarray(state_obj["batch_x"], dtype=float)
+        result_rows = cast(Sequence[Sequence[float]], state_obj.get("results", []))
+        results = [tuple(float(value) for value in row) for row in result_rows]
 
         raw_rng_state = state_obj.get("rng_state")
         if isinstance(raw_rng_state, Mapping):
@@ -228,10 +218,6 @@ class Optimizer:
             TypeError: If `result` is neither a scalar nor a numeric sequence.
             ValueError: If `result` is an empty sequence.
         """
-
-        self._ensure_runtime_ready()
-        assert self._xnes is not None
-        assert self._batch_z is not None
 
         self._results.append(_normalize_result(result))
 
@@ -281,88 +267,70 @@ class Optimizer:
             eta_B=self.eta_B,
         )
 
-    def _ensure_runtime_ready(self) -> None:
-        if self._xnes is None:
-            self._reconcile_state(None, None, None, None, None, None, [])
-        if self._batch_x is None:
-            self._reset_batch()
-
     def _reconcile_after_registry_change(self) -> None:
-        if self._xnes is None:
-            self._reconcile_state(None, None, None, None, None, None, [])
-            return
         self._reconcile_state(
-            old_names=list(self._state_names),
+            old_names=self._state_names,
             old_loc=self._xnes.loc.copy(),
             old_scale=self._xnes.scale.copy(),
             old_p_sigma=self._xnes.p_sigma.copy(),
-            old_batch_z=None,
-            old_batch_x=None,
+            old_batch_z=np.zeros((0, 0)),
+            old_batch_x=np.zeros((0, 0)),
             old_results=[],
         )
 
     def _reconcile_state(
         self,
-        old_names: list[str] | None,
-        old_loc: np.ndarray | None,
-        old_scale: np.ndarray | None,
-        old_p_sigma: np.ndarray | None,
-        old_batch_z: np.ndarray | None,
-        old_batch_x: np.ndarray | None,
+        old_names: list[str],
+        old_loc: np.ndarray,
+        old_scale: np.ndarray,
+        old_p_sigma: np.ndarray,
+        old_batch_z: np.ndarray,
+        old_batch_x: np.ndarray,
         old_results: list[tuple[float, ...]],
     ) -> None:
         new_names = self._ordered_names()
         new_loc, new_scale = self._build_initial_state(new_names)
         restored_p_sigma = np.zeros(len(new_names), dtype=float)
-        restored_batch_z: np.ndarray | None = None
-        restored_batch_x: np.ndarray | None = None
-        restored_results: list[tuple[float, ...]] = []
+        old_index = {name: idx for idx, name in enumerate(old_names)}
+        curr_idx: list[int] = []
+        prev_idx: list[int] = []
+        for i, name in enumerate(new_names):
+            j = old_index.get(name)
+            if j is not None:
+                curr_idx.append(i)
+                prev_idx.append(j)
 
-        if old_names is not None and old_loc is not None and old_scale is not None and old_p_sigma is not None:
-            old_index = {name: idx for idx, name in enumerate(old_names)}
-            curr_idx: list[int] = []
-            prev_idx: list[int] = []
-            for i, name in enumerate(new_names):
-                j = old_index.get(name)
-                if j is not None:
-                    curr_idx.append(i)
-                    prev_idx.append(j)
-
-            if curr_idx:
-                new_loc[curr_idx] = old_loc[prev_idx]
-                new_scale[np.ix_(curr_idx, curr_idx)] = old_scale[np.ix_(prev_idx, prev_idx)]
-                restored_p_sigma[curr_idx] = old_p_sigma[prev_idx]
-
-            if old_batch_z is not None and old_batch_x is not None:
-                n_samples = old_batch_z.shape[1]
-                restored_batch_z = np.zeros((len(new_names), n_samples), dtype=float)
-                restored_batch_x = np.tile(new_loc[:, None], (1, n_samples))
-                if curr_idx:
-                    restored_batch_z[curr_idx, :] = old_batch_z[prev_idx, :]
-                    restored_batch_x[curr_idx, :] = old_batch_x[prev_idx, :]
-                restored_results = list(old_results)
+        if curr_idx:
+            new_loc[curr_idx] = old_loc[prev_idx]
+            new_scale[np.ix_(curr_idx, curr_idx)] = old_scale[np.ix_(prev_idx, prev_idx)]
+            restored_p_sigma[curr_idx] = old_p_sigma[prev_idx]
 
         self._xnes = self._new_xnes(new_loc, new_scale, restored_p_sigma)
         self._state_names = new_names
 
-        if restored_batch_z is not None and restored_batch_x is not None:
+        if old_batch_z.shape[1] > 0:
+            restored_batch_z = np.zeros((len(new_names), old_batch_z.shape[1]), dtype=float)
+            restored_batch_x = np.zeros((len(new_names), old_batch_z.shape[1]), dtype=float)
+            restored_batch_x[:] = new_loc[:, None]
+            if curr_idx:
+                restored_batch_z[curr_idx, :] = old_batch_z[prev_idx, :]
+                restored_batch_x[curr_idx, :] = old_batch_x[prev_idx, :]
             self._batch_z = restored_batch_z
             self._batch_x = restored_batch_x
-            self._results = restored_results
-            sample_idx = min(len(self._results), restored_batch_x.shape[1] - 1) if restored_batch_x.shape[1] > 0 else 0
+            self._results = list(old_results)
+            sample_idx = min(len(self._results), restored_batch_x.shape[1] - 1)
             self._apply_sample_values(sample_idx)
         else:
             self._reset_batch()
 
     def _reset_batch(self) -> None:
-        assert self._xnes is not None
         pop_size = self._resolve_population_size(self._xnes.dim)
         self._batch_z, self._batch_x = self._xnes.ask(pop_size, self._rng)
         self._results = []
         self._apply_sample_values(0)
 
     def _apply_sample_values(self, sample_index: int) -> None:
-        if self._batch_x is None or self._batch_x.shape[1] == 0:
+        if self._batch_x.shape[1] == 0:
             return
         idx = sample_index % self._batch_x.shape[1]
         for row, name in enumerate(self._state_names):
@@ -382,31 +350,21 @@ class Optimizer:
         self._reset_batch()
 
     def _stabilize_runtime(self) -> bool:
-        assert self._xnes is not None
         sigma = float(self._xnes.sigma)
-        if not np.isfinite(sigma):
-            return self._handle_instability()
-        if sigma < self._MIN_SIGMA:
-            return self._handle_instability()
-        if sigma > self._MAX_SIGMA:
+        if not np.isfinite(sigma) or not self._MIN_SIGMA <= sigma <= self._MAX_SIGMA:
             return self._handle_instability()
         if not np.all(np.isfinite(self._xnes.loc)) or not np.all(np.isfinite(self._xnes.B)):
             return self._handle_instability()
 
-        cond_value = self._safe_condition_number()
+        try:
+            cond_value = float(np.linalg.cond(self._xnes.scale))
+        except np.linalg.LinAlgError:
+            return self._handle_instability()
         if not np.isfinite(cond_value):
             return self._handle_instability()
         if cond_value > self._MAX_CONDITION:
             return self._handle_instability()
         return False
-
-    def _safe_condition_number(self) -> float:
-        if self._xnes is None:
-            return float("nan")
-        try:
-            return float(np.linalg.cond(self._xnes.scale))
-        except Exception:
-            return float("inf")
 
 
 def _normalize_result(result: float | Sequence[float] | np.ndarray) -> tuple[float, ...]:
