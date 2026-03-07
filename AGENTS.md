@@ -29,3 +29,5 @@ in decreasing priority:
 - optimizer and xnes will be coupled anyway
 - parameter ordering in matrix form is arbitrary
 - name ordering is lexicographical (registration order should not matter)
+- we assume that state handed to Optimizer.load() comes from save and user has not interferred with it
+- we assume that state comes from a matching version

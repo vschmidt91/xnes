@@ -238,6 +238,18 @@ class Optimizer:
         self._apply_sample_values(len(self._results))
         return False
 
+    def set_best(self) -> None:
+        """Set all registered parameter values to the current population mean.
+
+        This mutates exposed :class:`Parameter` views in place without changing
+        optimizer state. It is intended for evaluation/inference after training.
+        To continue training afterwards, restore a previously saved state so the
+        ask/tell sample cursor remains aligned.
+        """
+
+        for row, name in enumerate(self._state_names):
+            self._registry[name].value = float(self._xnes.loc[row])
+
     def _ordered_names(self) -> list[str]:
         return sorted(self._registry)
 

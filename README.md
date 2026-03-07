@@ -51,6 +51,7 @@ class Optimizer:
     ) -> None: ...
     def add(self, name: str, loc: float = 0.0, scale: float = 1.0) -> Parameter: ...
     def remove(self, name: str) -> None: ...
+    def set_best(self) -> None: ...
     def save(self) -> dict[str, object]: ...
     def load(self, state: object) -> None: ...
     def tell(self, result: float | Sequence[float] | np.ndarray) -> bool: ...
@@ -71,12 +72,15 @@ class XNES:
     def tell(self, samples: np.ndarray, ranking: list[int], eps: float = 1e-10) -> bool: ...
 ```
 
-Public imports come from `xnes`, not `src`.
-
 ## Result Ordering
 - Scalar results are treated as 1-tuples.
-- Sequence results are compared lexicographically.
+- Sequence results are compared lexicographically (no multiobjective/pareto optimization)
 - Higher tuples are better (maximize semantics).
+
+## Training vs Testing
+- During training, evaluate the currently sampled `Parameter.value` values and pass the result to `tell`.
+- For testing/inference, call `set_best()` to overwrite `Parameter.value` with the current population mean.
+- If you want to resume training after testing, save state before `set_best()` and later `load` that state.
 
 ## Development
 - `make fix`: apply Ruff fixes and format.
