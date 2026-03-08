@@ -49,15 +49,7 @@ class ParameterInfo:
     prior_scale: float
 
 class Optimizer:
-    def __init__(
-        self,
-        pop_size: int | None = None,
-        *,
-        csa_enabled: bool = True,
-        eta_mu: float = 1.0,
-        eta_sigma: float = 1.0,
-        eta_B: float | None = None,
-    ) -> None: ...
+    def __init__(self, pop_size: int | None = None) -> None: ...
     def add(self, name: str, loc: float = 0.0, scale: float = 1.0) -> Parameter: ...
     def remove(self, name: str) -> None: ...
     def get_info(self) -> list[ParameterInfo]: ...
@@ -72,15 +64,26 @@ class XNES:
         x0: np.ndarray,
         sigma0: np.ndarray | float,
         p_sigma: np.ndarray | None = None,
-        *,
-        csa_enabled: bool = True,
-        eta_mu: float = 1.0,
-        eta_sigma: float = 1.0,
-        eta_B: float | None = None,
     ) -> None: ...
     def ask(self, num_samples: int | None = None, rng: np.random.Generator | None = None) -> tuple[np.ndarray, np.ndarray]: ...
     def tell(self, samples: np.ndarray, ranking: list[int], eps: float = 1e-10) -> bool: ...
 ```
+
+Runtime tuning is done via attributes:
+
+```python
+opt = Optimizer(pop_size=32)
+opt.csa_enabled = False
+opt.eta_mu = 0.9
+opt.eta_sigma = 0.7
+opt.eta_B = 0.2
+```
+
+Leaving `Optimizer.csa_enabled`, `Optimizer.eta_mu`, `Optimizer.eta_sigma`, or
+`Optimizer.eta_B` as `None` keeps the defaults defined by `XNES`. A bare
+`XNES(...)` instance starts with `csa_enabled = True`, `eta_mu = 1.0`,
+`eta_sigma = 1.0`, and `eta_B = 0.6 * (3 + log(dim)) / (dim * sqrt(dim))` for
+`dim > 0`.
 
 ## Result Ordering
 - Scalar results are treated as 1-tuples.

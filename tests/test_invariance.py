@@ -14,8 +14,13 @@ def test_xnes_rank_invariance_under_monotonic_transform() -> None:
     n = 24
     steps = 6
 
-    xnes_a = XNES(np.zeros(dim), np.eye(dim), csa_enabled=False, eta_mu=1.0, eta_sigma=0.8, eta_B=0.2)
-    xnes_b = XNES(np.zeros(dim), np.eye(dim), csa_enabled=False, eta_mu=1.0, eta_sigma=0.8, eta_B=0.2)
+    xnes_a = XNES(np.zeros(dim), np.eye(dim))
+    xnes_b = XNES(np.zeros(dim), np.eye(dim))
+    for xnes in (xnes_a, xnes_b):
+        xnes.csa_enabled = False
+        xnes.eta_mu = 1.0
+        xnes.eta_sigma = 0.8
+        xnes.eta_B = 0.2
 
     rng_a = np.random.default_rng(5)
     rng_b = np.random.default_rng(5)
@@ -63,8 +68,13 @@ def test_xnes_linear_invariance_with_stress_values() -> None:
     )
     shift = np.array([-2.0e9, 4.0e9, -3.0e8], dtype=float)
 
-    xnes_x = XNES(mu, scale, csa_enabled=False, eta_mu=1.0, eta_sigma=0.7, eta_B=0.3)
-    xnes_y = XNES(transform @ mu + shift, transform @ scale, csa_enabled=False, eta_mu=1.0, eta_sigma=0.7, eta_B=0.3)
+    xnes_x = XNES(mu, scale)
+    xnes_y = XNES(transform @ mu + shift, transform @ scale)
+    for xnes in (xnes_x, xnes_y):
+        xnes.csa_enabled = False
+        xnes.eta_mu = 1.0
+        xnes.eta_sigma = 0.7
+        xnes.eta_B = 0.3
 
     rng_x = np.random.default_rng(9)
     rng_y = np.random.default_rng(9)

@@ -6,7 +6,7 @@
 - the interaction markdown (.md) files are ideas, those terms are interchangable
 - you can edit ideas freely without being prompted
 - keep your additions to ideas in a section with headline "# === <your model name> ===", separated from the user input above
-- if the user is being precice about something but the prompt is inconsistent, unclear or impossible as stated, point it out before 
+- if the user is being precice about something but the prompt is inconsistent, unclear or impossible as stated, point it out before modifying files
 - expect some vagueness in which case take your liberties
 
 # Coding style
@@ -27,6 +27,9 @@ in decreasing priority:
 - `make fix check` to fix simple errors and run lint+tests
 - xnes is a settled choice, having it exchangable for another algorithm later is nice to have but not worth extra effort
 - optimizer and xnes will be coupled anyway
+- prefer `XNES` as the single source of truth for default hyperparameter values
+- it is acceptable for higher-level wrappers such as `Optimizer` to store override fields as `None` and assign concrete values directly onto `XNES` instances after construction
+- do not duplicate xNES defaults in wrapper constructors or parallel config objects unless explicitly requested
 - parameter ordering in matrix form is arbitrary
 - name ordering is lexicographical (registration order should not matter)
 - we assume that state handed to Optimizer.load() comes from save and user has not interferred with it

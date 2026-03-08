@@ -227,13 +227,11 @@ def test_add_remove_between_operations() -> None:
 
 
 def test_runtime_config_is_not_persisted_or_loaded() -> None:
-    opt_a = Optimizer(
-        pop_size=14,
-        csa_enabled=False,
-        eta_mu=0.9,
-        eta_sigma=0.7,
-        eta_B=0.2,
-    )
+    opt_a = Optimizer(pop_size=14)
+    opt_a.csa_enabled = False
+    opt_a.eta_mu = 0.9
+    opt_a.eta_sigma = 0.7
+    opt_a.eta_B = 0.2
     param = opt_a.add("x", loc=4.0, scale=2.0)
     for _ in range(20):
         opt_a.tell(-(param.value**2))
@@ -242,14 +240,14 @@ def test_runtime_config_is_not_persisted_or_loaded() -> None:
     assert isinstance(state, dict)
     assert "config" not in state
 
-    opt_b = Optimizer(pop_size=4, csa_enabled=True, eta_mu=1.0, eta_sigma=1.0, eta_B=None)
+    opt_b = Optimizer(pop_size=4)
     opt_b.load(state)
     loaded = opt_b.save()
     assert isinstance(loaded, dict)
     assert "config" not in loaded
-    assert opt_b.csa_enabled is True
-    assert opt_b.eta_mu == 1.0
-    assert opt_b.eta_sigma == 1.0
+    assert opt_b.csa_enabled is None
+    assert opt_b.eta_mu is None
+    assert opt_b.eta_sigma is None
     assert opt_b.eta_B is None
 
 

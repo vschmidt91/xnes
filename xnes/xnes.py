@@ -25,36 +25,24 @@ class XNES:
         x0: Initial mean vector.
         sigma0: Initial scale, either scalar, diagonal vector, or full matrix.
         p_sigma: Optional CSA evolution path.
-        csa_enabled: Enable cumulative step-size adaptation.
-        eta_mu: Learning rate for the mean update.
-        eta_sigma: Learning rate for the global scale update.
-        eta_B: Optional learning rate for the shape update.
+
+    Runtime attributes `csa_enabled`, `eta_mu`, `eta_sigma`, and `eta_B` are
+    initialized to built-in defaults and may be reassigned directly.
 
     Raises:
         ValueError: If the supplied shapes are inconsistent, the scale matrix is
-            not positive with finite determinant, or any learning rate is not a
-            positive finite float.
+            not positive with finite determinant.
     """
 
-    def __init__(
-        self,
-        x0: np.ndarray,
-        sigma0: np.ndarray | float,
-        p_sigma: np.ndarray | None = None,
-        *,
-        csa_enabled: bool = True,
-        eta_mu: float = 1.0,
-        eta_sigma: float = 1.0,
-        eta_B: float | None = None,
-    ) -> None:
+    def __init__(self, x0: np.ndarray, sigma0: np.ndarray | float, p_sigma: np.ndarray | None = None) -> None:
         self.loc = np.asarray(x0, dtype=float)
         self.sigma: float
         self.B: np.ndarray
         self.p_sigma: np.ndarray
-        self.csa_enabled = bool(csa_enabled)
-        self.eta_mu = _validate_positive_finite(eta_mu, "eta_mu")
-        self.eta_sigma = _validate_positive_finite(eta_sigma, "eta_sigma")
-        self.eta_B = _default_eta_B(self.dim) if eta_B is None else _validate_positive_finite(eta_B, "eta_B")
+        self.csa_enabled = True
+        self.eta_mu = 1.0
+        self.eta_sigma = 1.0
+        self.eta_B = _default_eta_B(self.dim)
 
         if self.dim == 0:
             self.sigma = 1.0

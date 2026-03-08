@@ -55,17 +55,17 @@ class Optimizer:
     consume one result for the current sample and advance the batch until an
     xNES update is applied.
 
+    Runtime configuration lives on the instance attributes `csa_enabled`,
+    `eta_mu`, `eta_sigma`, and `eta_B`. Leaving any of them as `None`
+    preserves the default chosen by :class:`XNES`; assigning a concrete value
+    overrides that default for newly created internal xNES states.
+
     Args:
         pop_size: Optional batch size. Odd values are rounded up to the next
             even value.
-        csa_enabled: Enable cumulative step-size adaptation.
-        eta_mu: Learning rate for the mean update.
-        eta_sigma: Learning rate for the global scale update.
-        eta_B: Optional learning rate for the normalized shape matrix update.
 
     Raises:
-        ValueError: If `pop_size` is non-positive or any learning rate is not a
-            positive finite float.
+        ValueError: If `pop_size` is non-positive.
     """
 
     _RESTART_ON_FAILURE = True
@@ -73,24 +73,16 @@ class Optimizer:
     _MAX_SIGMA = 1e20
     _MAX_CONDITION = 1e14
 
-    def __init__(
-        self,
-        pop_size: int | None = None,
-        *,
-        csa_enabled: bool = True,
-        eta_mu: float = 1.0,
-        eta_sigma: float = 1.0,
-        eta_B: float | None = None,
-    ) -> None:
+    def __init__(self, pop_size: int | None = None) -> None:
         if pop_size is not None and pop_size <= 0:
             msg = "pop_size must be positive when provided."
             raise ValueError(msg)
 
         self.pop_size = pop_size
-        self.csa_enabled = bool(csa_enabled)
-        self.eta_mu = _positive_finite(eta_mu, "eta_mu")
-        self.eta_sigma = _positive_finite(eta_sigma, "eta_sigma")
-        self.eta_B = None if eta_B is None else _positive_finite(eta_B, "eta_B")
+        self.csa_enabled: bool | None = None
+        self.eta_mu: float | None = None
+        self.eta_sigma: float | None = None
+        self.eta_B: float | None = None
 
         self._rng = np.random.default_rng()
         self._registry: dict[str, Parameter] = {}
@@ -305,15 +297,20 @@ class Optimizer:
         return n
 
     def _new_xnes(self, loc: np.ndarray, scale: np.ndarray, p_sigma: np.ndarray) -> XNES:
-        return XNES(
+        xnes = XNES(
             loc,
             scale,
             p_sigma=p_sigma,
-            csa_enabled=self.csa_enabled,
-            eta_mu=self.eta_mu,
-            eta_sigma=self.eta_sigma,
-            eta_B=self.eta_B,
         )
+        if self.csa_enabled is not None:
+            xnes.csa_enabled = self.csa_enabled
+        if self.eta_mu is not None:
+            xnes.eta_mu = self.eta_mu
+        if self.eta_sigma is not None:
+            xnes.eta_sigma = self.eta_sigma
+        if self.eta_B is not None:
+            xnes.eta_B = self.eta_B
+        return xnes
 
     def _reconcile_after_registry_change(self) -> None:
         self._reconcile_state(
