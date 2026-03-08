@@ -7,6 +7,8 @@ optional CSA step-size control.
 
 from __future__ import annotations
 
+from enum import Enum, auto
+
 import numpy as np
 from numpy.linalg import cond, norm
 from scipy.linalg import expm, qr
@@ -16,6 +18,23 @@ def _default_eta_B(dim: int) -> float:
     if dim <= 0:
         return 1.0
     return float(0.6 * (3.0 + np.log(dim)) / (dim * np.sqrt(dim)))
+
+
+class XNESStatus(Enum):
+    """Terminal condition reported by :meth:`XNES.tell`."""
+
+    OK = auto()
+    SIGMA_MIN = auto()
+    SIGMA_MAX = auto()
+    SIGMA_INF = auto()
+    LOC_INF = auto()
+    SCALE_INF = auto()
+    STEP_SIZE_PATH_INF = auto()
+    SCALE_COND_INF = auto()
+    SCALE_COND_ERROR = auto()
+    SCALE_COND_MAX = auto()
+    LOC_STEP_MIN = auto()
+    SCALE_NORM_MIN = auto()
 
 
 class XNES:
@@ -36,8 +55,12 @@ class XNES:
             not positive with finite determinant.
     """
 
+    MIN_SIGMA = 1e-20
+    MAX_SIGMA = 1e20
+    MAX_CONDITION = 1e14
+
     def __init__(self, x0: np.ndarray, sigma0: np.ndarray | float, p_sigma: np.ndarray | None = None) -> None:
-        self.loc = np.asarray(x0, dtype=float)
+        self.mu = np.asarray(x0, dtype=float)
         self.sigma: float
         self.B: np.ndarray
         self.p_sigma: np.ndarray
@@ -81,7 +104,7 @@ class XNES:
     def dim(self) -> int:
         """Dimension of the search space."""
 
-        return int(self.loc.size)
+        return int(self.mu.size)
 
     @property
     def scale(self) -> np.ndarray:
@@ -128,10 +151,10 @@ class XNES:
             z_half[:, start:end] = basis * lengths
 
         z = np.hstack([z_half, -z_half])
-        x = self.loc[:, None] + self.scale @ z
+        x = self.mu[:, None] + self.scale @ z
         return z, x
 
-    def tell(self, samples: np.ndarray, ranking: list[int], eps: float = 1e-10) -> bool:
+    def tell(self, samples: np.ndarray, ranking: list[int], eps: float = 1e-10) -> XNESStatus:
         """Apply one xNES update from ranked standardized samples.
 
         Args:
@@ -140,7 +163,8 @@ class XNES:
             eps: Numerical stopping threshold.
 
         Returns:
-            `True` if the distribution should be considered numerically stopped or unstable, else `False`.
+            An :class:`XNESStatus` describing whether the update remained
+            healthy or hit a numerical/convergence stop condition.
 
         Raises:
             ValueError: If sample shapes are inconsistent, samples are not
@@ -148,7 +172,7 @@ class XNES:
         """
 
         if self.dim == 0:
-            return True
+            return XNESStatus.SCALE_NORM_MIN
 
         n = samples.shape[1]
         d = self.dim
@@ -178,8 +202,8 @@ class XNES:
         grad_sigma = float(np.trace(grad_M) / d)
         grad_B_shape = grad_M - grad_sigma * np.eye(d)
 
-        loc_step = self.eta_mu * self.sigma * (self.B @ grad_mu)
-        self.loc += loc_step
+        mu_step = self.eta_mu * self.sigma * (self.B @ grad_mu)
+        self.mu += mu_step
 
         if self.csa_enabled:
             c_sigma = (mu_eff_pos + 2.0) / (d + mu_eff_pos + 5.0)
@@ -195,29 +219,49 @@ class XNES:
             sigma_log_step = float(np.clip(sigma_log_step, -50.0, 50.0))
 
         self.sigma *= float(np.exp(sigma_log_step))
+        if not np.isfinite(self.sigma):
+            return XNESStatus.SIGMA_INF
+
+        min_sigma = max(self.MIN_SIGMA, eps)
+        if self.sigma < min_sigma:
+            return XNESStatus.SIGMA_MIN
+        if self.sigma > self.MAX_SIGMA:
+            return XNESStatus.SIGMA_MAX
 
         eta_B = self.eta_B * _default_eta_B(d)
         self.B = self.B @ expm(0.5 * eta_B * grad_B_shape)
 
         sign, logdet = np.linalg.slogdet(self.B)
         if sign <= 0 or not np.isfinite(logdet):
-            return True
+            return XNESStatus.SCALE_INF
         self.B *= np.exp(-logdet / d)
 
-        if not np.isfinite(self.sigma) or self.sigma <= 0.0:
-            return True
-        if (
-            not np.all(np.isfinite(self.loc))
-            or not np.all(np.isfinite(self.B))
-            or not np.all(np.isfinite(self.p_sigma))
-        ):
-            return True
+        if not np.all(np.isfinite(self.mu)):
+            return XNESStatus.LOC_INF
+        if not np.all(np.isfinite(self.B)):
+            return XNESStatus.SCALE_INF
+        if not np.all(np.isfinite(self.p_sigma)):
+            return XNESStatus.STEP_SIZE_PATH_INF
 
         scale = self.scale
-        cond_scale = cond(scale)
+        if not np.all(np.isfinite(scale)):
+            return XNESStatus.SCALE_INF
+        if norm(scale, 2) < eps:
+            return XNESStatus.SCALE_NORM_MIN
+        if norm(mu_step, 2) < eps:
+            return XNESStatus.LOC_STEP_MIN
+
+        try:
+            cond_scale = float(cond(scale))
+        except np.linalg.LinAlgError:
+            return XNESStatus.SCALE_COND_ERROR
         if not np.isfinite(cond_scale):
-            return True
-        return bool(self.sigma < eps or norm(scale, 2) < eps or norm(loc_step, 2) < eps or cond_scale * eps > 1)
+            return XNESStatus.SCALE_COND_INF
+
+        max_condition = min(self.MAX_CONDITION, 1.0 / eps)
+        if cond_scale > max_condition:
+            return XNESStatus.SCALE_COND_MAX
+        return XNESStatus.OK
 
 
 def _validate_positive_finite(value: float, name: str) -> float:

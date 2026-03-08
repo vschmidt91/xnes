@@ -21,7 +21,7 @@ from typing import cast
 
 import numpy as np
 
-from .xnes import XNES
+from .xnes import XNES, XNESStatus
 
 
 @dataclass
@@ -53,6 +53,16 @@ class ParameterInfo:
 class _Prior:
     loc: float
     scale: float
+
+
+@dataclass(frozen=True)
+class Report:
+    """Outcome of one :meth:`Optimizer.tell` call."""
+
+    completed_batch: bool
+    matched_context: bool
+    status: XNESStatus
+    restarted: bool
 
 
 class Optimizer:
@@ -89,11 +99,6 @@ class Optimizer:
         ValueError: If `pop_size` is non-positive.
     """
 
-    _RESTART_ON_FAILURE = True
-    _MIN_SIGMA = 1e-20
-    _MAX_SIGMA = 1e20
-    _MAX_CONDITION = 1e14
-
     def __init__(self, pop_size: int | None = None) -> None:
         if pop_size is not None and pop_size <= 0:
             msg = "pop_size must be positive when provided."
@@ -117,6 +122,7 @@ class Optimizer:
         self._results: list[tuple[float, ...] | None] = []
         self._active_sample_index: int | None = None
         self._active_context_hash: int | None = None
+        self._active_context_matched = False
         self._context_waiting: dict[int, int] = {}
 
     def add(self, name: str, loc: float = 0.0, scale: float = 1.0) -> Parameter:
@@ -173,9 +179,9 @@ class Optimizer:
 
         return {
             "names": list(self._state_names),
-            "loc": self._xnes.loc.tolist(),
+            "loc": self._xnes.mu.tolist(),
             "scale": self._xnes.scale.tolist(),
-            "p_sigma": self._xnes.p_sigma.tolist(),
+            "step_size_path": self._xnes.p_sigma.tolist(),
             "batch_z": self._batch_z.tolist(),
             "batch_x": self._batch_x.tolist(),
             "results": [None if item is None else list(item) for item in self._results],
@@ -217,7 +223,8 @@ class Optimizer:
             raise ValueError(msg)
         loc = np.asarray(state_obj["loc"], dtype=float)
         scale = np.asarray(state_obj["scale"], dtype=float)
-        p_sigma = np.asarray(state_obj["p_sigma"], dtype=float)
+        step_size_path_json = state_obj["step_size_path"]
+        step_size_path = np.asarray(step_size_path_json, dtype=float)
         batch_z = np.asarray(state_obj["batch_z"], dtype=float)
         batch_x = np.asarray(state_obj["batch_x"], dtype=float)
         result_rows = cast(Sequence[Sequence[float] | None], state_obj["results"])
@@ -226,7 +233,7 @@ class Optimizer:
         context_waiting = {row[0]: row[1] for row in context_waiting_rows}
 
         self._rng.bit_generator.state = dict(cast(Mapping[str, object], state_obj["rng_state"]))
-        self._xnes = self._new_xnes(loc, scale, p_sigma)
+        self._xnes = self._new_xnes(loc, scale, step_size_path)
         self._state_names = expected_names
         self._batch_z = batch_z
         self._batch_x = batch_x
@@ -243,6 +250,7 @@ class Optimizer:
         }
         self._active_sample_index = None
         self._active_context_hash = None
+        self._active_context_matched = False
         self._loaded = True
         self._activate_next_sample()
 
@@ -253,7 +261,7 @@ class Optimizer:
         self._state_names = names
         self._reset_batch()
 
-    def set_context(self, context: Hashable) -> None:
+    def set_context(self, context: Hashable) -> bool:
         """Retarget the current sample selection using a hashable context id.
 
         The context is hashed immediately and only the hash is retained. If the
@@ -267,6 +275,10 @@ class Optimizer:
         Args:
             context: Hashable objective-context identifier.
 
+        Returns:
+            `True` iff the selected sample is the matched mirror for a
+            previously seen context in the current batch.
+
         Raises:
             RuntimeError: If called before :meth:`load`.
         """
@@ -274,13 +286,14 @@ class Optimizer:
             msg = "Call load() before set_context()."
             raise RuntimeError(msg)
         if self._active_sample_index is None:
-            return
+            return False
 
         context_hash = hash(context)
-        sample_index = self._select_sample_index(context_hash)
-        self._set_active_sample(sample_index, context_hash)
+        sample_index, matched_context = self._select_sample_index(context_hash)
+        self._set_active_sample(sample_index, context_hash, matched_context)
+        return matched_context
 
-    def tell(self, result: float | Sequence[float] | np.ndarray) -> bool:
+    def tell(self, result: float | Sequence[float] | np.ndarray) -> Report:
         """Submit the objective result for the current sample.
 
         Scalar results are treated as one-element tuples. Sequence results are
@@ -290,7 +303,9 @@ class Optimizer:
             result: Objective value for the current sample.
 
         Returns:
-            `True` when the current batch has been fully consumed and an update or restart step completed.
+            A :class:`Report` describing whether the current batch completed,
+            whether this sample used a matched context, the xNES step status,
+            and whether the wrapper restarted the distribution.
 
         Raises:
             TypeError: If `result` is neither a scalar nor a numeric sequence.
@@ -303,28 +318,28 @@ class Optimizer:
             raise RuntimeError(msg)
 
         sample_index = self._active_sample_index
+        matched_context = self._active_context_matched
         self._results[sample_index] = _normalize_result(result)
         self._register_context_match(sample_index, self._active_context_hash)
         self._active_sample_index = None
         self._active_context_hash = None
+        self._active_context_matched = False
 
         done = all(item is not None for item in self._results)
         if done:
             results = cast(list[tuple[float, ...]], self._results)
             ranking = sorted(range(len(results)), key=lambda idx: results[idx], reverse=True)
-            stopped = bool(self._xnes.tell(self._batch_z, ranking))
+            status = self._xnes.tell(self._batch_z, ranking)
 
-            restarted = False
-            if stopped:
-                restarted = self._handle_instability()
-            if not restarted:
-                restarted = self._stabilize_runtime()
-            if not restarted:
+            restarted = status is not XNESStatus.OK
+            if restarted:
+                self._restart_distribution()
+            else:
                 self._reset_batch()
-            return True
+            return Report(True, matched_context, status, restarted)
 
         self._activate_next_sample()
-        return False
+        return Report(False, matched_context, XNESStatus.OK, False)
 
     def set_best(self) -> None:
         """Set all registered parameter values to the current population mean.
@@ -336,7 +351,7 @@ class Optimizer:
         """
 
         for row, name in enumerate(self._state_names):
-            self._registry[name].value = float(self._xnes.loc[row])
+            self._registry[name].value = float(self._xnes.mu[row])
 
     def get_info(self) -> list[ParameterInfo]:
         """Return immutable snapshots of all registered parameters.
@@ -354,7 +369,7 @@ class Optimizer:
             ParameterInfo(
                 name=name,
                 value=float(self._registry[name].value),
-                loc=float(self._xnes.loc[row]),
+                loc=float(self._xnes.mu[row]),
                 scale=float(scale_diag[row]),
                 prior_loc=self._priors[name].loc,
                 prior_scale=self._priors[name].scale,
@@ -380,11 +395,11 @@ class Optimizer:
             n = 2
         return n
 
-    def _new_xnes(self, loc: np.ndarray, scale: np.ndarray, p_sigma: np.ndarray) -> XNES:
+    def _new_xnes(self, loc: np.ndarray, scale: np.ndarray, step_size_path: np.ndarray) -> XNES:
         xnes = XNES(
             loc,
             scale,
-            p_sigma=p_sigma,
+            p_sigma=step_size_path,
         )
         if self.csa_enabled is not None:
             xnes.csa_enabled = self.csa_enabled
@@ -404,6 +419,7 @@ class Optimizer:
         self._context_waiting = {}
         self._active_sample_index = None
         self._active_context_hash = None
+        self._active_context_matched = False
         self._activate_next_sample()
 
     def _apply_sample_values(self, sample_index: int) -> None:
@@ -423,15 +439,22 @@ class Optimizer:
         if sample_index is None:
             self._active_sample_index = None
             self._active_context_hash = None
+            self._active_context_matched = False
             return
         self._set_active_sample(sample_index)
 
-    def _set_active_sample(self, sample_index: int, context_hash: int | None = None) -> None:
+    def _set_active_sample(
+        self,
+        sample_index: int,
+        context_hash: int | None = None,
+        matched_context: bool = False,
+    ) -> None:
         self._active_sample_index = sample_index
         self._active_context_hash = context_hash
+        self._active_context_matched = matched_context
         self._apply_sample_values(sample_index)
 
-    def _select_sample_index(self, context_hash: int) -> int:
+    def _select_sample_index(self, context_hash: int) -> tuple[int, bool]:
         current_index = self._active_sample_index
         current_available = current_index is not None and self._results[current_index] is None
 
@@ -439,7 +462,7 @@ class Optimizer:
         if waiting_index is not None:
             mirror_index = self._mirror_index(waiting_index)
             if self._results[mirror_index] is None:
-                return mirror_index
+                return mirror_index, True
             del self._context_waiting[context_hash]
 
         sample_index = (
@@ -450,7 +473,7 @@ class Optimizer:
         if sample_index is None:
             msg = "Current batch is already fully assigned."
             raise RuntimeError(msg)
-        return sample_index
+        return sample_index, False
 
     def _register_context_match(self, sample_index: int, context_hash: int | None) -> None:
         if context_hash is None:
@@ -466,35 +489,12 @@ class Optimizer:
         if self._mirror_index(waiting_index) == sample_index:
             del self._context_waiting[context_hash]
 
-    def _handle_instability(self) -> bool:
-        if not self._RESTART_ON_FAILURE:
-            return False
-        self._restart_distribution()
-        return True
-
     def _restart_distribution(self) -> None:
         names = self._ordered_names()
         loc, scale = self._build_initial_state(names)
         self._xnes = self._new_xnes(loc, scale, np.zeros(len(names), dtype=float))
         self._state_names = names
         self._reset_batch()
-
-    def _stabilize_runtime(self) -> bool:
-        sigma = float(self._xnes.sigma)
-        if not np.isfinite(sigma) or not self._MIN_SIGMA <= sigma <= self._MAX_SIGMA:
-            return self._handle_instability()
-        if not np.all(np.isfinite(self._xnes.loc)) or not np.all(np.isfinite(self._xnes.B)):
-            return self._handle_instability()
-
-        try:
-            cond_value = float(np.linalg.cond(self._xnes.scale))
-        except np.linalg.LinAlgError:
-            return self._handle_instability()
-        if not np.isfinite(cond_value):
-            return self._handle_instability()
-        if cond_value > self._MAX_CONDITION:
-            return self._handle_instability()
-        return False
 
 
 def _normalize_result(result: float | Sequence[float] | np.ndarray) -> tuple[float, ...]:

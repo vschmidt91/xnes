@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import numpy as np
 from scipy.linalg import expm
-
-from xnes import XNES
 from xnes.xnes import _default_eta_B
+
+from xnes import XNES, XNESStatus
 
 
 def _ranking(scores: np.ndarray) -> list[int]:
@@ -42,7 +42,7 @@ def test_xnes_rank_invariance_under_monotonic_transform() -> None:
         xnes_a.tell(z_a, ranking_raw)
         xnes_b.tell(z_b, ranking_transformed)
 
-    assert np.allclose(xnes_a.loc, xnes_b.loc)
+    assert np.allclose(xnes_a.mu, xnes_b.mu)
     assert np.allclose(xnes_a.scale, xnes_b.scale)
 
 
@@ -90,19 +90,19 @@ def test_xnes_linear_invariance_with_stress_values() -> None:
         scores = score_projection @ z_x + 1e-12 * np.arange(n)
         ranking = _ranking(scores)
 
-        stop_x = xnes_x.tell(z_x, ranking)
-        stop_y = xnes_y.tell(z_y, ranking)
-        assert stop_x == stop_y
+        status_x = xnes_x.tell(z_x, ranking)
+        status_y = xnes_y.tell(z_y, ranking)
+        assert status_x == status_y
 
-        assert np.all(np.isfinite(xnes_x.loc))
+        assert np.all(np.isfinite(xnes_x.mu))
         assert np.isfinite(xnes_x.sigma)
         assert np.all(np.isfinite(xnes_x.scale))
 
-        assert np.all(np.isfinite(xnes_y.loc))
+        assert np.all(np.isfinite(xnes_y.mu))
         assert np.isfinite(xnes_y.sigma)
         assert np.all(np.isfinite(xnes_y.scale))
 
-        assert np.allclose(xnes_y.loc, transform @ xnes_x.loc + shift, rtol=1e-10, atol=3e-3)
+        assert np.allclose(xnes_y.mu, transform @ xnes_x.mu + shift, rtol=1e-10, atol=3e-3)
         assert np.allclose(xnes_y.scale, transform @ xnes_x.scale, rtol=1e-10, atol=1e-12)
 
 
@@ -138,7 +138,8 @@ def test_xnes_eta_B_scales_dimension_dependent_shape_rate() -> None:
     assert sign > 0
     expected_B *= np.exp(-logdet / d)
 
-    xnes.tell(samples, ranking)
-    assert np.allclose(xnes.loc, np.zeros(3))
+    status = xnes.tell(samples, ranking)
+    assert status is XNESStatus.LOC_STEP_MIN
+    assert np.allclose(xnes.mu, np.zeros(3))
     assert np.isclose(xnes.sigma, 1.0)
     assert np.allclose(xnes.B, expected_B)

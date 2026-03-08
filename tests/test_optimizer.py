@@ -4,7 +4,7 @@ from collections.abc import Callable
 
 import numpy as np
 
-from xnes import Optimizer, ParameterInfo
+from xnes import Optimizer, ParameterInfo, Report, XNESStatus
 
 
 def _read_loc(state: object) -> np.ndarray:
@@ -29,11 +29,11 @@ def _read_scale(state: object) -> np.ndarray:
     return np.asarray(scale_json, dtype=float)
 
 
-def _read_p_sigma(state: object) -> np.ndarray:
+def _read_step_size_path(state: object) -> np.ndarray:
     assert isinstance(state, dict)
-    p_sigma_json = state["p_sigma"]
-    assert isinstance(p_sigma_json, list)
-    return np.asarray(p_sigma_json, dtype=float)
+    step_size_path_json = state["step_size_path"]
+    assert isinstance(step_size_path_json, list)
+    return np.asarray(step_size_path_json, dtype=float)
 
 
 def _run_function_optimization(
@@ -144,14 +144,18 @@ def test_context_reuses_mirror_on_repeat() -> None:
     optimizer.load(None)
 
     first = np.array([x.value, y.value], dtype=float)
-    optimizer.set_context("ctx")
-    optimizer.tell(1.0)
+    assert optimizer.set_context("ctx") is False
+    first_report = optimizer.tell(1.0)
+    assert first_report == Report(False, False, XNESStatus.OK, False)
 
-    optimizer.tell(0.0)
+    second_report = optimizer.tell(0.0)
+    assert second_report == Report(False, False, XNESStatus.OK, False)
 
-    optimizer.set_context("ctx")
+    assert optimizer.set_context("ctx") is True
     mirror = np.array([x.value, y.value], dtype=float)
     assert np.allclose(mirror, -first)
+    third_report = optimizer.tell(-1.0)
+    assert third_report == Report(False, True, XNESStatus.OK, False)
 
 
 def test_save_requires_tell_after_context() -> None:
@@ -242,4 +246,4 @@ def test_save_load_preserves_optimizer_state() -> None:
     assert _read_names(direct_state) == _read_names(recreated_state)
     assert np.allclose(_read_loc(direct_state), _read_loc(recreated_state))
     assert np.allclose(_read_scale(direct_state), _read_scale(recreated_state))
-    assert np.allclose(_read_p_sigma(direct_state), _read_p_sigma(recreated_state))
+    assert np.allclose(_read_step_size_path(direct_state), _read_step_size_path(recreated_state))
