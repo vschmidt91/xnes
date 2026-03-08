@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import numpy as np
+from scipy.linalg import expm
 
 from xnes import XNES
+from xnes.xnes import _default_eta_B
 
 
 def _ranking(scores: np.ndarray) -> list[int]:
@@ -102,3 +104,41 @@ def test_xnes_linear_invariance_with_stress_values() -> None:
 
         assert np.allclose(xnes_y.loc, transform @ xnes_x.loc + shift, rtol=1e-10, atol=3e-3)
         assert np.allclose(xnes_y.scale, transform @ xnes_x.scale, rtol=1e-10, atol=1e-12)
+
+
+def test_xnes_eta_B_scales_dimension_dependent_shape_rate() -> None:
+    xnes = XNES(np.zeros(3), np.eye(3))
+    xnes.csa_enabled = False
+    xnes.eta_mu = 0.0
+    xnes.eta_sigma = 0.0
+    xnes.eta_B = 0.2
+
+    samples = np.array(
+        [
+            [1.0, 0.0, -1.0, 0.5],
+            [0.5, -1.0, 0.0, 1.0],
+            [-0.5, 1.0, 0.5, -1.0],
+        ],
+        dtype=float,
+    )
+    ranking = [0, 1, 2, 3]
+
+    n = samples.shape[1]
+    d = xnes.dim
+    w_pos = np.maximum(0.0, np.log(n / 2 + 1) - np.log(np.arange(1, n + 1)))
+    w_pos /= float(np.sum(w_pos))
+    w_active = w_pos - (1.0 / n)
+    z_sorted = samples[:, ranking]
+    grad_M = (z_sorted * w_active) @ z_sorted.T
+    grad_sigma = float(np.trace(grad_M) / d)
+    grad_B_shape = grad_M - grad_sigma * np.eye(d)
+
+    expected_B = expm(0.5 * 0.2 * _default_eta_B(d) * grad_B_shape)
+    sign, logdet = np.linalg.slogdet(expected_B)
+    assert sign > 0
+    expected_B *= np.exp(-logdet / d)
+
+    xnes.tell(samples, ranking)
+    assert np.allclose(xnes.loc, np.zeros(3))
+    assert np.isclose(xnes.sigma, 1.0)
+    assert np.allclose(xnes.B, expected_B)

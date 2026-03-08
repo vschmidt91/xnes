@@ -99,14 +99,15 @@ opt = Optimizer(pop_size=32)
 opt.csa_enabled = False
 opt.eta_mu = 0.9
 opt.eta_sigma = 0.7
-opt.eta_B = 0.2
+opt.eta_B = 0.2  # 20% of the default shape-learning step
 ```
 
 Leaving `Optimizer.csa_enabled`, `Optimizer.eta_mu`, `Optimizer.eta_sigma`, or
 `Optimizer.eta_B` as `None` keeps the defaults defined by `XNES`. A bare
 `XNES(...)` instance starts with `csa_enabled = True`, `eta_mu = 1.0`,
-`eta_sigma = 1.0`, and `eta_B = 0.6 * (3 + log(dim)) / (dim * sqrt(dim))` for
-`dim > 0`.
+`eta_sigma = 1.0`, and `eta_B = 1.0`, which applies the built-in shape-learning
+rate `0.6 * (3 + log(dim)) / (dim * sqrt(dim))` for `dim > 0`. Smaller
+`eta_B` values damp that rate multiplicatively.
 
 ## Result Ordering
 - Scalar results are treated as 1-tuples.

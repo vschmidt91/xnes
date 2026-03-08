@@ -77,7 +77,9 @@ class Optimizer:
     Runtime configuration lives on the instance attributes `csa_enabled`,
     `eta_mu`, `eta_sigma`, and `eta_B`. Leaving any of them as `None`
     preserves the default chosen by :class:`XNES`; assigning a concrete value
-    overrides that default for newly created internal xNES states.
+    overrides that default for newly created internal xNES states. `eta_B`
+    scales the built-in dimension-dependent shape learning rate
+    multiplicatively.
 
     Args:
         pop_size: Optional batch size. Odd values are rounded up to the next

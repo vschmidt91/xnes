@@ -27,7 +27,9 @@ class XNES:
         p_sigma: Optional CSA evolution path.
 
     Runtime attributes `csa_enabled`, `eta_mu`, `eta_sigma`, and `eta_B` are
-    initialized to built-in defaults and may be reassigned directly.
+    initialized to built-in defaults and may be reassigned directly. `eta_B`
+    acts as a multiplier on the built-in dimension-dependent shape learning
+    rate heuristic.
 
     Raises:
         ValueError: If the supplied shapes are inconsistent, the scale matrix is
@@ -42,7 +44,7 @@ class XNES:
         self.csa_enabled = True
         self.eta_mu = 1.0
         self.eta_sigma = 1.0
-        self.eta_B = _default_eta_B(self.dim)
+        self.eta_B = 1.0
 
         if self.dim == 0:
             self.sigma = 1.0
@@ -194,7 +196,8 @@ class XNES:
 
         self.sigma *= float(np.exp(sigma_log_step))
 
-        self.B = self.B @ expm(0.5 * self.eta_B * grad_B_shape)
+        eta_B = self.eta_B * _default_eta_B(d)
+        self.B = self.B @ expm(0.5 * eta_B * grad_B_shape)
 
         sign, logdet = np.linalg.slogdet(self.B)
         if sign <= 0 or not np.isfinite(logdet):
