@@ -3,7 +3,7 @@ PYTHON ?= python
 SOURCES = xnes tests
 
 fix:
-	$(PYTHON) -m ruff check --fix $(SOURCES)
+	$(PYTHON) -m ruff check --fix --unsafe-fixes $(SOURCES)
 	$(PYTHON) -m ruff format $(SOURCES)
 
 check:

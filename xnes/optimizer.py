@@ -1,8 +1,16 @@
 """Named-parameter optimizer built on top of the xNES update rule.
 
-The wrapper manages a dynamic registry of scalar parameters, preserves a stable
-lexicographic parameter order, and exposes a serializable ask/tell style loop
-through mutable :class:`Parameter` views.
+The wrapper is designed for a strict checkpointed workflow:
+
+1. create :class:`Optimizer`
+2. register parameters with :meth:`add`
+3. call :meth:`load` with ``None`` for a fresh run or a previously saved state
+4. optionally call :meth:`set_context`
+5. read :class:`Parameter.value`
+6. call :meth:`tell` exactly once for the current evaluation
+7. call :meth:`save`
+
+The registry is fixed once :meth:`load` has been called.
 """
 
 from __future__ import annotations
@@ -48,12 +56,23 @@ class _Prior:
 
 
 class Optimizer:
-    """Maximizing optimizer with dynamic named parameters.
+    """Maximizing optimizer with named scalar parameters.
 
     Parameters are registered by name and sampled in lexicographic order so the
-    optimization state is independent of registration order. Calls to `tell`
-    consume one result for the current sample and advance the batch until an
-    xNES update is applied.
+    optimization state is independent of registration order.
+
+    Intended call flow:
+
+    1. create the optimizer
+    2. register all parameters with :meth:`add`
+    3. call :meth:`load`
+    4. optionally call :meth:`set_context`
+    5. evaluate the current :class:`Parameter.value` values
+    6. call :meth:`tell`
+    7. call :meth:`save`
+
+    After :meth:`load`, the registry is fixed and :meth:`add` / :meth:`remove`
+    are no longer allowed.
 
     Runtime configuration lives on the instance attributes `csa_enabled`,
     `eta_mu`, `eta_sigma`, and `eta_B`. Leaving any of them as `None`
@@ -87,20 +106,21 @@ class Optimizer:
         self._rng = np.random.default_rng()
         self._registry: dict[str, Parameter] = {}
         self._priors: dict[str, _Prior] = {}
+        self._loaded = False
 
-        self._xnes = self._new_xnes(np.zeros(0), np.eye(0), np.zeros(0))
+        self._xnes: XNES = self._new_xnes(np.zeros(0), np.eye(0), np.zeros(0))
         self._state_names: list[str] = []
-        self._batch_z = np.zeros((0, 0))
-        self._batch_x = np.zeros((0, 0))
+        self._batch_z: np.ndarray = np.zeros((0, 0))
+        self._batch_x: np.ndarray = np.zeros((0, 0))
         self._results: list[tuple[float, ...] | None] = []
         self._active_sample_index: int | None = None
         self._active_context_hash: int | None = None
-        self._assigned: list[bool] = []
         self._context_waiting: dict[int, int] = {}
-        self._reset_batch()
 
     def add(self, name: str, loc: float = 0.0, scale: float = 1.0) -> Parameter:
         """Register a parameter or return the existing one.
+
+        This is a setup-time operation. It must happen before :meth:`load`.
 
         Args:
             name: Unique parameter name.
@@ -112,6 +132,7 @@ class Optimizer:
 
         Raises:
             ValueError: If `scale <= 0`.
+            RuntimeError: If called after :meth:`load`.
         """
 
         if scale <= 0:
@@ -121,36 +142,32 @@ class Optimizer:
         existing = self._registry.get(name)
         if existing is not None:
             return existing
+        if self._loaded:
+            msg = "Cannot add parameters after load()."
+            raise RuntimeError(msg)
 
         parameter = Parameter(name=name, value=float(loc))
         self._registry[name] = parameter
         self._priors[name] = _Prior(loc=float(loc), scale=float(scale))
-        self._reconcile_after_registry_change()
         return parameter
 
-    def remove(self, name: str) -> None:
-        """Remove a parameter from the registry and reconcile optimizer state.
-
-        Args:
-            name: Registered parameter name.
-
-        Raises:
-            KeyError: If the parameter is unknown.
-        """
-
-        if name not in self._registry:
-            msg = f"Unknown parameter '{name}'."
-            raise KeyError(msg)
-        del self._registry[name]
-        del self._priors[name]
-        self._reconcile_after_registry_change()
-
     def save(self) -> dict[str, object]:
-        """Serialize the current optimizer state.
+        """Serialize the current optimizer state after `tell`.
+
+        Under the intended workflow, callers save only after the current
+        evaluation result has been reported via :meth:`tell`.
 
         Returns:
             JSON-compatible snapshot of registry order, xNES state, batch data, results, and RNG state.
+
+        Raises:
+            RuntimeError: If called after :meth:`set_context` but before
+                :meth:`tell`.
         """
+
+        if self._active_context_hash is not None:
+            msg = "Cannot save after set_context() before tell()."
+            raise RuntimeError(msg)
 
         return {
             "names": list(self._state_names),
@@ -160,61 +177,100 @@ class Optimizer:
             "batch_z": self._batch_z.tolist(),
             "batch_x": self._batch_x.tolist(),
             "results": [None if item is None else list(item) for item in self._results],
-            "context_waiting": [[context_hash, sample_idx] for context_hash, sample_idx in self._context_waiting.items()],
+            "context_waiting": [
+                [context_hash, sample_idx] for context_hash, sample_idx in self._context_waiting.items()
+            ],
             "rng_state": dict(self._rng.bit_generator.state),
         }
 
     def load(self, state: object) -> None:
-        """Restore optimizer state from `save`.
+        """Restore optimizer state or initialize a fresh run.
 
-        If no parameters are registered yet, the registry is reconstructed from
-        the serialized names and diagonal scale entries. Non-mapping inputs are
-        ignored.
+        ``load(None)`` initializes a fresh optimizer state from the registered
+        parameter priors. ``load(state)`` restores a previously saved state.
 
         Args:
-            state: Serialized optimizer state.
+            state: `None` for a fresh run, or a serialized state produced by :meth:`save`.
+
+        Raises:
+            RuntimeError: If no parameters have been registered yet.
+            ValueError: If the saved parameter names do not match the
+                registered names.
         """
 
-        if not isinstance(state, Mapping):
+        if not self._registry:
+            msg = "Register parameters with add() before load()."
+            raise RuntimeError(msg)
+        if state is None:
+            self._reset_from_priors()
+            self._loaded = True
             return
+
         state_obj = cast(Mapping[str, object], state)
 
         names = cast(list[str], state_obj["names"])
+        expected_names = self._ordered_names()
+        if names != expected_names:
+            msg = "Loaded parameter names must match the registered names."
+            raise ValueError(msg)
         loc = np.asarray(state_obj["loc"], dtype=float)
         scale = np.asarray(state_obj["scale"], dtype=float)
         p_sigma = np.asarray(state_obj["p_sigma"], dtype=float)
         batch_z = np.asarray(state_obj["batch_z"], dtype=float)
         batch_x = np.asarray(state_obj["batch_x"], dtype=float)
-        result_rows = cast(Sequence[Sequence[float] | None], state_obj.get("results", []))
+        result_rows = cast(Sequence[Sequence[float] | None], state_obj["results"])
         results = [None if row is None else tuple(float(value) for value in row) for row in result_rows]
-        context_waiting_rows = cast(Sequence[Sequence[object]], state_obj.get("context_waiting", []))
-        context_waiting = {int(row[0]): int(row[1]) for row in context_waiting_rows if len(row) == 2}
+        context_waiting_rows = cast(Sequence[Sequence[int]], state_obj["context_waiting"])
+        context_waiting = {row[0]: row[1] for row in context_waiting_rows}
 
-        raw_rng_state = state_obj.get("rng_state")
-        if isinstance(raw_rng_state, Mapping):
-            self._rng.bit_generator.state = dict(raw_rng_state)
+        self._rng.bit_generator.state = dict(cast(Mapping[str, object], state_obj["rng_state"]))
+        self._xnes = self._new_xnes(loc, scale, p_sigma)
+        self._state_names = expected_names
+        self._batch_z = batch_z
+        self._batch_x = batch_x
+        sample_count = self._batch_x.shape[1]
+        self._results = [None] * sample_count
+        for idx, item in enumerate(results[:sample_count]):
+            self._results[idx] = item
+        self._context_waiting = {
+            context_hash: sample_idx
+            for context_hash, sample_idx in context_waiting.items()
+            if 0 <= sample_idx < sample_count
+            and self._results[sample_idx] is not None
+            and self._results[self._mirror_index(sample_idx)] is None
+        }
+        self._active_sample_index = None
+        self._active_context_hash = None
+        self._loaded = True
+        self._activate_next_sample()
 
-        if not self._registry:
-            diag = np.abs(np.diag(np.asarray(scale, dtype=float)))
-            for idx, name in enumerate(names):
-                scale_value = float(diag[idx]) if idx < diag.size else 1.0
-                if not np.isfinite(scale_value) or scale_value <= 0.0:
-                    scale_value = 1.0
-                self._registry[name] = Parameter(name=name, value=float(loc[idx]))
-                self._priors[name] = _Prior(loc=float(loc[idx]), scale=scale_value)
-
-        self._reconcile_state(
-            old_names=names,
-            old_loc=loc,
-            old_scale=scale,
-            old_p_sigma=p_sigma,
-            old_batch_z=batch_z,
-            old_batch_x=batch_x,
-            old_results=results,
-            old_context_waiting=context_waiting,
-        )
+    def _reset_from_priors(self) -> None:
+        names = self._ordered_names()
+        loc, scale = self._build_initial_state(names)
+        self._xnes = self._new_xnes(loc, scale, np.zeros(len(names), dtype=float))
+        self._state_names = names
+        self._reset_batch()
 
     def set_context(self, context: Hashable) -> None:
+        """Retarget the current sample selection using a hashable context id.
+
+        The context is hashed immediately and only the hash is retained. If the
+        same context was already seen for one side of a mirrored pair in the
+        current batch, the mirrored sample is selected. Otherwise the current
+        pending sample stays selected.
+
+        This method is optional. If it is never called, sampling proceeds in the
+        default batch order.
+
+        Args:
+            context: Hashable objective-context identifier.
+
+        Raises:
+            RuntimeError: If called before :meth:`load`.
+        """
+        if not self._loaded:
+            msg = "Call load() before set_context()."
+            raise RuntimeError(msg)
         if self._active_sample_index is None:
             return
 
@@ -223,7 +279,7 @@ class Optimizer:
         self._set_active_sample(sample_index, context_hash)
 
     def tell(self, result: float | Sequence[float] | np.ndarray) -> bool:
-        """Submit one objective result for the current sample.
+        """Submit the objective result for the current sample.
 
         Scalar results are treated as one-element tuples. Sequence results are
         ranked lexicographically, with larger tuples considered better.
@@ -237,10 +293,11 @@ class Optimizer:
         Raises:
             TypeError: If `result` is neither a scalar nor a numeric sequence.
             ValueError: If `result` is an empty sequence.
+            RuntimeError: If called before :meth:`load`.
         """
 
         if self._active_sample_index is None:
-            msg = "No active sample available for tell()."
+            msg = "No active sample available. Call load() first."
             raise RuntimeError(msg)
 
         sample_index = self._active_sample_index
@@ -272,8 +329,8 @@ class Optimizer:
 
         This mutates exposed :class:`Parameter` views in place without changing
         optimizer state. It is intended for evaluation/inference after training.
-        To continue training afterwards, restore a previously saved state so the
-        ask/tell sample cursor remains aligned.
+        To continue training afterwards, restore a previously saved state and
+        resume the normal `load -> optional set_context -> tell -> save` flow.
         """
 
         for row, name in enumerate(self._state_names):
@@ -337,81 +394,11 @@ class Optimizer:
             xnes.eta_B = self.eta_B
         return xnes
 
-    def _reconcile_after_registry_change(self) -> None:
-        self._reconcile_state(
-            old_names=self._state_names,
-            old_loc=self._xnes.loc.copy(),
-            old_scale=self._xnes.scale.copy(),
-            old_p_sigma=self._xnes.p_sigma.copy(),
-            old_batch_z=np.zeros((0, 0)),
-            old_batch_x=np.zeros((0, 0)),
-            old_results=[],
-            old_context_waiting={},
-        )
-
-    def _reconcile_state(
-        self,
-        old_names: list[str],
-        old_loc: np.ndarray,
-        old_scale: np.ndarray,
-        old_p_sigma: np.ndarray,
-        old_batch_z: np.ndarray,
-        old_batch_x: np.ndarray,
-        old_results: list[tuple[float, ...] | None],
-        old_context_waiting: dict[int, int],
-    ) -> None:
-        new_names = self._ordered_names()
-        new_loc, new_scale = self._build_initial_state(new_names)
-        restored_p_sigma = np.zeros(len(new_names), dtype=float)
-        old_index = {name: idx for idx, name in enumerate(old_names)}
-        curr_idx: list[int] = []
-        prev_idx: list[int] = []
-        for i, name in enumerate(new_names):
-            j = old_index.get(name)
-            if j is not None:
-                curr_idx.append(i)
-                prev_idx.append(j)
-
-        if curr_idx:
-            new_loc[curr_idx] = old_loc[prev_idx]
-            new_scale[np.ix_(curr_idx, curr_idx)] = old_scale[np.ix_(prev_idx, prev_idx)]
-            restored_p_sigma[curr_idx] = old_p_sigma[prev_idx]
-
-        self._xnes = self._new_xnes(new_loc, new_scale, restored_p_sigma)
-        self._state_names = new_names
-
-        if old_batch_z.shape[1] > 0:
-            restored_batch_z = np.zeros((len(new_names), old_batch_z.shape[1]), dtype=float)
-            restored_batch_x = np.zeros((len(new_names), old_batch_z.shape[1]), dtype=float)
-            restored_batch_x[:] = new_loc[:, None]
-            if curr_idx:
-                restored_batch_z[curr_idx, :] = old_batch_z[prev_idx, :]
-                restored_batch_x[curr_idx, :] = old_batch_x[prev_idx, :]
-            self._batch_z = restored_batch_z
-            self._batch_x = restored_batch_x
-            sample_count = restored_batch_x.shape[1]
-            self._results = [None] * sample_count
-            for idx, item in enumerate(old_results[:sample_count]):
-                self._results[idx] = item
-            self._assigned = [item is not None for item in self._results]
-            self._context_waiting = {
-                context_hash: sample_idx
-                for context_hash, sample_idx in old_context_waiting.items()
-                if 0 <= sample_idx < sample_count
-                and self._results[sample_idx] is not None
-                and self._results[self._mirror_index(sample_idx)] is None
-            }
-            if sample_count > 0:
-                self._activate_next_sample()
-        else:
-            self._reset_batch()
-
     def _reset_batch(self) -> None:
         pop_size = self._resolve_population_size(self._xnes.dim)
         self._batch_z, self._batch_x = self._xnes.ask(pop_size, self._rng)
         sample_count = self._batch_x.shape[1]
         self._results = [None] * sample_count
-        self._assigned = [False] * sample_count
         self._context_waiting = {}
         self._active_sample_index = None
         self._active_context_hash = None
@@ -430,7 +417,7 @@ class Optimizer:
         return sample_index + half if sample_index < half else sample_index - half
 
     def _activate_next_sample(self) -> None:
-        sample_index = next((idx for idx, assigned in enumerate(self._assigned) if not assigned), None)
+        sample_index = next((idx for idx, result in enumerate(self._results) if result is None), None)
         if sample_index is None:
             self._active_sample_index = None
             self._active_context_hash = None
@@ -438,33 +425,26 @@ class Optimizer:
         self._set_active_sample(sample_index)
 
     def _set_active_sample(self, sample_index: int, context_hash: int | None = None) -> None:
-        current_index = self._active_sample_index
-        if current_index is not None and current_index != sample_index and self._results[current_index] is None:
-            self._assigned[current_index] = False
         self._active_sample_index = sample_index
         self._active_context_hash = context_hash
-        self._assigned[sample_index] = True
         self._apply_sample_values(sample_index)
 
     def _select_sample_index(self, context_hash: int) -> int:
         current_index = self._active_sample_index
         current_available = current_index is not None and self._results[current_index] is None
-        if current_available and current_index is not None:
-            self._assigned[current_index] = False
 
         waiting_index = self._context_waiting.get(context_hash)
         if waiting_index is not None:
             mirror_index = self._mirror_index(waiting_index)
-            if not self._assigned[mirror_index]:
-                if current_available and current_index is not None:
-                    self._assigned[current_index] = True
+            if self._results[mirror_index] is None:
                 return mirror_index
+            del self._context_waiting[context_hash]
 
-        sample_index = current_index if current_available and current_index is not None else next(
-            (idx for idx, assigned in enumerate(self._assigned) if not assigned), None
+        sample_index = (
+            current_index
+            if current_available and current_index is not None
+            else next((idx for idx, result in enumerate(self._results) if result is None), None)
         )
-        if current_available and current_index is not None:
-            self._assigned[current_index] = True
         if sample_index is None:
             msg = "Current batch is already fully assigned."
             raise RuntimeError(msg)
@@ -532,11 +512,3 @@ def _normalize_result(result: float | Sequence[float] | np.ndarray) -> tuple[flo
         return values
     msg = f"Unsupported result type: {type(result)!r}"
     raise TypeError(msg)
-
-
-def _positive_finite(value: float, field: str) -> float:
-    out = float(value)
-    if not np.isfinite(out) or out <= 0.0:
-        msg = f"{field} must be a positive finite float."
-        raise ValueError(msg)
-    return out

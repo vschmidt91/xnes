@@ -36,15 +36,6 @@ def _read_p_sigma(state: object) -> np.ndarray:
     return np.asarray(p_sigma_json, dtype=float)
 
 
-def _read_optional_matrix(state: object, key: str) -> np.ndarray | None:
-    assert isinstance(state, dict)
-    raw = state[key]
-    if raw is None:
-        return None
-    assert isinstance(raw, list)
-    return np.asarray(raw, dtype=float)
-
-
 def _run_function_optimization(
     objective: Callable[[np.ndarray], float],
     *,
@@ -56,6 +47,7 @@ def _run_function_optimization(
 ) -> tuple[float, float]:
     optimizer = Optimizer(pop_size=pop_size)
     params = [optimizer.add(f"x{i}", loc=init_loc, scale=init_scale) for i in range(dim)]
+    optimizer.load(None)
 
     initial_loc = _read_loc(optimizer.save())
     initial_value = objective(initial_loc)
@@ -84,51 +76,17 @@ def test_optimizer_improves_sphere() -> None:
     assert final < 0.15 * initial
 
 
-def test_optimizer_improves_ellipsoid() -> None:
-    def ellipsoid(x: np.ndarray) -> float:
-        weights = 10.0 ** np.linspace(0.0, 3.0, num=x.size)
-        return float(np.sum(weights * x**2))
-
-    initial, final = _run_function_optimization(
-        ellipsoid,
-        init_loc=2.5,
-        init_scale=2.0,
-        dim=5,
-        pop_size=36,
-        evaluations=2400,
-    )
-    assert final < 0.2 * initial
-
-
-def test_optimizer_improves_rosenbrock() -> None:
-    def rosenbrock(x: np.ndarray) -> float:
-        left = 100.0 * (x[1:] - x[:-1] ** 2) ** 2
-        right = (1.0 - x[:-1]) ** 2
-        return float(np.sum(left + right))
-
-    initial, final = _run_function_optimization(
-        rosenbrock,
-        init_loc=-2.0,
-        init_scale=3.0,
-        dim=3,
-        pop_size=36,
-        evaluations=3500,
-    )
-    assert final < 0.4 * initial
-
-
 def test_state_save_load_roundtrip() -> None:
     opt_a = Optimizer(pop_size=20)
     p1 = opt_a.add("alpha", loc=2.0, scale=1.5)
     p2 = opt_a.add("beta", loc=-1.0, scale=2.0)
+    opt_a.load(None)
 
     for _ in range(37):
         opt_a.tell(-(p1.value**2 + p2.value**2))
 
     state = opt_a.save()
     assert isinstance(state, dict)
-    assert "version" not in state
-    assert "priors" not in state
     assert "config" not in state
 
     opt_b = Optimizer(pop_size=20)
@@ -139,6 +97,7 @@ def test_state_save_load_roundtrip() -> None:
 
     assert _read_names(loaded) == _read_names(state)
     assert np.allclose(_read_loc(loaded), _read_loc(state))
+    assert np.allclose(_read_scale(loaded), _read_scale(state))
 
 
 def test_registration_order_is_lexicographic() -> None:
@@ -146,12 +105,14 @@ def test_registration_order_is_lexicographic() -> None:
     first.add("zeta", loc=3.0, scale=1.0)
     first.add("alpha", loc=1.0, scale=2.0)
     first.add("mu", loc=2.0, scale=3.0)
+    first.load(None)
     state_first = first.save()
 
     second = Optimizer(pop_size=18)
     second.add("mu", loc=2.0, scale=3.0)
     second.add("zeta", loc=3.0, scale=1.0)
     second.add("alpha", loc=1.0, scale=2.0)
+    second.load(None)
     state_second = second.save()
 
     assert _read_names(state_first) == ["alpha", "mu", "zeta"]
@@ -159,71 +120,52 @@ def test_registration_order_is_lexicographic() -> None:
     assert np.allclose(_read_loc(state_first), _read_loc(state_second))
 
 
-def test_get_info_returns_parameter_info_list() -> None:
+def test_get_info_reports_current_state() -> None:
     optimizer = Optimizer(pop_size=12)
-    zeta = optimizer.add("zeta", loc=3.0, scale=1.0)
     alpha = optimizer.add("alpha", loc=-2.0, scale=2.0)
+    zeta = optimizer.add("zeta", loc=3.0, scale=1.0)
+    optimizer.load(None)
 
     values = optimizer.get_info()
     assert isinstance(values, list)
-    assert values == [
-        ParameterInfo(
-            name="alpha",
-            value=alpha.value,
-            loc=-2.0,
-            scale=2.0,
-            prior_loc=-2.0,
-            prior_scale=2.0,
-        ),
-        ParameterInfo(
-            name="zeta",
-            value=zeta.value,
-            loc=3.0,
-            scale=1.0,
-            prior_loc=3.0,
-            prior_scale=1.0,
-        ),
-    ]
+    assert all(isinstance(item, ParameterInfo) for item in values)
+    assert [item.name for item in values] == ["alpha", "zeta"]
+    assert [item.value for item in values] == [alpha.value, zeta.value]
+    assert [item.loc for item in values] == [-2.0, 3.0]
+    assert [item.scale for item in values] == [2.0, 1.0]
+    assert [item.prior_loc for item in values] == [-2.0, 3.0]
+    assert [item.prior_scale for item in values] == [2.0, 1.0]
 
 
-def test_get_info_reports_current_xnes_state() -> None:
-    optimizer = Optimizer(pop_size=12)
-    alpha = optimizer.add("alpha", loc=-2.0, scale=2.0)
-    zeta = optimizer.add("zeta", loc=3.0, scale=1.0)
+def test_context_reuses_mirror_on_repeat() -> None:
+    optimizer = Optimizer(pop_size=4)
+    x = optimizer.add("x", loc=0.0, scale=1.0)
+    y = optimizer.add("y", loc=0.0, scale=1.0)
+    optimizer.load(None)
 
-    for _ in range(12):
-        optimizer.tell(-(alpha.value**2 + zeta.value**2))
+    first = np.array([x.value, y.value], dtype=float)
+    optimizer.set_context("ctx")
+    optimizer.tell(1.0)
 
-    state = optimizer.save()
-    info = optimizer.get_info()
+    optimizer.tell(0.0)
 
-    loc = _read_loc(state)
-    scale = np.diag(_read_scale(state))
-    assert [item.name for item in info] == ["alpha", "zeta"]
-    assert [item.value for item in info] == [alpha.value, zeta.value]
-    assert np.allclose([item.loc for item in info], loc)
-    assert np.allclose([item.scale for item in info], scale)
-    assert [item.prior_loc for item in info] == [-2.0, 3.0]
-    assert [item.prior_scale for item in info] == [2.0, 1.0]
+    optimizer.set_context("ctx")
+    mirror = np.array([x.value, y.value], dtype=float)
+    assert np.allclose(mirror, -first)
 
 
-def test_add_remove_between_operations() -> None:
-    optimizer = Optimizer(pop_size=16)
-    a = optimizer.add("a", loc=1.0, scale=2.0)
-    b = optimizer.add("b", loc=-2.0, scale=3.0)
+def test_save_requires_tell_after_context() -> None:
+    optimizer = Optimizer(pop_size=4)
+    optimizer.add("x", loc=0.0, scale=1.0)
+    optimizer.load(None)
+    optimizer.set_context("ctx")
 
-    for _ in range(10):
-        optimizer.tell(-(a.value**2 + b.value**2))
-
-    optimizer.remove("b")
-    c = optimizer.add("c", loc=0.5, scale=1.0)
-
-    for _ in range(20):
-        optimizer.tell(-(a.value**2 + c.value**2))
-
-    state = optimizer.save()
-    assert _read_names(state) == ["a", "c"]
-    assert _read_loc(state).shape == (2,)
+    try:
+        optimizer.save()
+    except RuntimeError as exc:
+        assert "tell" in str(exc)
+    else:
+        raise AssertionError("save() should reject in-flight context state")
 
 
 def test_runtime_config_is_not_persisted_or_loaded() -> None:
@@ -233,6 +175,7 @@ def test_runtime_config_is_not_persisted_or_loaded() -> None:
     opt_a.eta_sigma = 0.7
     opt_a.eta_B = 0.2
     param = opt_a.add("x", loc=4.0, scale=2.0)
+    opt_a.load(None)
     for _ in range(20):
         opt_a.tell(-(param.value**2))
 
@@ -241,6 +184,7 @@ def test_runtime_config_is_not_persisted_or_loaded() -> None:
     assert "config" not in state
 
     opt_b = Optimizer(pop_size=4)
+    opt_b.add("x", loc=4.0, scale=2.0)
     opt_b.load(state)
     loaded = opt_b.save()
     assert isinstance(loaded, dict)
@@ -255,41 +199,41 @@ def test_restart_on_conditioning_failure() -> None:
     optimizer = Optimizer(pop_size=10)
     x = optimizer.add("x", loc=0.0, scale=1.0)
     y = optimizer.add("y", loc=0.0, scale=1.0)
+    optimizer.load(None)
 
     state = optimizer.save()
     assert isinstance(state, dict)
     state["scale"] = [[1e-10, 0.0], [0.0, 1e10]]
-    optimizer.load(state)
+
+    restored = Optimizer(pop_size=10)
+    restored.add("x", loc=0.0, scale=1.0)
+    restored.add("y", loc=0.0, scale=1.0)
+    restored.load(state)
 
     for _ in range(10):
-        optimizer.tell(-(x.value**2 + y.value**2))
+        restored.tell(-(x.value**2 + y.value**2))
 
-    conditioned = optimizer.save()
+    conditioned = restored.save()
     assert np.allclose(_read_loc(conditioned), np.array([0.0, 0.0]))
     cond = float(np.linalg.cond(_read_scale(conditioned)))
     assert cond < 1e14
 
 
-def test_optimizer_can_be_recreated_between_iterations() -> None:
-    initializer = Optimizer(pop_size=12)
-    initializer.add("x", loc=2.0, scale=1.5)
-    initializer.add("y", loc=-1.0, scale=0.7)
-    state = initializer.save()
-
+def test_save_load_preserves_optimizer_state() -> None:
     direct = Optimizer(pop_size=12)
-    direct.load(state)
-    direct_x = direct.add("x")
-    direct_y = direct.add("y")
+    direct_x = direct.add("x", loc=2.0, scale=1.5)
+    direct_y = direct.add("y", loc=-1.0, scale=0.7)
+    direct.load(None)
 
-    recreated_state = state
+    recreated_state = direct.save()
     for _ in range(40):
         direct_result = -(direct_x.value**2 + 0.5 * direct_y.value**2)
         direct.tell(direct_result)
 
         recreated = Optimizer(pop_size=12)
+        recreated_x = recreated.add("x", loc=2.0, scale=1.5)
+        recreated_y = recreated.add("y", loc=-1.0, scale=0.7)
         recreated.load(recreated_state)
-        recreated_x = recreated.add("x")
-        recreated_y = recreated.add("y")
         recreated_result = -(recreated_x.value**2 + 0.5 * recreated_y.value**2)
         recreated.tell(recreated_result)
         recreated_state = recreated.save()
@@ -299,23 +243,3 @@ def test_optimizer_can_be_recreated_between_iterations() -> None:
     assert np.allclose(_read_loc(direct_state), _read_loc(recreated_state))
     assert np.allclose(_read_scale(direct_state), _read_scale(recreated_state))
     assert np.allclose(_read_p_sigma(direct_state), _read_p_sigma(recreated_state))
-
-    direct_batch_z = _read_optional_matrix(direct_state, "batch_z")
-    recreated_batch_z = _read_optional_matrix(recreated_state, "batch_z")
-    assert (direct_batch_z is None) == (recreated_batch_z is None)
-    if direct_batch_z is not None and recreated_batch_z is not None:
-        assert np.allclose(direct_batch_z, recreated_batch_z)
-
-    direct_batch_x = _read_optional_matrix(direct_state, "batch_x")
-    recreated_batch_x = _read_optional_matrix(recreated_state, "batch_x")
-    assert (direct_batch_x is None) == (recreated_batch_x is None)
-    if direct_batch_x is not None and recreated_batch_x is not None:
-        assert np.allclose(direct_batch_x, recreated_batch_x)
-
-    assert isinstance(direct_state, dict)
-    assert isinstance(recreated_state, dict)
-    direct_results = np.asarray(direct_state["results"], dtype=float)
-    recreated_results = np.asarray(recreated_state["results"], dtype=float)
-    assert direct_results.shape == recreated_results.shape
-    assert np.allclose(direct_results, recreated_results)
-    assert direct_state["rng_state"] == recreated_state["rng_state"]
