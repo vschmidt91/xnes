@@ -7,7 +7,7 @@ through mutable :class:`Parameter` views.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Hashable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import cast
 
@@ -92,7 +92,11 @@ class Optimizer:
         self._state_names: list[str] = []
         self._batch_z = np.zeros((0, 0))
         self._batch_x = np.zeros((0, 0))
-        self._results: list[tuple[float, ...]] = []
+        self._results: list[tuple[float, ...] | None] = []
+        self._active_sample_index: int | None = None
+        self._active_context_hash: int | None = None
+        self._assigned: list[bool] = []
+        self._context_waiting: dict[int, int] = {}
         self._reset_batch()
 
     def add(self, name: str, loc: float = 0.0, scale: float = 1.0) -> Parameter:
@@ -155,7 +159,8 @@ class Optimizer:
             "p_sigma": self._xnes.p_sigma.tolist(),
             "batch_z": self._batch_z.tolist(),
             "batch_x": self._batch_x.tolist(),
-            "results": [list(item) for item in self._results],
+            "results": [None if item is None else list(item) for item in self._results],
+            "context_waiting": [[context_hash, sample_idx] for context_hash, sample_idx in self._context_waiting.items()],
             "rng_state": dict(self._rng.bit_generator.state),
         }
 
@@ -180,8 +185,10 @@ class Optimizer:
         p_sigma = np.asarray(state_obj["p_sigma"], dtype=float)
         batch_z = np.asarray(state_obj["batch_z"], dtype=float)
         batch_x = np.asarray(state_obj["batch_x"], dtype=float)
-        result_rows = cast(Sequence[Sequence[float]], state_obj.get("results", []))
-        results = [tuple(float(value) for value in row) for row in result_rows]
+        result_rows = cast(Sequence[Sequence[float] | None], state_obj.get("results", []))
+        results = [None if row is None else tuple(float(value) for value in row) for row in result_rows]
+        context_waiting_rows = cast(Sequence[Sequence[object]], state_obj.get("context_waiting", []))
+        context_waiting = {int(row[0]): int(row[1]) for row in context_waiting_rows if len(row) == 2}
 
         raw_rng_state = state_obj.get("rng_state")
         if isinstance(raw_rng_state, Mapping):
@@ -204,7 +211,16 @@ class Optimizer:
             old_batch_z=batch_z,
             old_batch_x=batch_x,
             old_results=results,
+            old_context_waiting=context_waiting,
         )
+
+    def set_context(self, context: Hashable) -> None:
+        if self._active_sample_index is None:
+            return
+
+        context_hash = hash(context)
+        sample_index = self._select_sample_index(context_hash)
+        self._set_active_sample(sample_index, context_hash)
 
     def tell(self, result: float | Sequence[float] | np.ndarray) -> bool:
         """Submit one objective result for the current sample.
@@ -223,11 +239,20 @@ class Optimizer:
             ValueError: If `result` is an empty sequence.
         """
 
-        self._results.append(_normalize_result(result))
+        if self._active_sample_index is None:
+            msg = "No active sample available for tell()."
+            raise RuntimeError(msg)
 
-        done = len(self._results) >= self._batch_z.shape[1]
+        sample_index = self._active_sample_index
+        self._results[sample_index] = _normalize_result(result)
+        self._register_context_match(sample_index, self._active_context_hash)
+        self._active_sample_index = None
+        self._active_context_hash = None
+
+        done = all(item is not None for item in self._results)
         if done:
-            ranking = sorted(range(len(self._results)), key=lambda idx: self._results[idx], reverse=True)
+            results = cast(list[tuple[float, ...]], self._results)
+            ranking = sorted(range(len(results)), key=lambda idx: results[idx], reverse=True)
             stopped = bool(self._xnes.tell(self._batch_z, ranking))
 
             restarted = False
@@ -239,7 +264,7 @@ class Optimizer:
                 self._reset_batch()
             return True
 
-        self._apply_sample_values(len(self._results))
+        self._activate_next_sample()
         return False
 
     def set_best(self) -> None:
@@ -321,6 +346,7 @@ class Optimizer:
             old_batch_z=np.zeros((0, 0)),
             old_batch_x=np.zeros((0, 0)),
             old_results=[],
+            old_context_waiting={},
         )
 
     def _reconcile_state(
@@ -331,7 +357,8 @@ class Optimizer:
         old_p_sigma: np.ndarray,
         old_batch_z: np.ndarray,
         old_batch_x: np.ndarray,
-        old_results: list[tuple[float, ...]],
+        old_results: list[tuple[float, ...] | None],
+        old_context_waiting: dict[int, int],
     ) -> None:
         new_names = self._ordered_names()
         new_loc, new_scale = self._build_initial_state(new_names)
@@ -362,17 +389,33 @@ class Optimizer:
                 restored_batch_x[curr_idx, :] = old_batch_x[prev_idx, :]
             self._batch_z = restored_batch_z
             self._batch_x = restored_batch_x
-            self._results = list(old_results)
-            sample_idx = min(len(self._results), restored_batch_x.shape[1] - 1)
-            self._apply_sample_values(sample_idx)
+            sample_count = restored_batch_x.shape[1]
+            self._results = [None] * sample_count
+            for idx, item in enumerate(old_results[:sample_count]):
+                self._results[idx] = item
+            self._assigned = [item is not None for item in self._results]
+            self._context_waiting = {
+                context_hash: sample_idx
+                for context_hash, sample_idx in old_context_waiting.items()
+                if 0 <= sample_idx < sample_count
+                and self._results[sample_idx] is not None
+                and self._results[self._mirror_index(sample_idx)] is None
+            }
+            if sample_count > 0:
+                self._activate_next_sample()
         else:
             self._reset_batch()
 
     def _reset_batch(self) -> None:
         pop_size = self._resolve_population_size(self._xnes.dim)
         self._batch_z, self._batch_x = self._xnes.ask(pop_size, self._rng)
-        self._results = []
-        self._apply_sample_values(0)
+        sample_count = self._batch_x.shape[1]
+        self._results = [None] * sample_count
+        self._assigned = [False] * sample_count
+        self._context_waiting = {}
+        self._active_sample_index = None
+        self._active_context_hash = None
+        self._activate_next_sample()
 
     def _apply_sample_values(self, sample_index: int) -> None:
         if self._batch_x.shape[1] == 0:
@@ -380,6 +423,66 @@ class Optimizer:
         idx = sample_index % self._batch_x.shape[1]
         for row, name in enumerate(self._state_names):
             self._registry[name].value = float(self._batch_x[row, idx])
+
+    def _mirror_index(self, sample_index: int) -> int:
+        n = self._batch_x.shape[1]
+        half = n // 2
+        return sample_index + half if sample_index < half else sample_index - half
+
+    def _activate_next_sample(self) -> None:
+        sample_index = next((idx for idx, assigned in enumerate(self._assigned) if not assigned), None)
+        if sample_index is None:
+            self._active_sample_index = None
+            self._active_context_hash = None
+            return
+        self._set_active_sample(sample_index)
+
+    def _set_active_sample(self, sample_index: int, context_hash: int | None = None) -> None:
+        current_index = self._active_sample_index
+        if current_index is not None and current_index != sample_index and self._results[current_index] is None:
+            self._assigned[current_index] = False
+        self._active_sample_index = sample_index
+        self._active_context_hash = context_hash
+        self._assigned[sample_index] = True
+        self._apply_sample_values(sample_index)
+
+    def _select_sample_index(self, context_hash: int) -> int:
+        current_index = self._active_sample_index
+        current_available = current_index is not None and self._results[current_index] is None
+        if current_available and current_index is not None:
+            self._assigned[current_index] = False
+
+        waiting_index = self._context_waiting.get(context_hash)
+        if waiting_index is not None:
+            mirror_index = self._mirror_index(waiting_index)
+            if not self._assigned[mirror_index]:
+                if current_available and current_index is not None:
+                    self._assigned[current_index] = True
+                return mirror_index
+
+        sample_index = current_index if current_available and current_index is not None else next(
+            (idx for idx, assigned in enumerate(self._assigned) if not assigned), None
+        )
+        if current_available and current_index is not None:
+            self._assigned[current_index] = True
+        if sample_index is None:
+            msg = "Current batch is already fully assigned."
+            raise RuntimeError(msg)
+        return sample_index
+
+    def _register_context_match(self, sample_index: int, context_hash: int | None) -> None:
+        if context_hash is None:
+            return
+
+        waiting_index = self._context_waiting.get(context_hash)
+        if waiting_index is None:
+            mirror_index = self._mirror_index(sample_index)
+            if self._results[mirror_index] is None:
+                self._context_waiting[context_hash] = sample_index
+            return
+
+        if self._mirror_index(waiting_index) == sample_index:
+            del self._context_waiting[context_hash]
 
     def _handle_instability(self) -> bool:
         if not self._RESTART_ON_FAILURE:
