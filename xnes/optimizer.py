@@ -7,6 +7,7 @@ through mutable :class:`Parameter` views.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import cast
@@ -72,6 +73,9 @@ class Optimizer:
     _MIN_SIGMA = 1e-20
     _MAX_SIGMA = 1e20
     _MAX_CONDITION = 1e14
+    _DEFAULT_REEVALUATION_FRACTION = 1.0 / 3.0
+    _REEVALUATION_Z_TARGET = 1.64
+    _MAX_REEVALUATIONS_PER_GENERATION = 32
 
     def __init__(
         self,
@@ -81,6 +85,8 @@ class Optimizer:
         eta_mu: float = 1.0,
         eta_sigma: float = 1.0,
         eta_B: float | None = None,
+        reevaluation_fraction: float = _DEFAULT_REEVALUATION_FRACTION,
+        reevaluation_confidence: float = 0.0,
     ) -> None:
         if pop_size is not None and pop_size <= 0:
             msg = "pop_size must be positive when provided."
@@ -91,6 +97,11 @@ class Optimizer:
         self.eta_mu = _positive_finite(eta_mu, "eta_mu")
         self.eta_sigma = _positive_finite(eta_sigma, "eta_sigma")
         self.eta_B = None if eta_B is None else _positive_finite(eta_B, "eta_B")
+        self.reevaluation_fraction = _fraction_in_unit_interval(reevaluation_fraction, "reevaluation_fraction")
+        self.reevaluation_confidence = _nonnegative_finite(
+            reevaluation_confidence,
+            "reevaluation_confidence",
+        )
 
         self._rng = np.random.default_rng()
         self._registry: dict[str, Parameter] = {}
@@ -100,7 +111,11 @@ class Optimizer:
         self._state_names: list[str] = []
         self._batch_z = np.zeros((0, 0))
         self._batch_x = np.zeros((0, 0))
-        self._results: list[tuple[float, ...]] = []
+        self._batch_observations: list[list[tuple[float, ...]]] = []
+        self._evaluation_order: list[int] = []
+        self._fresh_evaluations = 0
+        self._in_reevaluation = False
+        self._current_sample_index = 0
         self._reset_batch()
 
     def add(self, name: str, loc: float = 0.0, scale: float = 1.0) -> Parameter:
@@ -163,7 +178,14 @@ class Optimizer:
             "p_sigma": self._xnes.p_sigma.tolist(),
             "batch_z": self._batch_z.tolist(),
             "batch_x": self._batch_x.tolist(),
-            "results": [list(item) for item in self._results],
+            "results": [list(item) for item in self._ordered_results()],
+            "observations": [
+                [[float(value) for value in result] for result in sample] for sample in self._batch_observations
+            ],
+            "evaluation_order": list(self._evaluation_order),
+            "fresh_evaluations": self._fresh_evaluations,
+            "in_reevaluation": self._in_reevaluation,
+            "current_sample_index": self._current_sample_index,
             "rng_state": dict(self._rng.bit_generator.state),
         }
 
@@ -190,6 +212,13 @@ class Optimizer:
         batch_x = np.asarray(state_obj["batch_x"], dtype=float)
         result_rows = cast(Sequence[Sequence[float]], state_obj.get("results", []))
         results = [tuple(float(value) for value in row) for row in result_rows]
+        raw_observations = cast(Sequence[Sequence[Sequence[float]]], state_obj.get("observations", []))
+        observations = [[tuple(float(value) for value in result) for result in sample] for sample in raw_observations]
+        evaluation_order = [int(idx) for idx in cast(Sequence[int], state_obj.get("evaluation_order", []))]
+        fresh_evaluations = _coerce_int(state_obj.get("fresh_evaluations"), len(results))
+        in_reevaluation = bool(state_obj.get("in_reevaluation", False))
+        default_sample_index = min(len(results), max(batch_x.shape[1] - 1, 0))
+        current_sample_index = _coerce_int(state_obj.get("current_sample_index"), default_sample_index)
 
         raw_rng_state = state_obj.get("rng_state")
         if isinstance(raw_rng_state, Mapping):
@@ -212,6 +241,11 @@ class Optimizer:
             old_batch_z=batch_z,
             old_batch_x=batch_x,
             old_results=results,
+            old_observations=observations,
+            old_evaluation_order=evaluation_order,
+            old_fresh_evaluations=fresh_evaluations,
+            old_in_reevaluation=in_reevaluation,
+            old_current_sample_index=current_sample_index,
         )
 
     def tell(self, result: float | Sequence[float] | np.ndarray) -> bool:
@@ -231,23 +265,30 @@ class Optimizer:
             ValueError: If `result` is an empty sequence.
         """
 
-        self._results.append(_normalize_result(result))
+        normalized = _normalize_result(result)
+        if self._batch_observations:
+            self._batch_observations[self._current_sample_index].append(normalized)
+        self._evaluation_order.append(self._current_sample_index)
 
-        done = len(self._results) >= self._batch_z.shape[1]
-        if done:
-            ranking = sorted(range(len(self._results)), key=lambda idx: self._results[idx], reverse=True)
-            stopped = bool(self._xnes.tell(self._batch_z, ranking))
+        if not self._in_reevaluation:
+            self._fresh_evaluations += 1
+            if self._fresh_evaluations < self._batch_z.shape[1]:
+                self._current_sample_index = self._fresh_evaluations
+                self._apply_sample_values(self._current_sample_index)
+                return False
+            self._in_reevaluation = True
 
-            restarted = False
-            if stopped:
-                restarted = self._handle_instability()
-            if not restarted:
-                restarted = self._stabilize_runtime()
-            if not restarted:
-                self._reset_batch()
+        if self._should_finish_generation():
+            self._finalize_generation()
             return True
 
-        self._apply_sample_values(len(self._results))
+        next_sample_index = self._select_reevaluation_candidate()
+        if next_sample_index is None:
+            self._finalize_generation()
+            return True
+
+        self._current_sample_index = next_sample_index
+        self._apply_sample_values(self._current_sample_index)
         return False
 
     def set_best(self) -> None:
@@ -324,6 +365,11 @@ class Optimizer:
             old_batch_z=np.zeros((0, 0)),
             old_batch_x=np.zeros((0, 0)),
             old_results=[],
+            old_observations=[],
+            old_evaluation_order=[],
+            old_fresh_evaluations=0,
+            old_in_reevaluation=False,
+            old_current_sample_index=0,
         )
 
     def _reconcile_state(
@@ -335,6 +381,11 @@ class Optimizer:
         old_batch_z: np.ndarray,
         old_batch_x: np.ndarray,
         old_results: list[tuple[float, ...]],
+        old_observations: list[list[tuple[float, ...]]],
+        old_evaluation_order: list[int],
+        old_fresh_evaluations: int,
+        old_in_reevaluation: bool,
+        old_current_sample_index: int,
     ) -> None:
         new_names = self._ordered_names()
         new_loc, new_scale = self._build_initial_state(new_names)
@@ -365,17 +416,26 @@ class Optimizer:
                 restored_batch_x[curr_idx, :] = old_batch_x[prev_idx, :]
             self._batch_z = restored_batch_z
             self._batch_x = restored_batch_x
-            self._results = list(old_results)
-            sample_idx = min(len(self._results), restored_batch_x.shape[1] - 1)
-            self._apply_sample_values(sample_idx)
+            self._restore_generation_state(
+                old_results,
+                old_observations,
+                old_evaluation_order,
+                old_fresh_evaluations,
+                old_in_reevaluation,
+                old_current_sample_index,
+            )
         else:
             self._reset_batch()
 
     def _reset_batch(self) -> None:
         pop_size = self._resolve_population_size(self._xnes.dim)
         self._batch_z, self._batch_x = self._xnes.ask(pop_size, self._rng)
-        self._results = []
-        self._apply_sample_values(0)
+        self._batch_observations = [[] for _ in range(self._batch_z.shape[1])]
+        self._evaluation_order = []
+        self._fresh_evaluations = 0
+        self._in_reevaluation = False
+        self._current_sample_index = 0
+        self._apply_sample_values(self._current_sample_index)
 
     def _apply_sample_values(self, sample_index: int) -> None:
         if self._batch_x.shape[1] == 0:
@@ -383,6 +443,173 @@ class Optimizer:
         idx = sample_index % self._batch_x.shape[1]
         for row, name in enumerate(self._state_names):
             self._registry[name].value = float(self._batch_x[row, idx])
+
+    def _restore_generation_state(
+        self,
+        old_results: list[tuple[float, ...]],
+        old_observations: list[list[tuple[float, ...]]],
+        old_evaluation_order: list[int],
+        old_fresh_evaluations: int,
+        old_in_reevaluation: bool,
+        old_current_sample_index: int,
+    ) -> None:
+        n = self._batch_z.shape[1]
+        if len(old_observations) == n:
+            self._batch_observations = [list(sample) for sample in old_observations]
+        else:
+            self._batch_observations = [[] for _ in range(n)]
+            for idx, result in enumerate(old_results[:n]):
+                self._batch_observations[idx].append(result)
+
+        self._evaluation_order = [idx for idx in old_evaluation_order if 0 <= idx < n]
+        if not self._evaluation_order and old_results:
+            self._evaluation_order = list(range(min(len(old_results), n)))
+
+        self._fresh_evaluations = min(max(old_fresh_evaluations, 0), n)
+        if self._fresh_evaluations == 0:
+            self._fresh_evaluations = sum(1 for sample in self._batch_observations if sample)
+        self._in_reevaluation = bool(old_in_reevaluation or self._fresh_evaluations >= n)
+
+        if n == 0:
+            self._current_sample_index = 0
+            return
+
+        if not 0 <= old_current_sample_index < n:
+            if not self._in_reevaluation and self._fresh_evaluations < n:
+                old_current_sample_index = self._fresh_evaluations
+            elif self._evaluation_order:
+                old_current_sample_index = self._evaluation_order[-1]
+            else:
+                old_current_sample_index = 0
+
+        self._current_sample_index = old_current_sample_index
+        self._apply_sample_values(self._current_sample_index)
+
+    def _ordered_results(self) -> list[tuple[float, ...]]:
+        return [
+            self._batch_observations[sample_idx][occurrence_idx]
+            for sample_idx, occurrence_idx in self._ordered_result_keys()
+        ]
+
+    def _ordered_result_keys(self) -> list[tuple[int, int]]:
+        counts = [0 for _ in self._batch_observations]
+        ordered: list[tuple[int, int]] = []
+        for sample_idx in self._evaluation_order:
+            if 0 <= sample_idx < len(self._batch_observations):
+                occurrence_idx = counts[sample_idx]
+                if occurrence_idx < len(self._batch_observations[sample_idx]):
+                    ordered.append((sample_idx, occurrence_idx))
+                    counts[sample_idx] += 1
+        return ordered
+
+    def _should_finish_generation(self) -> bool:
+        n = self._batch_z.shape[1]
+        if n <= 1:
+            return True
+        if self.reevaluation_confidence <= 0.0:
+            return True
+        if self._reevaluation_count() >= self._MAX_REEVALUATIONS_PER_GENERATION:
+            return True
+        if not self._supports_scalar_confidence():
+            return True
+
+        ranking = self._ranking_from_observations()
+        k = self._elite_count(n)
+        left = ranking[k - 1]
+        right = ranking[k]
+        if len(self._batch_observations[left]) < 2 or len(self._batch_observations[right]) < 2:
+            return False
+
+        delta, standard_error = self._boundary_separation(left, right)
+        if standard_error <= 0.0:
+            return True
+        return bool(delta / standard_error >= self.reevaluation_confidence)
+
+    def _supports_scalar_confidence(self) -> bool:
+        return bool(self._batch_observations) and all(
+            sample and len(sample[0]) == 1 for sample in self._batch_observations
+        )
+
+    def _select_reevaluation_candidate(self) -> int | None:
+        n = self._batch_z.shape[1]
+        if n <= 1:
+            return None
+
+        ranking = self._ranking_from_observations()
+        k = self._elite_count(n)
+        left = ranking[k - 1]
+        right = ranking[k]
+        left_count = len(self._batch_observations[left])
+        right_count = len(self._batch_observations[right])
+
+        if left_count < 2 or right_count < 2:
+            if left_count <= right_count:
+                return left
+            return right
+
+        if not self._supports_scalar_confidence():
+            return None
+
+        left_gain = self._variance_reduction_gain(left)
+        right_gain = self._variance_reduction_gain(right)
+        if left_gain > right_gain:
+            return left
+        if right_gain > left_gain:
+            return right
+        if left_count <= right_count:
+            return left
+        return right
+
+    def _finalize_generation(self) -> None:
+        ranking = self._ranking_from_observations()
+        stopped = bool(self._xnes.tell(self._batch_z, ranking))
+
+        restarted = False
+        if stopped:
+            restarted = self._handle_instability()
+        if not restarted:
+            restarted = self._stabilize_runtime()
+        if not restarted:
+            self._reset_batch()
+
+    def _ranking_from_observations(self) -> list[int]:
+        aggregates = [self._aggregate_sample_results(sample) for sample in self._batch_observations]
+        return sorted(range(len(aggregates)), key=lambda idx: aggregates[idx], reverse=True)
+
+    def _aggregate_sample_results(self, observations: list[tuple[float, ...]]) -> tuple[float, ...]:
+        if not observations:
+            return tuple()
+        values = np.asarray(observations, dtype=float)
+        return tuple(float(value) for value in np.mean(values, axis=0))
+
+    def _elite_count(self, population_size: int) -> int:
+        return max(1, min(population_size - 1, math.ceil(population_size * self.reevaluation_fraction)))
+
+    def _reevaluation_count(self) -> int:
+        return max(0, len(self._evaluation_order) - self._fresh_evaluations)
+
+    def _boundary_separation(self, left: int, right: int) -> tuple[float, float]:
+        left_values = np.asarray(self._batch_observations[left], dtype=float).reshape(-1)
+        right_values = np.asarray(self._batch_observations[right], dtype=float).reshape(-1)
+        left_mean = float(np.mean(left_values))
+        right_mean = float(np.mean(right_values))
+        left_var = self._sample_variance(left_values)
+        right_var = self._sample_variance(right_values)
+        standard_error = math.sqrt(left_var / left_values.size + right_var / right_values.size)
+        return left_mean - right_mean, standard_error
+
+    def _variance_reduction_gain(self, sample_index: int) -> float:
+        values = np.asarray(self._batch_observations[sample_index], dtype=float).reshape(-1)
+        count = values.size
+        if count < 2:
+            return math.inf
+        variance = self._sample_variance(values)
+        return variance / (count * (count + 1))
+
+    def _sample_variance(self, values: np.ndarray) -> float:
+        if values.size < 2:
+            return math.inf
+        return float(np.var(values, ddof=1))
 
     def _handle_instability(self) -> bool:
         if not self._RESTART_ON_FAILURE:
@@ -440,3 +667,32 @@ def _positive_finite(value: float, field: str) -> float:
         msg = f"{field} must be a positive finite float."
         raise ValueError(msg)
     return out
+
+
+def _nonnegative_finite(value: float, field: str) -> float:
+    out = float(value)
+    if not np.isfinite(out) or out < 0.0:
+        msg = f"{field} must be a non-negative finite float."
+        raise ValueError(msg)
+    return out
+
+
+def _fraction_in_unit_interval(value: float, field: str) -> float:
+    out = float(value)
+    if not np.isfinite(out) or not 0.0 < out < 1.0:
+        msg = f"{field} must be a finite float in (0, 1)."
+        raise ValueError(msg)
+    return out
+
+
+def _coerce_int(value: object, default: int) -> int:
+    if value is None:
+        return default
+    if isinstance(value, (int, np.integer)):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return default
+    return default
