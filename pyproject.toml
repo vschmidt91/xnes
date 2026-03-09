@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "xnes"
-version = "0.3.2"
-description = "Evolutionary black-box optimizer with named dynamic parameters."
+version = "0.4.0"
+description = "Serializable black-box optimizer with state reconsiliation."
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 dependencies = [
