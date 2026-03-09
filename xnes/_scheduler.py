@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any
+from typing import TypeAlias
 
 import numpy as np
 
+JSONScalar: TypeAlias = None | bool | int | float | str
+JSONValue: TypeAlias = JSONScalar | list["JSONValue"] | tuple["JSONValue", ...] | dict[str, "JSONValue"]
 
-def _stable_hash(obj: Any) -> str:
+
+def _stable_hash(obj: JSONValue) -> str:
     data = json.dumps(obj, sort_keys=True, separators=(",", ":"))
     return hashlib.blake2b(data.encode(), digest_size=16).hexdigest()
 
@@ -55,7 +58,7 @@ class BatchScheduler:
         self._clear_active()
         self._activate_next_sample()
 
-    def set_context(self, context: Any) -> bool:
+    def set_context(self, context: JSONValue) -> bool:
         if self.active_sample_index is None:
             return False
 

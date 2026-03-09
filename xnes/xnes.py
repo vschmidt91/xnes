@@ -15,13 +15,15 @@ from scipy.linalg import expm, qr
 
 
 def _default_eta_B(dim: int) -> float:
+    """Return the built-in dimension-dependent shape learning-rate factor."""
+
     if dim <= 0:
         return 1.0
     return float(0.6 * (3.0 + np.log(dim)) / (dim * np.sqrt(dim)))
 
 
 class XNESStatus(Enum):
-    """Terminal condition reported by :meth:`XNES.tell`."""
+    """Outcome of one `XNES.tell` update step."""
 
     OK = auto()
     SIGMA_MIN = auto()
@@ -39,6 +41,9 @@ class XNESStatus(Enum):
 
 class XNES:
     """Exponential Natural Evolution Strategies distribution state.
+
+    The distribution is stored in factored form as ``sigma * B`` and updated
+    from ranked standardized samples.
 
     Args:
         x0: Initial mean vector.
@@ -163,8 +168,7 @@ class XNES:
             eps: Numerical stopping threshold.
 
         Returns:
-            An :class:`XNESStatus` describing whether the update remained
-            healthy or hit a numerical/convergence stop condition.
+            An `XNESStatus` indicating whether the update succeeded or hit a numerical or convergence stop condition.
 
         Raises:
             ValueError: If sample shapes are inconsistent, samples are not

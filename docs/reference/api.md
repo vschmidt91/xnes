@@ -6,4 +6,8 @@
 
 ::: xnes.ParameterInfo
 
+::: xnes.Report
+
+::: xnes.XNESStatus
+
 ::: xnes.XNES

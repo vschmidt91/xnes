@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import cast
 
 import numpy as np
+from xnes._scheduler import JSONValue
 
 from xnes import Optimizer, ParameterInfo, Report, XNESStatus
 
@@ -45,7 +47,8 @@ def _run_function_optimization(
     pop_size: int,
     evaluations: int,
 ) -> tuple[float, float]:
-    optimizer = Optimizer(pop_size=pop_size)
+    optimizer = Optimizer()
+    optimizer.pop_size = pop_size
     params = [optimizer.add(f"x{i}", loc=init_loc, scale=init_scale) for i in range(dim)]
     optimizer.load(None)
 
@@ -77,7 +80,8 @@ def test_optimizer_improves_sphere() -> None:
 
 
 def test_state_save_load_roundtrip() -> None:
-    opt_a = Optimizer(pop_size=20)
+    opt_a = Optimizer()
+    opt_a.pop_size = 20
     p1 = opt_a.add("alpha", loc=2.0, scale=1.5)
     p2 = opt_a.add("beta", loc=-1.0, scale=2.0)
     opt_a.load(None)
@@ -89,7 +93,8 @@ def test_state_save_load_roundtrip() -> None:
     assert isinstance(state, dict)
     assert "config" not in state
 
-    opt_b = Optimizer(pop_size=20)
+    opt_b = Optimizer()
+    opt_b.pop_size = 20
     opt_b.add("beta", loc=-999.0, scale=0.5)
     opt_b.add("alpha", loc=999.0, scale=0.5)
     opt_b.load(state)
@@ -101,14 +106,16 @@ def test_state_save_load_roundtrip() -> None:
 
 
 def test_registration_order_is_lexicographic() -> None:
-    first = Optimizer(pop_size=18)
+    first = Optimizer()
+    first.pop_size = 18
     first.add("zeta", loc=3.0, scale=1.0)
     first.add("alpha", loc=1.0, scale=2.0)
     first.add("mu", loc=2.0, scale=3.0)
     first.load(None)
     state_first = first.save()
 
-    second = Optimizer(pop_size=18)
+    second = Optimizer()
+    second.pop_size = 18
     second.add("mu", loc=2.0, scale=3.0)
     second.add("zeta", loc=3.0, scale=1.0)
     second.add("alpha", loc=1.0, scale=2.0)
@@ -121,7 +128,8 @@ def test_registration_order_is_lexicographic() -> None:
 
 
 def test_get_info_reports_current_state() -> None:
-    optimizer = Optimizer(pop_size=12)
+    optimizer = Optimizer()
+    optimizer.pop_size = 12
     alpha = optimizer.add("alpha", loc=-2.0, scale=2.0)
     zeta = optimizer.add("zeta", loc=3.0, scale=1.0)
     optimizer.load(None)
@@ -138,20 +146,22 @@ def test_get_info_reports_current_state() -> None:
 
 
 def test_context_reuses_mirror_on_repeat() -> None:
-    optimizer = Optimizer(pop_size=4)
+    optimizer = Optimizer()
+    optimizer.pop_size = 4
     x = optimizer.add("x", loc=0.0, scale=1.0)
     y = optimizer.add("y", loc=0.0, scale=1.0)
     optimizer.load(None)
+    context: JSONValue = {"map": "arena", "opponent": {"race": "zerg"}}
 
     first = np.array([x.value, y.value], dtype=float)
-    assert optimizer.set_context("ctx") is False
+    assert optimizer.set_context(context) is False
     first_report = optimizer.tell(1.0)
     assert first_report == Report(False, False, XNESStatus.OK, False)
 
     second_report = optimizer.tell(0.0)
     assert second_report == Report(False, False, XNESStatus.OK, False)
 
-    assert optimizer.set_context("ctx") is True
+    assert optimizer.set_context(context) is True
     mirror = np.array([x.value, y.value], dtype=float)
     assert np.allclose(mirror, -first)
     third_report = optimizer.tell(-1.0)
@@ -159,10 +169,11 @@ def test_context_reuses_mirror_on_repeat() -> None:
 
 
 def test_save_requires_tell_after_context() -> None:
-    optimizer = Optimizer(pop_size=4)
+    optimizer = Optimizer()
+    optimizer.pop_size = 4
     optimizer.add("x", loc=0.0, scale=1.0)
     optimizer.load(None)
-    optimizer.set_context("ctx")
+    optimizer.set_context({"job": 1})
 
     try:
         optimizer.save()
@@ -172,8 +183,23 @@ def test_save_requires_tell_after_context() -> None:
         raise AssertionError("save() should reject in-flight context state")
 
 
+def test_set_context_rejects_non_json_serializable_value() -> None:
+    optimizer = Optimizer()
+    optimizer.pop_size = 4
+    optimizer.add("x", loc=0.0, scale=1.0)
+    optimizer.load(None)
+
+    try:
+        optimizer.set_context(cast(JSONValue, {"bad": object()}))
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("set_context() should reject non-JSON-serializable values")
+
+
 def test_runtime_config_is_not_persisted_or_loaded() -> None:
-    opt_a = Optimizer(pop_size=14)
+    opt_a = Optimizer()
+    opt_a.pop_size = 14
     opt_a.csa_enabled = False
     opt_a.eta_mu = 0.9
     opt_a.eta_sigma = 0.7
@@ -187,7 +213,8 @@ def test_runtime_config_is_not_persisted_or_loaded() -> None:
     assert isinstance(state, dict)
     assert "config" not in state
 
-    opt_b = Optimizer(pop_size=4)
+    opt_b = Optimizer()
+    opt_b.pop_size = 4
     opt_b.add("x", loc=4.0, scale=2.0)
     opt_b.load(state)
     loaded = opt_b.save()
@@ -200,7 +227,8 @@ def test_runtime_config_is_not_persisted_or_loaded() -> None:
 
 
 def test_restart_on_conditioning_failure() -> None:
-    optimizer = Optimizer(pop_size=10)
+    optimizer = Optimizer()
+    optimizer.pop_size = 10
     x = optimizer.add("x", loc=0.0, scale=1.0)
     y = optimizer.add("y", loc=0.0, scale=1.0)
     optimizer.load(None)
@@ -209,7 +237,8 @@ def test_restart_on_conditioning_failure() -> None:
     assert isinstance(state, dict)
     state["scale"] = [[1e-10, 0.0], [0.0, 1e10]]
 
-    restored = Optimizer(pop_size=10)
+    restored = Optimizer()
+    restored.pop_size = 10
     restored.add("x", loc=0.0, scale=1.0)
     restored.add("y", loc=0.0, scale=1.0)
     restored.load(state)
@@ -224,7 +253,8 @@ def test_restart_on_conditioning_failure() -> None:
 
 
 def test_save_load_preserves_optimizer_state() -> None:
-    direct = Optimizer(pop_size=12)
+    direct = Optimizer()
+    direct.pop_size = 12
     direct_x = direct.add("x", loc=2.0, scale=1.5)
     direct_y = direct.add("y", loc=-1.0, scale=0.7)
     direct.load(None)
@@ -234,7 +264,8 @@ def test_save_load_preserves_optimizer_state() -> None:
         direct_result = -(direct_x.value**2 + 0.5 * direct_y.value**2)
         direct.tell(direct_result)
 
-        recreated = Optimizer(pop_size=12)
+        recreated = Optimizer()
+        recreated.pop_size = 12
         recreated_x = recreated.add("x", loc=2.0, scale=1.5)
         recreated_y = recreated.add("y", loc=-1.0, scale=0.7)
         recreated.load(recreated_state)

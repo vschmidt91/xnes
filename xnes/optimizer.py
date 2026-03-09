@@ -2,26 +2,26 @@
 
 The wrapper is designed for a strict checkpointed workflow:
 
-1. create :class:`Optimizer`
-2. register parameters with :meth:`add`
-3. call :meth:`load` with ``None`` for a fresh run or a previously saved state
-4. optionally call :meth:`set_context`
-5. read :class:`Parameter.value`
-6. call :meth:`tell` exactly once for the current evaluation
-7. call :meth:`save`
+1. create `Optimizer`
+2. register parameters with `add`
+3. call `load` with `None` for a fresh run or a previously saved state
+4. optionally call `set_context`
+5. read `Parameter.value`
+6. call `tell` exactly once for the current evaluation
+7. call `save`
 
-The registry is fixed once :meth:`load` has been called.
+The registry is fixed once `load` has been called.
 """
 
 from __future__ import annotations
 
-from collections.abc import Hashable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import cast
 
 import numpy as np
 
-from ._scheduler import BatchScheduler
+from ._scheduler import BatchScheduler, JSONValue
 from .xnes import XNES, XNESStatus
 
 
@@ -40,7 +40,16 @@ class Parameter:
 
 @dataclass(frozen=True)
 class ParameterInfo:
-    """Immutable snapshot of a registered parameter."""
+    """Immutable snapshot of a registered parameter.
+
+    Attributes:
+        name: Stable parameter identifier.
+        value: Current sampled value exposed through `Parameter`.
+        loc: Current xNES population mean for this parameter.
+        scale: Current diagonal entry of the xNES scale matrix.
+        prior_loc: Registration-time mean used for fresh runs.
+        prior_scale: Registration-time standard deviation used for fresh runs.
+    """
 
     name: str
     value: float
@@ -58,7 +67,14 @@ class _Prior:
 
 @dataclass(frozen=True)
 class Report:
-    """Outcome of one :meth:`Optimizer.tell` call."""
+    """Outcome of one `Optimizer.tell` call.
+
+    Attributes:
+        completed_batch: Whether this result completed the current batch.
+        matched_context: Whether sample selection used a mirrored context match.
+        status: xNES status returned after the batch update.
+        restarted: Whether the wrapper restarted from priors after the update.
+    """
 
     completed_batch: bool
     matched_context: bool
@@ -75,37 +91,30 @@ class Optimizer:
     Intended call flow:
 
     1. create the optimizer
-    2. register all parameters with :meth:`add`
-    3. call :meth:`load`
-    4. optionally call :meth:`set_context`
-    5. evaluate the current :class:`Parameter.value` values
-    6. call :meth:`tell`
-    7. call :meth:`save`
+    2. register all parameters with `add`
+    3. call `load`
+    4. optionally call `set_context`
+    5. evaluate the current `Parameter.value` values
+    6. call `tell`
+    7. call `save`
 
-    After :meth:`load`, the registry is fixed and :meth:`add` / :meth:`remove`
-    are no longer allowed.
+    After `load`, the registry is fixed and `add` is no longer
+    allowed.
 
     Runtime configuration lives on the instance attributes `csa_enabled`,
     `eta_mu`, `eta_sigma`, and `eta_B`. Leaving any of them as `None`
-    preserves the default chosen by :class:`XNES`; assigning a concrete value
+    preserves the default chosen by `XNES`; assigning a concrete value
     overrides that default for newly created internal xNES states. `eta_B`
     scales the built-in dimension-dependent shape learning rate
     multiplicatively.
 
-    Args:
-        pop_size: Optional batch size. Odd values are rounded up to the next
-            even value.
-
-    Raises:
-        ValueError: If `pop_size` is non-positive.
+    Batch size is configured via the instance attribute `pop_size`. Leaving it
+    as `None` keeps the xNES default; assigning an odd value rounds up to the
+    next even batch size when a new batch is created.
     """
 
-    def __init__(self, pop_size: int | None = None) -> None:
-        if pop_size is not None and pop_size <= 0:
-            msg = "pop_size must be positive when provided."
-            raise ValueError(msg)
-
-        self.pop_size = pop_size
+    def __init__(self) -> None:
+        self.pop_size: int | None = None
         self.csa_enabled: bool | None = None
         self.eta_mu: float | None = None
         self.eta_sigma: float | None = None
@@ -123,7 +132,7 @@ class Optimizer:
     def add(self, name: str, loc: float = 0.0, scale: float = 1.0) -> Parameter:
         """Register a parameter or return the existing one.
 
-        This is a setup-time operation. It must happen before :meth:`load`.
+        This is a setup-time operation. It must happen before `load`.
 
         Args:
             name: Unique parameter name.
@@ -135,7 +144,7 @@ class Optimizer:
 
         Raises:
             ValueError: If `scale <= 0`.
-            RuntimeError: If called after :meth:`load`.
+            RuntimeError: If called after `load`.
         """
 
         if scale <= 0:
@@ -158,14 +167,13 @@ class Optimizer:
         """Serialize the current optimizer state after `tell`.
 
         Under the intended workflow, callers save only after the current
-        evaluation result has been reported via :meth:`tell`.
+        evaluation result has been reported via `tell`.
 
         Returns:
             JSON-compatible snapshot of registry order, xNES state, batch data, results, and RNG state.
 
         Raises:
-            RuntimeError: If called after :meth:`set_context` but before
-                :meth:`tell`.
+            RuntimeError: If called after `set_context` but before `tell`.
         """
 
         if self._scheduler.active_context_hash is not None:
@@ -193,7 +201,8 @@ class Optimizer:
         parameter priors. ``load(state)`` restores a previously saved state.
 
         Args:
-            state: `None` for a fresh run, or a serialized state produced by :meth:`save`.
+            state: `None` for a fresh run, or a serialized state produced by
+                `save`.
 
         Raises:
             RuntimeError: If no parameters have been registered yet.
@@ -241,26 +250,27 @@ class Optimizer:
         self._state_names = names
         self._reset_batch()
 
-    def set_context(self, context: Hashable) -> bool:
-        """Retarget the current sample selection using a hashable context id.
+    def set_context(self, context: JSONValue) -> bool:
+        """Retarget the current sample selection using a JSON-serializable context.
 
-        The context is hashed immediately and only the hash is retained. If the
-        same context was already seen for one side of a mirrored pair in the
-        current batch, the mirrored sample is selected. Otherwise the current
-        pending sample stays selected.
+        The context is converted to a stable JSON hash immediately and only the
+        hash is retained. If the same context was already seen for one side of
+        a mirrored pair in the current batch, the mirrored sample is selected.
+        Otherwise the current pending sample stays selected.
 
         This method is optional. If it is never called, sampling proceeds in the
         default batch order.
 
         Args:
-            context: Hashable objective-context identifier.
+            context: JSON-serializable objective-context identifier, such as a
+                scalar, list, or dictionary.
 
         Returns:
-            `True` iff the selected sample is the matched mirror for a
-            previously seen context in the current batch.
+            `True` iff sample selection used the mirrored partner of a previously seen matching context.
 
         Raises:
-            RuntimeError: If called before :meth:`load`.
+            RuntimeError: If called before `load`.
+            TypeError: If `context` cannot be serialized by `json.dumps`.
         """
         if not self._loaded:
             msg = "Call load() before set_context()."
@@ -282,14 +292,12 @@ class Optimizer:
             result: Objective value for the current sample.
 
         Returns:
-            A :class:`Report` describing whether the current batch completed,
-            whether this sample used a matched context, the xNES step status,
-            and whether the wrapper restarted the distribution.
+            A `Report` describing batch completion, context matching, xNES status, and whether a restart happened.
 
         Raises:
             TypeError: If `result` is neither a scalar nor a numeric sequence.
             ValueError: If `result` is an empty sequence.
-            RuntimeError: If called before :meth:`load`.
+            RuntimeError: If called before `load`.
         """
 
         if self._scheduler.active_sample_index is None:
@@ -315,10 +323,11 @@ class Optimizer:
     def set_best(self) -> None:
         """Set all registered parameter values to the current population mean.
 
-        This mutates exposed :class:`Parameter` views in place without changing
+        This mutates exposed `Parameter` views in place without changing
         optimizer state. It is intended for evaluation/inference after training.
         To continue training afterwards, restore a previously saved state and
-        resume the normal `load -> optional set_context -> tell -> save` flow.
+        resume the normal `load -> optional set_context -> evaluate -> tell ->
+        save` flow.
         """
 
         for row, name in enumerate(self._state_names):
@@ -328,11 +337,7 @@ class Optimizer:
         """Return immutable snapshots of all registered parameters.
 
         Returns:
-            A new list of :class:`ParameterInfo` items in lexicographic name
-            order. `value` is the current sampled parameter value, `loc` is the
-            current xNES mean, `scale` is the corresponding diagonal entry of
-            the current xNES scale matrix, and `prior_*` values come from the
-            parameter registration.
+            Snapshots in lexicographic name order with current sampled values, xNES means/scales, and priors.
         """
 
         scale_diag = np.diag(self._xnes.scale)
@@ -356,16 +361,6 @@ class Optimizer:
         scale_diag = np.array([self._priors[name].scale for name in names], dtype=float)
         return loc, np.diag(scale_diag)
 
-    def _resolve_population_size(self, dim: int) -> int | None:
-        if self.pop_size is None:
-            return None
-        n = self.pop_size
-        if n % 2 == 1:
-            n += 1
-        if dim > 0 and n < 2:
-            n = 2
-        return n
-
     def _new_xnes(self, loc: np.ndarray, scale: np.ndarray, step_size_path: np.ndarray) -> XNES:
         xnes = XNES(
             loc,
@@ -383,8 +378,7 @@ class Optimizer:
         return xnes
 
     def _reset_batch(self) -> None:
-        pop_size = self._resolve_population_size(self._xnes.dim)
-        batch_z, batch_x = self._xnes.ask(pop_size, self._rng)
+        batch_z, batch_x = self._xnes.ask(self.pop_size, self._rng)
         self._scheduler.reset(batch_z, batch_x)
         self._apply_active_sample_values()
 

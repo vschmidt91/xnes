@@ -1,19 +1,30 @@
 # Quickstart
 
 ```python
+import json
+from pathlib import Path
+
 import numpy as np
 
 from xnes import Optimizer
 
-opt = Optimizer(pop_size=32)
+state_path = Path("optimizer-state.json")
+state = json.loads(state_path.read_text()) if state_path.exists() else None
+
+opt = Optimizer()
+opt.pop_size = 32
 coeff_1 = opt.add("coeff_1", loc=2.0, scale=3.0)
 coeff_2 = opt.add("coeff_2")
+opt.load(state)
 
 for _ in range(500):
+    # Optional: mirrored-sample matching for recurring JSON-serializable
+    # contexts such as shards, opponents, maps, or task variants.
+    # opt.set_context({"task": "validation", "shard": 0})
     value = coeff_1.value + np.exp(coeff_2.value)
     opt.tell(-value**2)
+    state_path.write_text(json.dumps(opt.save()))
 
-state = opt.save()
 opt.set_best()  # switch parameter views to current population mean for testing
 ```
 

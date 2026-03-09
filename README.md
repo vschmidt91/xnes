@@ -1,133 +1,156 @@
 # xnes
-Evolutionary black-box optimizer with serialization and dynamic named parameters.
 
-## Overview
-- Core algorithm: canonical xNES update with optional CSA step-size adaptation.
-- Wrapper: named parameter interface with `add`, `load`, optional `set_context`, `tell`, and `save`.
-- Parameter ordering is lexicographical by name, independent of registration order.
+Small Python library for black-box optimization with named scalar parameters, strict checkpointing, and a
+lightweight xNES implementation.
 
-## Call Flow
+It is aimed at expensive, stateful evaluation loops: tuning heuristic weights in simulators, control systems, game
+agents, or other black-box programs where runs are noisy, resumable, and often organized around recurring contexts.
 
-The wrapper is intentionally strict. The supported flow is:
+## Highlights
 
-1. create `Optimizer`
-2. register all parameters with `add(...)`
-3. call `load(None)` for a fresh run, or `load(state)` to resume
-4. optionally call `set_context(context_id)`
-5. read the current `Parameter.value` values
-6. evaluate once
-7. call `tell(result)`
-8. call `save()`
+- Canonical xNES core with optional CSA step-size adaptation.
+- Argument-free `Optimizer()` wrapper with sensible defaults inherited from `XNES`.
+- Named scalar parameters via `add(...)`, with lexicographic ordering independent of registration order.
+- JSON-compatible optimizer state through `save()` and `load(...)`.
+- Optional mirrored-sample routing through `set_context(...)` using JSON-serializable context values.
 
-Important constraints:
+## Requirements
 
-- `add()` is setup-only and must happen before `load()`
-- `save()` must happen after `tell()`, not after `set_context()` and before `tell()`
-- if `set_context()` is never called, the optimizer uses its default batch order
-- `set_context()` hashes the provided object immediately and does not store the original context object
+- Python `>=3.11,<3.14`
+- Runtime dependencies: NumPy and SciPy
+
+## Installation
+
+Install the package locally:
+
+```bash
+python -m pip install -e .
+```
+
+Install with development tools:
+
+```bash
+python -m pip install -e ".[dev]"
+```
+
+Install with development tools and documentation dependencies:
+
+```bash
+python -m pip install -e ".[dev,docs]"
+```
 
 ## Quickstart
+
 ```python
+import json
+from pathlib import Path
+
 import numpy as np
 
 from xnes import Optimizer
 
-opt = Optimizer(pop_size=32)
+state_path = Path("optimizer-state.json")
+state = json.loads(state_path.read_text()) if state_path.exists() else None
+
+opt = Optimizer()
+opt.pop_size = 32
+
 coeff_1 = opt.add("coeff_1", loc=2.0, scale=3.0)
 coeff_2 = opt.add("coeff_2")
 
-# Fresh run:
-opt.load(None)
-# Or restore:
-# opt.load(state)
+opt.load(state)
 
 for _ in range(500):
-    # Optional: context-aware mirror routing for this evaluation.
-    # opt.set_context(opponent_id)
+    # Optional: use any JSON-serializable context to match mirrored samples.
+    # opt.set_context({"task": "validation", "shard": 0})
+
     value = coeff_1.value + np.exp(coeff_2.value)
-    # `tell` maximizes; minimize `f` via `-f`
-    opt.tell(-value**2)
-    state = opt.save()
+    report = opt.tell(-value**2)  # `tell` maximizes, so minimize via `-f`
+    state_path.write_text(json.dumps(opt.save()))
+
+    if report.completed_batch:
+        pass
 ```
 
-## Interface
-```python
-import numpy as np
+## Workflow
 
-from dataclasses import dataclass
-from collections.abc import Hashable, Sequence
+The wrapper is intentionally strict. The expected loop is:
 
-@dataclass
-class Parameter:
-    name: str
-    value: float
+1. Create `Optimizer()`.
+2. Register parameters with `add(...)`.
+3. Call `load(None)` for a fresh run or `load(state)` to resume.
+4. Optionally call `set_context(context)` for the current evaluation.
+5. Read the current `Parameter.value` values.
+6. Evaluate exactly once.
+7. Call `tell(result)`.
+8. Persist with `save()`.
 
-@dataclass
-class ParameterInfo:
-    name: str
-    value: float
-    loc: float
-    scale: float
-    prior_loc: float
-    prior_scale: float
+Important constraints:
 
-class XNESStatus(Enum): ...
+- `add()` is setup-only and must happen before `load()`.
+- The registry is fixed after `load()`.
+- `save()` must happen after `tell()`, not after `set_context()` and before `tell()`.
+- If `set_context()` is never called, evaluation proceeds in the default batch order.
+- `set_context()` accepts JSON-serializable values and stores only a stable hash, not the original object.
 
-@dataclass
-class Report:
-    completed_batch: bool
-    matched_context: bool
-    status: XNESStatus
-    restarted: bool
+## Core API
 
-class Optimizer:
-    def __init__(self, pop_size: int | None = None) -> None: ...
-    def add(self, name: str, loc: float = 0.0, scale: float = 1.0) -> Parameter: ...
-    def get_info(self) -> list[ParameterInfo]: ...
-    def set_best(self) -> None: ...
-    def save(self) -> dict[str, object]: ...
-    def load(self, state: object) -> None: ...
-    def set_context(self, context: Hashable) -> bool: ...
-    def tell(self, result: float | Sequence[float] | np.ndarray) -> Report: ...
+- `Optimizer.add(name, loc=0.0, scale=1.0) -> Parameter`
+  Register a named scalar parameter and get its mutable sampled view.
+- `Optimizer.load(state) -> None`
+  Initialize from priors with `None` or restore a previous snapshot from `save()`.
+- `Optimizer.tell(result) -> Report`
+  Submit one scalar or tuple-like objective result for the current sample.
+- `Optimizer.save() -> dict[str, object]`
+  Return a JSON-compatible snapshot of optimizer state.
+- `Optimizer.set_context(context) -> bool`
+  Retarget the current sample using a JSON-serializable context value.
+- `Optimizer.get_info() -> list[ParameterInfo]`
+  Inspect current values, means, scales, and registration priors.
+- `Optimizer.set_best() -> None`
+  Overwrite exposed parameter views with the current population mean for evaluation or inference.
 
-class XNES:
-    def __init__(
-        self,
-        x0: np.ndarray,
-        sigma0: np.ndarray | float,
-        p_sigma: np.ndarray | None = None,
-    ) -> None: ...
-    def ask(self, num_samples: int | None = None, rng: np.random.Generator | None = None) -> tuple[np.ndarray, np.ndarray]: ...
-    def tell(self, samples: np.ndarray, ranking: list[int], eps: float = 1e-10) -> XNESStatus: ...
-```
+## Configuration
 
-Runtime tuning is done via attributes:
+`Optimizer()` intentionally takes no constructor arguments. Optional tuning lives on instance attributes:
 
 ```python
-opt = Optimizer(pop_size=32)
+opt = Optimizer()
+opt.pop_size = 32
 opt.csa_enabled = False
 opt.eta_mu = 0.9
 opt.eta_sigma = 0.7
-opt.eta_B = 0.2  # 20% of the default shape-learning step
+opt.eta_B = 0.2
 ```
 
-Leaving `Optimizer.csa_enabled`, `Optimizer.eta_mu`, `Optimizer.eta_sigma`, or
-`Optimizer.eta_B` as `None` keeps the defaults defined by `XNES`. A bare
-`XNES(...)` instance starts with `csa_enabled = True`, `eta_mu = 1.0`,
-`eta_sigma = 1.0`, and `eta_B = 1.0`, which applies the built-in shape-learning
-rate `0.6 * (3 + log(dim)) / (dim * sqrt(dim))` for `dim > 0`. Smaller
-`eta_B` values damp that rate multiplicatively.
+Behavior:
 
-## Result Ordering
-- Scalar results are treated as 1-tuples.
-- Sequence results are compared lexicographically (no multiobjective/pareto optimization)
-- Higher tuples are better (maximize semantics).
+- Leaving `pop_size` as `None` keeps the xNES default batch size.
+- Odd `pop_size` values are rounded up to the next even value when a new batch is created.
+- Leaving `csa_enabled`, `eta_mu`, `eta_sigma`, or `eta_B` as `None` keeps the defaults defined by `XNES`.
+- A bare `XNES(...)` instance starts with `csa_enabled = True`, `eta_mu = 1.0`, `eta_sigma = 1.0`, and
+  `eta_B = 1.0`.
+- `eta_B` scales the built-in dimension-dependent shape-learning rate multiplicatively.
 
-## Training vs Testing
-- During training, call `load(None)` or `load(state)`, optionally call `set_context(...)`, evaluate the current `Parameter.value` values, then pass the result to `tell` and persist with `save()`.
-- For testing/inference, call `set_best()` to overwrite `Parameter.value` with the current population mean.
-- If you want to resume training after testing, save state before `set_best()` and later `load` that state.
+## Objective Semantics
+
+- `tell()` uses maximize semantics.
+- Scalar results are treated as one-element tuples.
+- Sequence results are ranked lexicographically.
+- Higher tuples are better.
+- This is not a Pareto or multiobjective optimizer.
+
+## Training And Inference
+
+- During training, follow the normal `load -> optional set_context -> evaluate -> tell -> save` loop.
+- For evaluation or inference, call `set_best()` to expose the current population mean through each
+  `Parameter.value`.
+- If you want to resume training after `set_best()`, save state before calling it and later restore with `load(...)`.
 
 ## Development
-- `make fix`: apply Ruff fixes and format.
-- `make check`: run Ruff, mypy, and pytest.
+
+- `make fix`: apply Ruff fixes and format the codebase.
+- `make check`: run Ruff, Ruff format checks, mypy, and pytest.
+- `make docs`: build the MkDocs site.
+- `make docs-serve`: serve the MkDocs site locally.
+- `make fix check`: common local pass to auto-fix, lint, type-check, and test.
