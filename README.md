@@ -61,9 +61,9 @@ opt.add("coeff_2")
 load_result = opt.load(state)
 
 for _ in range(500):
-    trial = opt.ask(context="validation:shard-0")
-    value = trial.params["coeff_1"] + np.exp(trial.params["coeff_2"])
-    report = opt.tell(trial, -value**2)  # `tell` maximizes, so minimize via `-f`
+    params = opt.ask(context="validation:shard-0")
+    value = params["coeff_1"] + np.exp(params["coeff_2"])
+    report = opt.tell(params, -value**2)  # `tell` maximizes, so minimize via `-f`
     state_path.write_text(json.dumps(opt.save()))
 
     if report.completed_batch:
@@ -77,10 +77,10 @@ The wrapper is intentionally strict. The expected loop is:
 1. Create `Optimizer()`.
 2. Register parameters with `add(...)`.
 3. Call `load(None)` for a fresh run or `load(state)` to resume.
-4. Call `ask(context=...)` to reserve one trial sample.
-5. Read sampled values from `trial.params`.
+4. Call `ask(context=...)` to reserve one parameter sample.
+5. Read sampled values directly from `params[...]`.
 6. Evaluate exactly once.
-7. Call `tell(trial, result)`.
+7. Call `tell(params, result)`.
 8. Persist with `save()`.
 
 Important constraints:
@@ -100,10 +100,10 @@ Important constraints:
   Register a named scalar parameter and get its mutable sampled view.
 - `Optimizer.load(state) -> LoadResult`
   Initialize from priors with `None`, or restore and reconcile a previous snapshot from `save()`.
-- `Optimizer.ask(context=None) -> Trial`
+- `Optimizer.ask(context=None) -> Parameters`
   Reserve one sample and return its parameter mapping plus reservation metadata.
-- `Optimizer.tell(trial, result) -> TellResult`
-  Submit one scalar or tuple-like objective result for a reserved trial.
+- `Optimizer.tell(params, result) -> TellResult`
+  Submit one scalar or tuple-like objective result for reserved parameters.
 - `Optimizer.save() -> dict[str, object]`
   Return a JSON-compatible snapshot of optimizer state.
 - `Optimizer.get_info() -> list[ParameterInfo]`
@@ -112,7 +112,7 @@ Important constraints:
   Overwrite exposed parameter views with the current population mean for evaluation or inference.
 - `LoadResult`
   Reports parameters added and parameters removed.
-- `Trial`
+- `Parameters`
   Runtime reservation payload returned by `ask()`.
 
 ## Configuration

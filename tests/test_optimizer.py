@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 
 import numpy as np
 
@@ -254,6 +254,21 @@ def test_get_info_reports_current_state() -> None:
     assert [item.scale for item in values] == [2.0, 1.0]
     assert [item.prior_loc for item in values] == [-2.0, 3.0]
     assert [item.prior_scale for item in values] == [2.0, 1.0]
+
+
+def test_ask_returns_parameters_mapping() -> None:
+    optimizer = Optimizer()
+    optimizer.pop_size = 6
+    optimizer.add("b", loc=2.0, scale=1.0)
+    optimizer.add("a", loc=-1.0, scale=1.0)
+    optimizer.load(None)
+
+    params = optimizer.ask()
+    assert isinstance(params, Mapping)
+    assert len(params) == 2
+    assert list(params) == ["a", "b"]
+    assert params["a"] == params.params["a"]
+    assert params["b"] == params.params["b"]
 
 
 def test_context_reuses_mirror_on_repeat() -> None:

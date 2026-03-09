@@ -10,7 +10,7 @@
 
 ::: xnes.LoadResult
 
-::: xnes.Trial
+::: xnes.Parameters
 
 ::: xnes.XNESStatus
 

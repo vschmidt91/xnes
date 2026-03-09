@@ -10,12 +10,12 @@ Example:
     opt.load(None)
 
     for _ in range(100):
-        trial = opt.ask()
-        opt.tell(trial, -(trial.params["coeff"] - 3.0) ** 2)
+        params = opt.ask()
+        opt.tell(params, -(params["coeff"] - 3.0) ** 2)
     ```
 """
 
-from .optimizer import LoadResult, Optimizer, Parameter, ParameterInfo, TellResult, Trial
+from .optimizer import LoadResult, Optimizer, Parameter, ParameterInfo, Parameters, TellResult
 from .xnes import XNES, XNESStatus
 
-__all__ = ["Optimizer", "Parameter", "ParameterInfo", "TellResult", "LoadResult", "Trial", "XNES", "XNESStatus"]
+__all__ = ["Optimizer", "Parameter", "ParameterInfo", "Parameters", "TellResult", "LoadResult", "XNES", "XNESStatus"]

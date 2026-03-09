@@ -18,9 +18,9 @@ opt.add("coeff_2")
 load_result = opt.load(state)
 
 for _ in range(500):
-    trial = opt.ask(context="validation:shard-0")
-    value = trial.params["coeff_1"] + np.exp(trial.params["coeff_2"])
-    opt.tell(trial, -value**2)
+    params = opt.ask(context="validation:shard-0")
+    value = params["coeff_1"] + np.exp(params["coeff_2"])
+    opt.tell(params, -value**2)
     state_path.write_text(json.dumps(opt.save()))
 
 opt.set_best()  # switch parameter views to current population mean for testing
@@ -34,6 +34,6 @@ current unfinished batch is reconciled rather than discarded.
 On `load(None)`, all currently registered parameters are reported as added.
 
 When switching between training and testing:
-- Training: call `ask`, evaluate `trial.params`, then call `tell(trial, result)`.
+- Training: call `ask`, evaluate `params[...]`, then call `tell(params, result)`.
 - Testing: call `set_best()` and evaluate without `tell`.
 - Resume training: `load(state)` saved before `set_best()`.

@@ -6,8 +6,8 @@ The wrapper is designed for a strict checkpointed workflow:
 2. register parameters with `add`
 3. call `load` with `None` for a fresh run or a previously saved state
 4. call `ask` (optionally with `context=...`)
-5. read sampled values from `Trial.params`
-6. call `tell(trial, result)` exactly once for that reservation
+5. read sampled values from `Parameters` (e.g. `params["x"]`)
+6. call `tell(params, result)` exactly once for that reservation
 7. call `save`
 
 The registry is fixed once `load` has been called.
@@ -15,7 +15,7 @@ The registry is fixed once `load` has been called.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import cast
@@ -97,12 +97,27 @@ class LoadResult:
 
 
 @dataclass(frozen=True)
-class Trial:
+class Parameters(Mapping[str, float]):
+    """Reserved sample values and reservation metadata returned by `ask`.
+
+    This is a mapping over sampled parameter values, so values can be read
+    directly via `params["name"]`.
+    """
+
     id: int
     sample_index: int
     params: Mapping[str, float]
     context: str | None
     matched_context: bool
+
+    def __getitem__(self, key: str) -> float:
+        return self.params[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.params)
+
+    def __len__(self) -> int:
+        return len(self.params)
 
 
 @dataclass(frozen=True)
@@ -125,8 +140,8 @@ class Optimizer:
     2. register all parameters with `add`
     3. call `load`
     4. call `ask`
-    5. evaluate the current trial values
-    6. call `tell` with that trial
+    5. evaluate sampled parameter values
+    6. call `tell` with that `Parameters` instance
     7. call `save`
 
     After `load`, the registry is fixed and `add` is no longer
@@ -283,7 +298,7 @@ class Optimizer:
         self._state_names = names
         self._reset_batch()
 
-    def ask(self, context: str | None = None) -> Trial:
+    def ask(self, context: str | None = None) -> Parameters:
         """Reserve a sample for one evaluation run."""
         if not self._loaded:
             msg = "Call load() before ask()."
@@ -310,7 +325,7 @@ class Optimizer:
         params = {name: float(self._scheduler.batch_x[row, sample_index]) for row, name in enumerate(self._state_names)}
         for name, value in params.items():
             self._registry[name].value = value
-        return Trial(
+        return Parameters(
             id=claim_id,
             sample_index=sample_index,
             params=MappingProxyType(params),
@@ -318,11 +333,11 @@ class Optimizer:
             matched_context=matched_context,
         )
 
-    def tell(self, trial: Trial, result: float | Sequence[float] | np.ndarray) -> TellResult:
-        """Submit the objective result for a reserved trial."""
-        claim = self._claims_by_id.pop(trial.id, None)
+    def tell(self, params: Parameters, result: float | Sequence[float] | np.ndarray) -> TellResult:
+        """Submit the objective result for reserved parameters."""
+        claim = self._claims_by_id.pop(params.id, None)
         if claim is None:
-            msg = "Unknown trial."
+            msg = "Unknown parameters reservation."
             raise RuntimeError(msg)
         self._claimed_sample_indices.discard(claim.sample_index)
 
