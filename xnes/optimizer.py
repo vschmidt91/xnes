@@ -21,6 +21,7 @@ from typing import cast
 
 import numpy as np
 
+from ._scheduler import BatchScheduler
 from .xnes import XNES, XNESStatus
 
 
@@ -117,13 +118,7 @@ class Optimizer:
 
         self._xnes: XNES = self._new_xnes(np.zeros(0), np.eye(0), np.zeros(0))
         self._state_names: list[str] = []
-        self._batch_z: np.ndarray = np.zeros((0, 0))
-        self._batch_x: np.ndarray = np.zeros((0, 0))
-        self._results: list[tuple[float, ...] | None] = []
-        self._active_sample_index: int | None = None
-        self._active_context_hash: int | None = None
-        self._active_context_matched = False
-        self._context_waiting: dict[int, int] = {}
+        self._scheduler = BatchScheduler()
 
     def add(self, name: str, loc: float = 0.0, scale: float = 1.0) -> Parameter:
         """Register a parameter or return the existing one.
@@ -173,7 +168,7 @@ class Optimizer:
                 :meth:`tell`.
         """
 
-        if self._active_context_hash is not None:
+        if self._scheduler.active_context_hash is not None:
             msg = "Cannot save after set_context() before tell()."
             raise RuntimeError(msg)
 
@@ -182,11 +177,11 @@ class Optimizer:
             "loc": self._xnes.mu.tolist(),
             "scale": self._xnes.scale.tolist(),
             "step_size_path": self._xnes.p_sigma.tolist(),
-            "batch_z": self._batch_z.tolist(),
-            "batch_x": self._batch_x.tolist(),
-            "results": [None if item is None else list(item) for item in self._results],
+            "batch_z": self._scheduler.batch_z.tolist(),
+            "batch_x": self._scheduler.batch_x.tolist(),
+            "results": [None if item is None else list(item) for item in self._scheduler.results],
             "context_waiting": [
-                [context_hash, sample_idx] for context_hash, sample_idx in self._context_waiting.items()
+                [context_hash, sample_idx] for context_hash, sample_idx in self._scheduler.context_waiting.items()
             ],
             "rng_state": dict(self._rng.bit_generator.state),
         }
@@ -235,24 +230,9 @@ class Optimizer:
         self._rng.bit_generator.state = dict(cast(Mapping[str, object], state_obj["rng_state"]))
         self._xnes = self._new_xnes(loc, scale, step_size_path)
         self._state_names = expected_names
-        self._batch_z = batch_z
-        self._batch_x = batch_x
-        sample_count = self._batch_x.shape[1]
-        self._results = [None] * sample_count
-        for idx, item in enumerate(results[:sample_count]):
-            self._results[idx] = item
-        self._context_waiting = {
-            context_hash: sample_idx
-            for context_hash, sample_idx in context_waiting.items()
-            if 0 <= sample_idx < sample_count
-            and self._results[sample_idx] is not None
-            and self._results[self._mirror_index(sample_idx)] is None
-        }
-        self._active_sample_index = None
-        self._active_context_hash = None
-        self._active_context_matched = False
+        self._scheduler.restore(batch_z, batch_x, results, context_waiting)
+        self._apply_active_sample_values()
         self._loaded = True
-        self._activate_next_sample()
 
     def _reset_from_priors(self) -> None:
         names = self._ordered_names()
@@ -285,12 +265,11 @@ class Optimizer:
         if not self._loaded:
             msg = "Call load() before set_context()."
             raise RuntimeError(msg)
-        if self._active_sample_index is None:
+        if self._scheduler.active_sample_index is None:
             return False
 
-        context_hash = hash(context)
-        sample_index, matched_context = self._select_sample_index(context_hash)
-        self._set_active_sample(sample_index, context_hash, matched_context)
+        matched_context = self._scheduler.set_context(hash(context))
+        self._apply_active_sample_values()
         return matched_context
 
     def tell(self, result: float | Sequence[float] | np.ndarray) -> Report:
@@ -313,23 +292,15 @@ class Optimizer:
             RuntimeError: If called before :meth:`load`.
         """
 
-        if self._active_sample_index is None:
+        if self._scheduler.active_sample_index is None:
             msg = "No active sample available. Call load() first."
             raise RuntimeError(msg)
 
-        sample_index = self._active_sample_index
-        matched_context = self._active_context_matched
-        self._results[sample_index] = _normalize_result(result)
-        self._register_context_match(sample_index, self._active_context_hash)
-        self._active_sample_index = None
-        self._active_context_hash = None
-        self._active_context_matched = False
-
-        done = all(item is not None for item in self._results)
-        if done:
-            results = cast(list[tuple[float, ...]], self._results)
+        completed_batch, matched_context = self._scheduler.record_result(_normalize_result(result))
+        if completed_batch:
+            results = self._scheduler.completed_results()
             ranking = sorted(range(len(results)), key=lambda idx: results[idx], reverse=True)
-            status = self._xnes.tell(self._batch_z, ranking)
+            status = self._xnes.tell(self._scheduler.batch_z, ranking)
 
             restarted = status is not XNESStatus.OK
             if restarted:
@@ -338,7 +309,7 @@ class Optimizer:
                 self._reset_batch()
             return Report(True, matched_context, status, restarted)
 
-        self._activate_next_sample()
+        self._apply_active_sample_values()
         return Report(False, matched_context, XNESStatus.OK, False)
 
     def set_best(self) -> None:
@@ -413,81 +384,16 @@ class Optimizer:
 
     def _reset_batch(self) -> None:
         pop_size = self._resolve_population_size(self._xnes.dim)
-        self._batch_z, self._batch_x = self._xnes.ask(pop_size, self._rng)
-        sample_count = self._batch_x.shape[1]
-        self._results = [None] * sample_count
-        self._context_waiting = {}
-        self._active_sample_index = None
-        self._active_context_hash = None
-        self._active_context_matched = False
-        self._activate_next_sample()
+        batch_z, batch_x = self._xnes.ask(pop_size, self._rng)
+        self._scheduler.reset(batch_z, batch_x)
+        self._apply_active_sample_values()
 
-    def _apply_sample_values(self, sample_index: int) -> None:
-        if self._batch_x.shape[1] == 0:
+    def _apply_active_sample_values(self) -> None:
+        sample_index = self._scheduler.active_sample_index
+        if sample_index is None or self._scheduler.batch_x.shape[1] == 0:
             return
-        idx = sample_index % self._batch_x.shape[1]
         for row, name in enumerate(self._state_names):
-            self._registry[name].value = float(self._batch_x[row, idx])
-
-    def _mirror_index(self, sample_index: int) -> int:
-        n = self._batch_x.shape[1]
-        half = n // 2
-        return sample_index + half if sample_index < half else sample_index - half
-
-    def _activate_next_sample(self) -> None:
-        sample_index = next((idx for idx, result in enumerate(self._results) if result is None), None)
-        if sample_index is None:
-            self._active_sample_index = None
-            self._active_context_hash = None
-            self._active_context_matched = False
-            return
-        self._set_active_sample(sample_index)
-
-    def _set_active_sample(
-        self,
-        sample_index: int,
-        context_hash: int | None = None,
-        matched_context: bool = False,
-    ) -> None:
-        self._active_sample_index = sample_index
-        self._active_context_hash = context_hash
-        self._active_context_matched = matched_context
-        self._apply_sample_values(sample_index)
-
-    def _select_sample_index(self, context_hash: int) -> tuple[int, bool]:
-        current_index = self._active_sample_index
-        current_available = current_index is not None and self._results[current_index] is None
-
-        waiting_index = self._context_waiting.get(context_hash)
-        if waiting_index is not None:
-            mirror_index = self._mirror_index(waiting_index)
-            if self._results[mirror_index] is None:
-                return mirror_index, True
-            del self._context_waiting[context_hash]
-
-        sample_index = (
-            current_index
-            if current_available and current_index is not None
-            else next((idx for idx, result in enumerate(self._results) if result is None), None)
-        )
-        if sample_index is None:
-            msg = "Current batch is already fully assigned."
-            raise RuntimeError(msg)
-        return sample_index, False
-
-    def _register_context_match(self, sample_index: int, context_hash: int | None) -> None:
-        if context_hash is None:
-            return
-
-        waiting_index = self._context_waiting.get(context_hash)
-        if waiting_index is None:
-            mirror_index = self._mirror_index(sample_index)
-            if self._results[mirror_index] is None:
-                self._context_waiting[context_hash] = sample_index
-            return
-
-        if self._mirror_index(waiting_index) == sample_index:
-            del self._context_waiting[context_hash]
+            self._registry[name].value = float(self._scheduler.batch_x[row, sample_index])
 
     def _restart_distribution(self) -> None:
         names = self._ordered_names()
