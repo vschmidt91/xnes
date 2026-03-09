@@ -12,7 +12,7 @@ agents, or other black-box programs where runs are noisy, resumable, and often o
 - Argument-free `Optimizer()` wrapper with sensible defaults inherited from `XNES`.
 - Named scalar parameters via `add(...)`, with lexicographic ordering independent of registration order.
 - JSON-compatible optimizer state through `save()` and `load(...)`.
-- Optional mirrored-sample routing through `set_context(...)` using human-readable string contexts.
+- Optional mirrored-sample routing through `ask(context=...)` using human-readable string contexts.
 
 ## Requirements
 
@@ -55,17 +55,15 @@ state = json.loads(state_path.read_text()) if state_path.exists() else None
 opt = Optimizer()
 opt.pop_size = 32
 
-coeff_1 = opt.add("coeff_1", loc=2.0, scale=3.0)
-coeff_2 = opt.add("coeff_2")
+opt.add("coeff_1", loc=2.0, scale=3.0)
+opt.add("coeff_2")
 
 load_result = opt.load(state)
 
 for _ in range(500):
-    # Optional: use a string context to match mirrored samples.
-    # opt.set_context("validation:shard-0")
-
-    value = coeff_1.value + np.exp(coeff_2.value)
-    report = opt.tell(-value**2)  # `tell` maximizes, so minimize via `-f`
+    trial = opt.ask(context="validation:shard-0")
+    value = trial.params["coeff_1"] + np.exp(trial.params["coeff_2"])
+    report = opt.tell(trial, -value**2)  # `tell` maximizes, so minimize via `-f`
     state_path.write_text(json.dumps(opt.save()))
 
     if report.completed_batch:
@@ -79,10 +77,10 @@ The wrapper is intentionally strict. The expected loop is:
 1. Create `Optimizer()`.
 2. Register parameters with `add(...)`.
 3. Call `load(None)` for a fresh run or `load(state)` to resume.
-4. Optionally call `set_context(context)` for the current evaluation.
-5. Read the current `Parameter.value` values.
+4. Call `ask(context=...)` to reserve one trial sample.
+5. Read sampled values from `trial.params`.
 6. Evaluate exactly once.
-7. Call `tell(result)`.
+7. Call `tell(trial, result)`.
 8. Persist with `save()`.
 
 Important constraints:
@@ -92,9 +90,9 @@ Important constraints:
 - When `load(state)` sees a changed parameter set, shared learned state is reconciled, added parameters start from
   priors, removed parameters are dropped, and any in-flight batch is reconciled rather than discarded.
 - `load(None)` reports all currently registered parameters as added.
-- `save()` must happen after `tell()`, not after `set_context()` and before `tell()`.
-- If `set_context()` is never called, evaluation proceeds in the default batch order.
-- `set_context()` accepts strings and stores them directly in saved state.
+- `ask()` creates runtime-only reservations; these claims are not persisted.
+- If all samples in a batch are reserved and unresolved, `ask()` raises.
+- If `ask(context=...)` is never used, evaluation proceeds in the default batch order.
 
 ## Core API
 
@@ -102,18 +100,20 @@ Important constraints:
   Register a named scalar parameter and get its mutable sampled view.
 - `Optimizer.load(state) -> LoadResult`
   Initialize from priors with `None`, or restore and reconcile a previous snapshot from `save()`.
-- `Optimizer.tell(result) -> Report`
-  Submit one scalar or tuple-like objective result for the current sample.
+- `Optimizer.ask(context=None) -> Trial`
+  Reserve one sample and return its parameter mapping plus reservation metadata.
+- `Optimizer.tell(trial, result) -> TellResult`
+  Submit one scalar or tuple-like objective result for a reserved trial.
 - `Optimizer.save() -> dict[str, object]`
   Return a JSON-compatible snapshot of optimizer state.
-- `Optimizer.set_context(context) -> bool`
-  Retarget the current sample using a string context value.
 - `Optimizer.get_info() -> list[ParameterInfo]`
   Inspect current values, means, scales, and registration priors.
 - `Optimizer.set_best() -> None`
   Overwrite exposed parameter views with the current population mean for evaluation or inference.
 - `LoadResult`
   Reports parameters added and parameters removed.
+- `Trial`
+  Runtime reservation payload returned by `ask()`.
 
 ## Configuration
 
@@ -147,7 +147,7 @@ Behavior:
 
 ## Training And Inference
 
-- During training, follow the normal `load -> optional set_context -> evaluate -> tell -> save` loop.
+- During training, follow `load -> ask -> evaluate -> tell -> save`.
 - For evaluation or inference, call `set_best()` to expose the current population mean through each
   `Parameter.value`.
 - If you want to resume training after `set_best()`, save state before calling it and later restore with `load(...)`.

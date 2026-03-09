@@ -6,9 +6,11 @@
 
 ::: xnes.ParameterInfo
 
-::: xnes.Report
+::: xnes.TellResult
 
 ::: xnes.LoadResult
+
+::: xnes.Trial
 
 ::: xnes.XNESStatus
 

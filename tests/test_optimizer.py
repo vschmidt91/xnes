@@ -4,7 +4,7 @@ from collections.abc import Callable
 
 import numpy as np
 
-from xnes import LoadResult, Optimizer, ParameterInfo, Report, XNESStatus
+from xnes import LoadResult, Optimizer, ParameterInfo, TellResult, XNESStatus
 
 
 def _read_loc(state: object) -> np.ndarray:
@@ -68,15 +68,17 @@ def _run_function_optimization(
 ) -> tuple[float, float]:
     optimizer = Optimizer()
     optimizer.pop_size = pop_size
-    params = [optimizer.add(f"x{i}", loc=init_loc, scale=init_scale) for i in range(dim)]
+    for i in range(dim):
+        optimizer.add(f"x{i}", loc=init_loc, scale=init_scale)
     optimizer.load(None)
 
     initial_loc = _read_loc(optimizer.save())
     initial_value = objective(initial_loc)
 
     for _ in range(evaluations):
-        point = np.array([parameter.value for parameter in params], dtype=float)
-        optimizer.tell(-objective(point))
+        trial = optimizer.ask()
+        point = np.array([trial.params[f"x{i}"] for i in range(dim)], dtype=float)
+        optimizer.tell(trial, -objective(point))
 
     final_loc = _read_loc(optimizer.save())
     final_value = objective(final_loc)
@@ -101,13 +103,16 @@ def test_optimizer_improves_sphere() -> None:
 def test_state_save_load_roundtrip() -> None:
     opt_a = Optimizer()
     opt_a.pop_size = 20
-    p1 = opt_a.add("alpha", loc=2.0, scale=1.5)
-    p2 = opt_a.add("beta", loc=-1.0, scale=2.0)
+    opt_a.add("alpha", loc=2.0, scale=1.5)
+    opt_a.add("beta", loc=-1.0, scale=2.0)
     load_result = opt_a.load(None)
     assert load_result == LoadResult(["alpha", "beta"], [])
 
     for _ in range(37):
-        opt_a.tell(-(p1.value**2 + p2.value**2))
+        trial = opt_a.ask()
+        alpha = trial.params["alpha"]
+        beta = trial.params["beta"]
+        opt_a.tell(trial, -(alpha**2 + beta**2))
 
     state = opt_a.save()
     assert isinstance(state, dict)
@@ -129,13 +134,16 @@ def test_state_save_load_roundtrip() -> None:
 def test_load_reconciles_added_and_removed_parameters() -> None:
     base = Optimizer()
     base.pop_size = 4
-    x = base.add("x", loc=2.0, scale=1.5)
-    y = base.add("y", loc=-1.0, scale=0.7)
+    base.add("x", loc=2.0, scale=1.5)
+    base.add("y", loc=-1.0, scale=0.7)
     load_result = base.load(None)
     assert load_result == LoadResult(["x", "y"], [])
 
     for _ in range(5):
-        base.tell(-(x.value**2 + 0.5 * y.value**2))
+        trial = base.ask()
+        x = trial.params["x"]
+        y = trial.params["y"]
+        base.tell(trial, -(x**2 + 0.5 * y**2))
 
     base_state = base.save()
     base_loc = _read_loc(base_state)
@@ -179,7 +187,8 @@ def test_load_reconciles_added_and_removed_parameters() -> None:
     assert z.prior_loc == 3.0
     assert z.prior_scale == 2.0
 
-    added.tell(-1.0)
+    trial = added.ask()
+    added.tell(trial, -1.0)
     added_partial_state = added.save()
     assert any(result is not None for result in _read_results(added_partial_state))
     added_loc = _read_loc(added_state)
@@ -231,15 +240,16 @@ def test_registration_order_is_lexicographic() -> None:
 def test_get_info_reports_current_state() -> None:
     optimizer = Optimizer()
     optimizer.pop_size = 12
-    alpha = optimizer.add("alpha", loc=-2.0, scale=2.0)
-    zeta = optimizer.add("zeta", loc=3.0, scale=1.0)
+    optimizer.add("alpha", loc=-2.0, scale=2.0)
+    optimizer.add("zeta", loc=3.0, scale=1.0)
     optimizer.load(None)
+    trial = optimizer.ask()
 
     values = optimizer.get_info()
     assert isinstance(values, list)
     assert all(isinstance(item, ParameterInfo) for item in values)
     assert [item.name for item in values] == ["alpha", "zeta"]
-    assert [item.value for item in values] == [alpha.value, zeta.value]
+    assert [item.value for item in values] == [trial.params["alpha"], trial.params["zeta"]]
     assert [item.loc for item in values] == [-2.0, 3.0]
     assert [item.scale for item in values] == [2.0, 1.0]
     assert [item.prior_loc for item in values] == [-2.0, 3.0]
@@ -249,53 +259,72 @@ def test_get_info_reports_current_state() -> None:
 def test_context_reuses_mirror_on_repeat() -> None:
     optimizer = Optimizer()
     optimizer.pop_size = 4
-    x = optimizer.add("x", loc=0.0, scale=1.0)
-    y = optimizer.add("y", loc=0.0, scale=1.0)
+    optimizer.add("x", loc=0.0, scale=1.0)
+    optimizer.add("y", loc=0.0, scale=1.0)
     optimizer.load(None)
     context = "arena:zerg"
 
-    first = np.array([x.value, y.value], dtype=float)
-    assert optimizer.set_context(context) is False
-    first_report = optimizer.tell(1.0)
-    assert first_report == Report(False, False, XNESStatus.OK, False)
+    first_trial = optimizer.ask(context=context)
+    first = np.array([first_trial.params["x"], first_trial.params["y"]], dtype=float)
+    first_report = optimizer.tell(first_trial, 1.0)
+    assert first_report == TellResult(False, False, XNESStatus.OK, False)
 
-    second_report = optimizer.tell(0.0)
-    assert second_report == Report(False, False, XNESStatus.OK, False)
+    second_trial = optimizer.ask()
+    second_report = optimizer.tell(second_trial, 0.0)
+    assert second_report == TellResult(False, False, XNESStatus.OK, False)
 
-    assert optimizer.set_context(context) is True
-    mirror = np.array([x.value, y.value], dtype=float)
+    mirror_trial = optimizer.ask(context=context)
+    mirror = np.array([mirror_trial.params["x"], mirror_trial.params["y"]], dtype=float)
     assert np.allclose(mirror, -first)
-    third_report = optimizer.tell(-1.0)
-    assert third_report == Report(False, True, XNESStatus.OK, False)
+    third_report = optimizer.tell(mirror_trial, -1.0)
+    assert third_report == TellResult(False, True, XNESStatus.OK, False)
 
 
-def test_save_requires_tell_after_context() -> None:
+def test_ask_allows_out_of_order_tells() -> None:
     optimizer = Optimizer()
     optimizer.pop_size = 4
     optimizer.add("x", loc=0.0, scale=1.0)
     optimizer.load(None)
-    optimizer.set_context("job:1")
 
+    first = optimizer.ask()
+    second = optimizer.ask()
+
+    r2 = optimizer.tell(second, 0.0)
+    r1 = optimizer.tell(first, 1.0)
+    assert r2.completed_batch is False
+    assert r1.completed_batch is False
+
+
+def test_ask_raises_when_batch_is_fully_claimed() -> None:
+    optimizer = Optimizer()
+    optimizer.pop_size = 4
+    optimizer.add("x", loc=0.0, scale=1.0)
+    optimizer.load(None)
+
+    trials = [optimizer.ask() for _ in range(4)]
+    assert len(trials) == 4
     try:
-        optimizer.save()
+        optimizer.ask()
     except RuntimeError as exc:
-        assert "tell" in str(exc)
+        assert "Pending" in str(exc)
     else:
-        raise AssertionError("save() should reject in-flight context state")
+        raise AssertionError("ask() should reject when all samples are reserved")
 
 
-def test_set_context_rejects_non_string_value() -> None:
+def test_stale_tell_is_rejected() -> None:
     optimizer = Optimizer()
     optimizer.pop_size = 4
     optimizer.add("x", loc=0.0, scale=1.0)
     optimizer.load(None)
 
+    trial = optimizer.ask()
+    optimizer.tell(trial, 1.0)
     try:
-        optimizer.set_context(1)  # type: ignore[arg-type]
-    except TypeError:
+        optimizer.tell(trial, 1.0)
+    except RuntimeError:
         pass
     else:
-        raise AssertionError("set_context() should reject non-string values")
+        raise AssertionError("tell() should reject stale trial ids")
 
 
 def test_runtime_config_is_not_persisted_or_loaded() -> None:
@@ -305,10 +334,12 @@ def test_runtime_config_is_not_persisted_or_loaded() -> None:
     opt_a.eta_mu = 0.9
     opt_a.eta_sigma = 0.7
     opt_a.eta_B = 0.2
-    param = opt_a.add("x", loc=4.0, scale=2.0)
+    opt_a.add("x", loc=4.0, scale=2.0)
     opt_a.load(None)
     for _ in range(20):
-        opt_a.tell(-(param.value**2))
+        trial = opt_a.ask()
+        x = trial.params["x"]
+        opt_a.tell(trial, -(x**2))
 
     state = opt_a.save()
     assert isinstance(state, dict)
@@ -330,8 +361,8 @@ def test_runtime_config_is_not_persisted_or_loaded() -> None:
 def test_restart_on_conditioning_failure() -> None:
     optimizer = Optimizer()
     optimizer.pop_size = 10
-    x = optimizer.add("x", loc=0.0, scale=1.0)
-    y = optimizer.add("y", loc=0.0, scale=1.0)
+    optimizer.add("x", loc=0.0, scale=1.0)
+    optimizer.add("y", loc=0.0, scale=1.0)
     optimizer.load(None)
 
     state = optimizer.save()
@@ -345,7 +376,10 @@ def test_restart_on_conditioning_failure() -> None:
     restored.load(state)
 
     for _ in range(10):
-        restored.tell(-(x.value**2 + y.value**2))
+        trial = restored.ask()
+        x = trial.params["x"]
+        y = trial.params["y"]
+        restored.tell(trial, -(x**2 + y**2))
 
     conditioned = restored.save()
     assert np.allclose(_read_loc(conditioned), np.array([0.0, 0.0]))
@@ -356,22 +390,28 @@ def test_restart_on_conditioning_failure() -> None:
 def test_save_load_preserves_optimizer_state() -> None:
     direct = Optimizer()
     direct.pop_size = 12
-    direct_x = direct.add("x", loc=2.0, scale=1.5)
-    direct_y = direct.add("y", loc=-1.0, scale=0.7)
+    direct.add("x", loc=2.0, scale=1.5)
+    direct.add("y", loc=-1.0, scale=0.7)
     direct.load(None)
 
     recreated_state = direct.save()
     for _ in range(40):
-        direct_result = -(direct_x.value**2 + 0.5 * direct_y.value**2)
-        direct.tell(direct_result)
+        direct_trial = direct.ask()
+        direct_x = direct_trial.params["x"]
+        direct_y = direct_trial.params["y"]
+        direct_result = -(direct_x**2 + 0.5 * direct_y**2)
+        direct.tell(direct_trial, direct_result)
 
         recreated = Optimizer()
         recreated.pop_size = 12
-        recreated_x = recreated.add("x", loc=2.0, scale=1.5)
-        recreated_y = recreated.add("y", loc=-1.0, scale=0.7)
+        recreated.add("x", loc=2.0, scale=1.5)
+        recreated.add("y", loc=-1.0, scale=0.7)
         recreated.load(recreated_state)
-        recreated_result = -(recreated_x.value**2 + 0.5 * recreated_y.value**2)
-        recreated.tell(recreated_result)
+        recreated_trial = recreated.ask()
+        recreated_x = recreated_trial.params["x"]
+        recreated_y = recreated_trial.params["y"]
+        recreated_result = -(recreated_x**2 + 0.5 * recreated_y**2)
+        recreated.tell(recreated_trial, recreated_result)
         recreated_state = recreated.save()
 
     direct_state = direct.save()

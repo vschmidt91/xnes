@@ -5,7 +5,7 @@ update rule and a strict named-parameter wrapper.
 
 It is designed for expensive, stateful evaluation loops where you want to tune
 scalar parameters, checkpoint progress, and optionally route mirrored samples by
-context.
+context using `ask(context=...)`.
 
 The docs are split into two parts:
 
@@ -14,4 +14,4 @@ The docs are split into two parts:
 
 The implementation keeps parameter ordering lexicographic, so registration order
 does not affect the state layout. Context matching uses explicit string labels,
-so saved optimizer state keeps those labels human readable.
+while trial reservations remain runtime-only and are not persisted.

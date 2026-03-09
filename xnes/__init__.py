@@ -6,15 +6,16 @@ Example:
 
     opt = Optimizer()
     opt.pop_size = 32
-    coeff = opt.add("coeff", loc=1.0, scale=0.5)
+    opt.add("coeff", loc=1.0, scale=0.5)
     opt.load(None)
 
     for _ in range(100):
-        opt.tell(-(coeff.value - 3.0) ** 2)
+        trial = opt.ask()
+        opt.tell(trial, -(trial.params["coeff"] - 3.0) ** 2)
     ```
 """
 
-from .optimizer import LoadResult, Optimizer, Parameter, ParameterInfo, Report
+from .optimizer import LoadResult, Optimizer, Parameter, ParameterInfo, TellResult, Trial
 from .xnes import XNES, XNESStatus
 
-__all__ = ["Optimizer", "Parameter", "ParameterInfo", "Report", "LoadResult", "XNES", "XNESStatus"]
+__all__ = ["Optimizer", "Parameter", "ParameterInfo", "TellResult", "LoadResult", "Trial", "XNES", "XNESStatus"]

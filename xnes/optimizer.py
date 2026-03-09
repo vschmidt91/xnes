@@ -5,9 +5,9 @@ The wrapper is designed for a strict checkpointed workflow:
 1. create `Optimizer`
 2. register parameters with `add`
 3. call `load` with `None` for a fresh run or a previously saved state
-4. optionally call `set_context`
-5. read `Parameter.value`
-6. call `tell` exactly once for the current evaluation
+4. call `ask` (optionally with `context=...`)
+5. read sampled values from `Trial.params`
+6. call `tell(trial, result)` exactly once for that reservation
 7. call `save`
 
 The registry is fixed once `load` has been called.
@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import cast
 
 import numpy as np
@@ -66,7 +67,7 @@ class _Prior:
 
 
 @dataclass(frozen=True)
-class Report:
+class TellResult:
     """Outcome of one `Optimizer.tell` call.
 
     Attributes:
@@ -95,6 +96,23 @@ class LoadResult:
     parameters_removed: list[str]
 
 
+@dataclass(frozen=True)
+class Trial:
+    id: int
+    sample_index: int
+    params: Mapping[str, float]
+    context: str | None
+    matched_context: bool
+
+
+@dataclass(frozen=True)
+class _Claim:
+    id: int
+    sample_index: int
+    context: str | None
+    matched_context: bool
+
+
 class Optimizer:
     """Maximizing optimizer with named scalar parameters.
 
@@ -106,9 +124,9 @@ class Optimizer:
     1. create the optimizer
     2. register all parameters with `add`
     3. call `load`
-    4. optionally call `set_context`
-    5. evaluate the current `Parameter.value` values
-    6. call `tell`
+    4. call `ask`
+    5. evaluate the current trial values
+    6. call `tell` with that trial
     7. call `save`
 
     After `load`, the registry is fixed and `add` is no longer
@@ -141,6 +159,9 @@ class Optimizer:
         self._xnes: XNES = self._new_xnes(np.zeros(0), np.eye(0), np.zeros(0))
         self._state_names: list[str] = []
         self._scheduler = BatchScheduler()
+        self._claims_by_id: dict[int, _Claim] = {}
+        self._claimed_sample_indices: set[int] = set()
+        self._next_claim_id = 0
 
     def add(self, name: str, loc: float = 0.0, scale: float = 1.0) -> Parameter:
         """Register a parameter or return the existing one.
@@ -177,22 +198,7 @@ class Optimizer:
         return parameter
 
     def save(self) -> dict[str, object]:
-        """Serialize the current optimizer state after `tell`.
-
-        Under the intended workflow, callers save only after the current
-        evaluation result has been reported via `tell`.
-
-        Returns:
-            JSON-compatible snapshot of registry order, xNES state, batch data, results, and RNG state.
-
-        Raises:
-            RuntimeError: If called after `set_context` but before `tell`.
-        """
-
-        if self._scheduler.active_context is not None:
-            msg = "Cannot save after set_context() before tell()."
-            raise RuntimeError(msg)
-
+        """Serialize the current optimizer state."""
         return {
             "names": list(self._state_names),
             "loc": self._xnes.mu.tolist(),
@@ -263,7 +269,7 @@ class Optimizer:
         self._xnes = self._new_xnes(loc, scale, step_size_path)
         self._state_names = expected_names
         self._scheduler.restore(batch_z, batch_x, results, context_waiting)
-        self._apply_active_sample_values()
+        self._clear_claims()
         self._loaded = True
         return LoadResult(
             parameters_added=parameters_added,
@@ -277,76 +283,54 @@ class Optimizer:
         self._state_names = names
         self._reset_batch()
 
-    def set_context(self, context: str) -> bool:
-        """Retarget the current sample selection using a string context.
-
-        If the same context string was already seen for one side of a mirrored
-        pair in the current batch, the mirrored sample is selected. Otherwise
-        the current pending sample stays selected.
-
-        This method is optional. If it is never called, sampling proceeds in the
-        default batch order.
-
-        Args:
-            context: Human-readable objective-context identifier.
-
-        Returns:
-            `True` iff sample selection used the mirrored partner of a previously seen matching context.
-
-        Raises:
-            RuntimeError: If called before `load`.
-            TypeError: If `context` is not a string.
-        """
+    def ask(self, context: str | None = None) -> Trial:
+        """Reserve a sample for one evaluation run."""
         if not self._loaded:
-            msg = "Call load() before set_context()."
-            raise RuntimeError(msg)
-        if self._scheduler.active_sample_index is None:
-            return False
-        if not isinstance(context, str):
-            msg = "context must be a string."
-            raise TypeError(msg)
-
-        matched_context = self._scheduler.set_context(context)
-        self._apply_active_sample_values()
-        return matched_context
-
-    def tell(self, result: float | Sequence[float] | np.ndarray) -> Report:
-        """Submit the objective result for the current sample.
-
-        Scalar results are treated as one-element tuples. Sequence results are
-        ranked lexicographically, with larger tuples considered better.
-
-        Args:
-            result: Objective value for the current sample.
-
-        Returns:
-            A `Report` describing batch completion, context matching, xNES status, and whether a restart happened.
-
-        Raises:
-            TypeError: If `result` is neither a scalar nor a numeric sequence.
-            ValueError: If `result` is an empty sequence.
-            RuntimeError: If called before `load`.
-        """
-
-        if self._scheduler.active_sample_index is None:
-            msg = "No active sample available. Call load() first."
+            msg = "Call load() before ask()."
             raise RuntimeError(msg)
 
-        completed_batch, matched_context = self._scheduler.record_result(_normalize_result(result))
+        sample_index, matched_context = self._scheduler.pick_sample(context, self._claimed_sample_indices)
+        if sample_index is None:
+            if self._claimed_sample_indices:
+                msg = "No unclaimed sample available. Pending trials must be told first."
+                raise RuntimeError(msg)
+            if all(item is not None for item in self._scheduler.results):
+                self._complete_batch()
+                sample_index, matched_context = self._scheduler.pick_sample(context, self._claimed_sample_indices)
+            if sample_index is None:
+                msg = "No sample available."
+                raise RuntimeError(msg)
+
+        claim_id = self._next_claim_id
+        self._next_claim_id += 1
+        self._claimed_sample_indices.add(sample_index)
+        claim = _Claim(claim_id, sample_index, context, matched_context)
+        self._claims_by_id[claim_id] = claim
+
+        params = {name: float(self._scheduler.batch_x[row, sample_index]) for row, name in enumerate(self._state_names)}
+        for name, value in params.items():
+            self._registry[name].value = value
+        return Trial(
+            id=claim_id,
+            sample_index=sample_index,
+            params=MappingProxyType(params),
+            context=context,
+            matched_context=matched_context,
+        )
+
+    def tell(self, trial: Trial, result: float | Sequence[float] | np.ndarray) -> TellResult:
+        """Submit the objective result for a reserved trial."""
+        claim = self._claims_by_id.pop(trial.id, None)
+        if claim is None:
+            msg = "Unknown trial."
+            raise RuntimeError(msg)
+        self._claimed_sample_indices.discard(claim.sample_index)
+
+        completed_batch = self._scheduler.record_result(claim.sample_index, claim.context, _normalize_result(result))
         if completed_batch:
-            results = self._scheduler.completed_results()
-            ranking = sorted(range(len(results)), key=lambda idx: results[idx], reverse=True)
-            status = self._xnes.tell(self._scheduler.batch_z, ranking)
-
-            restarted = status is not XNESStatus.OK
-            if restarted:
-                self._restart_distribution()
-            else:
-                self._reset_batch()
-            return Report(True, matched_context, status, restarted)
-
-        self._apply_active_sample_values()
-        return Report(False, matched_context, XNESStatus.OK, False)
+            status, restarted = self._complete_batch()
+            return TellResult(True, claim.matched_context, status, restarted)
+        return TellResult(False, claim.matched_context, XNESStatus.OK, False)
 
     def set_best(self) -> None:
         """Set all registered parameter values to the current population mean.
@@ -354,7 +338,7 @@ class Optimizer:
         This mutates exposed `Parameter` views in place without changing
         optimizer state. It is intended for evaluation/inference after training.
         To continue training afterwards, restore a previously saved state and
-        resume the normal `load -> optional set_context -> evaluate -> tell ->
+        resume the normal `load -> ask -> evaluate -> tell ->
         save` flow.
         """
 
@@ -463,14 +447,7 @@ class Optimizer:
     def _reset_batch(self) -> None:
         batch_z, batch_x = self._xnes.ask(self.pop_size, self._rng)
         self._scheduler.reset(batch_z, batch_x)
-        self._apply_active_sample_values()
-
-    def _apply_active_sample_values(self) -> None:
-        sample_index = self._scheduler.active_sample_index
-        if sample_index is None or self._scheduler.batch_x.shape[1] == 0:
-            return
-        for row, name in enumerate(self._state_names):
-            self._registry[name].value = float(self._scheduler.batch_x[row, sample_index])
+        self._clear_claims()
 
     def _restart_distribution(self) -> None:
         names = self._ordered_names()
@@ -478,6 +455,21 @@ class Optimizer:
         self._xnes = self._new_xnes(loc, scale, np.zeros(len(names), dtype=float))
         self._state_names = names
         self._reset_batch()
+
+    def _complete_batch(self) -> tuple[XNESStatus, bool]:
+        results = self._scheduler.completed_results()
+        ranking = sorted(range(len(results)), key=lambda idx: results[idx], reverse=True)
+        status = self._xnes.tell(self._scheduler.batch_z, ranking)
+        restarted = status is not XNESStatus.OK
+        if restarted:
+            self._restart_distribution()
+        else:
+            self._reset_batch()
+        return status, restarted
+
+    def _clear_claims(self) -> None:
+        self._claims_by_id.clear()
+        self._claimed_sample_indices.clear()
 
 
 def _normalize_result(result: float | Sequence[float] | np.ndarray) -> tuple[float, ...]:
