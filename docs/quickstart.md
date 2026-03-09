@@ -32,7 +32,7 @@ opt.set_best()  # switch parameter views to current population mean for testing
 
 If you resume with a changed parameter set, shared learned state is preserved,
 new parameters start from priors, removed parameters are dropped, and the
-current unfinished batch is discarded.
+current unfinished batch is reconciled rather than discarded.
 On `load(None)`, all currently registered parameters are reported as added.
 
 When switching between training and testing:

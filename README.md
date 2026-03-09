@@ -90,7 +90,7 @@ Important constraints:
 - `add()` is setup-only and must happen before `load()`.
 - The registry is fixed after `load()`.
 - When `load(state)` sees a changed parameter set, shared learned state is reconciled, added parameters start from
-  priors, removed parameters are dropped, and any in-flight batch is discarded.
+  priors, removed parameters are dropped, and any in-flight batch is reconciled rather than discarded.
 - `load(None)` reports all currently registered parameters as added.
 - `save()` must happen after `tell()`, not after `set_context()` and before `tell()`.
 - If `set_context()` is never called, evaluation proceeds in the default batch order.
@@ -113,7 +113,7 @@ Important constraints:
 - `Optimizer.set_best() -> None`
   Overwrite exposed parameter views with the current population mean for evaluation or inference.
 - `LoadResult`
-  Reports parameters added, parameters removed, and whether loading discarded an unfinished batch.
+  Reports parameters added and parameters removed.
 
 ## Configuration
 

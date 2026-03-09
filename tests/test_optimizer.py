@@ -38,6 +38,20 @@ def _read_step_size_path(state: object) -> np.ndarray:
     return np.asarray(step_size_path_json, dtype=float)
 
 
+def _read_batch_z(state: object) -> np.ndarray:
+    assert isinstance(state, dict)
+    batch_z_json = state["batch_z"]
+    assert isinstance(batch_z_json, list)
+    return np.asarray(batch_z_json, dtype=float)
+
+
+def _read_batch_x(state: object) -> np.ndarray:
+    assert isinstance(state, dict)
+    batch_x_json = state["batch_x"]
+    assert isinstance(batch_x_json, list)
+    return np.asarray(batch_x_json, dtype=float)
+
+
 def _read_results(state: object) -> list[tuple[float, ...] | None]:
     assert isinstance(state, dict)
     results_json = state["results"]
@@ -92,7 +106,7 @@ def test_state_save_load_roundtrip() -> None:
     p1 = opt_a.add("alpha", loc=2.0, scale=1.5)
     p2 = opt_a.add("beta", loc=-1.0, scale=2.0)
     load_result = opt_a.load(None)
-    assert load_result == LoadResult(["alpha", "beta"], [], False)
+    assert load_result == LoadResult(["alpha", "beta"], [])
 
     for _ in range(37):
         opt_a.tell(-(p1.value**2 + p2.value**2))
@@ -106,7 +120,7 @@ def test_state_save_load_roundtrip() -> None:
     opt_b.add("beta", loc=-999.0, scale=0.5)
     opt_b.add("alpha", loc=999.0, scale=0.5)
     load_result = opt_b.load(state)
-    assert load_result == LoadResult([], [], False)
+    assert load_result == LoadResult([], [])
     loaded = opt_b.save()
 
     assert _read_names(loaded) == _read_names(state)
@@ -120,7 +134,7 @@ def test_load_reconciles_added_and_removed_parameters() -> None:
     x = base.add("x", loc=2.0, scale=1.5)
     y = base.add("y", loc=-1.0, scale=0.7)
     load_result = base.load(None)
-    assert load_result == LoadResult(["x", "y"], [], False)
+    assert load_result == LoadResult(["x", "y"], [])
 
     for _ in range(5):
         base.tell(-(x.value**2 + 0.5 * y.value**2))
@@ -129,6 +143,9 @@ def test_load_reconciles_added_and_removed_parameters() -> None:
     base_loc = _read_loc(base_state)
     base_scale = _read_scale(base_state)
     base_step_size_path = _read_step_size_path(base_state)
+    base_batch_z = _read_batch_z(base_state)
+    base_batch_x = _read_batch_x(base_state)
+    base_results = _read_results(base_state)
     assert any(result is not None for result in _read_results(base_state))
 
     added = Optimizer()
@@ -137,7 +154,7 @@ def test_load_reconciles_added_and_removed_parameters() -> None:
     added.add("y", loc=999.0, scale=9.0)
     added.add("z", loc=3.0, scale=2.0)
     load_result = added.load(base_state)
-    assert load_result == LoadResult(["z"], [], True)
+    assert load_result == LoadResult(["z"], [])
     added_state = added.save()
 
     assert _read_names(added_state) == ["x", "y", "z"]
@@ -156,7 +173,9 @@ def test_load_reconciles_added_and_removed_parameters() -> None:
         _read_step_size_path(added_state),
         np.array([base_step_size_path[0], base_step_size_path[1], 0.0]),
     )
-    assert all(result is None for result in _read_results(added_state))
+    assert np.allclose(_read_batch_z(added_state), np.vstack([base_batch_z, np.zeros((1, base_batch_z.shape[1]))]))
+    assert np.allclose(_read_batch_x(added_state), np.vstack([base_batch_x, np.full((1, base_batch_x.shape[1]), 3.0)]))
+    assert _read_results(added_state) == base_results
 
     z = next(item for item in added.get_info() if item.name == "z")
     assert z.prior_loc == 3.0
@@ -165,20 +184,28 @@ def test_load_reconciles_added_and_removed_parameters() -> None:
     added.tell(-1.0)
     added_partial_state = added.save()
     assert any(result is not None for result in _read_results(added_partial_state))
+    added_loc = _read_loc(added_state)
+    added_scale = _read_scale(added_state)
+    added_step_size_path = _read_step_size_path(added_state)
+    added_batch_z = _read_batch_z(added_partial_state)
+    added_batch_x = _read_batch_x(added_partial_state)
+    added_results = _read_results(added_partial_state)
 
     removed = Optimizer()
     removed.pop_size = 4
     removed.add("x", loc=-999.0, scale=5.0)
     removed.add("y", loc=-999.0, scale=5.0)
     load_result = removed.load(added_partial_state)
-    assert load_result == LoadResult([], ["z"], True)
+    assert load_result == LoadResult([], ["z"])
     removed_state = removed.save()
 
     assert _read_names(removed_state) == ["x", "y"]
-    assert np.allclose(_read_loc(removed_state), _read_loc(added_state)[:2])
-    assert np.allclose(_read_scale(removed_state), _read_scale(added_state)[:2, :2])
-    assert np.allclose(_read_step_size_path(removed_state), _read_step_size_path(added_state)[:2])
-    assert all(result is None for result in _read_results(removed_state))
+    assert np.allclose(_read_loc(removed_state), added_loc[:2])
+    assert np.allclose(_read_scale(removed_state), added_scale[:2, :2])
+    assert np.allclose(_read_step_size_path(removed_state), added_step_size_path[:2])
+    assert np.allclose(_read_batch_z(removed_state), added_batch_z[:2, :])
+    assert np.allclose(_read_batch_x(removed_state), added_batch_x[:2, :])
+    assert _read_results(removed_state) == added_results
 
 
 def test_registration_order_is_lexicographic() -> None:

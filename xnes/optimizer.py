@@ -89,12 +89,10 @@ class LoadResult:
     Attributes:
         parameters_added: Registered parameter names not present in the loaded state.
         parameters_removed: Loaded parameter names not present in the current registry.
-        batch_discarded: Whether loading discarded the saved in-flight batch.
     """
 
     parameters_added: list[str]
     parameters_removed: list[str]
-    batch_discarded: bool
 
 
 class Optimizer:
@@ -216,15 +214,15 @@ class Optimizer:
         parameter priors. ``load(state)`` restores a previously saved state. If
         the registered parameter set changed, shared coordinates keep their
         learned state, added parameters start from their priors, removed
-        parameters are dropped, and any in-flight batch is discarded.
+        parameters are dropped, and the in-flight batch is reconciled into the
+        new parameter space.
 
         Args:
             state: `None` for a fresh run, or a serialized state produced by
                 `save`.
 
         Returns:
-            A `LoadResult` describing added and removed parameters and whether
-            the saved in-flight batch was discarded.
+            A `LoadResult` describing added and removed parameters.
 
         Raises:
             RuntimeError: If no parameters have been registered yet.
@@ -237,7 +235,7 @@ class Optimizer:
         if state is None:
             self._reset_from_priors()
             self._loaded = True
-            return LoadResult(parameters_added=list(expected_names), parameters_removed=[], batch_discarded=False)
+            return LoadResult(parameters_added=list(expected_names), parameters_removed=[])
 
         state_obj = cast(Mapping[str, object], state)
 
@@ -262,21 +260,17 @@ class Optimizer:
             scale,
             step_size_path,
         )
-        names_changed = names != expected_names
+        batch_z, batch_x = self._reconcile_batch_state(names, expected_names, batch_z, batch_x)
 
         self._rng.bit_generator.state = dict(cast(Mapping[str, object], state_obj["rng_state"]))
         self._xnes = self._new_xnes(loc, scale, step_size_path)
         self._state_names = expected_names
-        if names_changed:
-            self._reset_batch()
-        else:
-            self._scheduler.restore(batch_z, batch_x, results, context_waiting)
-            self._apply_active_sample_values()
+        self._scheduler.restore(batch_z, batch_x, results, context_waiting)
+        self._apply_active_sample_values()
         self._loaded = True
         return LoadResult(
             parameters_added=parameters_added,
             parameters_removed=parameters_removed,
-            batch_discarded=names_changed,
         )
 
     def _reset_from_priors(self) -> None:
@@ -427,6 +421,30 @@ class Optimizer:
             ]
 
         return reconciled_loc, reconciled_scale, reconciled_step_size_path
+
+    def _reconcile_batch_state(
+        self,
+        saved_names: list[str],
+        current_names: list[str],
+        batch_z: np.ndarray,
+        batch_x: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        sample_count = batch_x.shape[1]
+        reconciled_batch_z = np.zeros((len(current_names), sample_count), dtype=float)
+        reconciled_batch_x = np.tile(
+            np.array([self._priors[name].loc for name in current_names], dtype=float).reshape(-1, 1),
+            (1, sample_count),
+        )
+
+        saved_index = {name: idx for idx, name in enumerate(saved_names)}
+        for current_idx, name in enumerate(current_names):
+            saved_idx = saved_index.get(name)
+            if saved_idx is None:
+                continue
+            reconciled_batch_z[current_idx, :] = batch_z[saved_idx, :]
+            reconciled_batch_x[current_idx, :] = batch_x[saved_idx, :]
+
+        return reconciled_batch_z, reconciled_batch_x
 
     def _new_xnes(self, loc: np.ndarray, scale: np.ndarray, step_size_path: np.ndarray) -> XNES:
         xnes = XNES(
