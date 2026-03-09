@@ -6,7 +6,7 @@ from typing import cast
 import numpy as np
 from xnes._scheduler import JSONValue
 
-from xnes import Optimizer, ParameterInfo, Report, XNESStatus
+from xnes import LoadResult, Optimizer, ParameterInfo, Report, XNESStatus
 
 
 def _read_loc(state: object) -> np.ndarray:
@@ -36,6 +36,13 @@ def _read_step_size_path(state: object) -> np.ndarray:
     step_size_path_json = state["step_size_path"]
     assert isinstance(step_size_path_json, list)
     return np.asarray(step_size_path_json, dtype=float)
+
+
+def _read_results(state: object) -> list[tuple[float, ...] | None]:
+    assert isinstance(state, dict)
+    results_json = state["results"]
+    assert isinstance(results_json, list)
+    return [None if row is None else tuple(float(value) for value in row) for row in results_json]
 
 
 def _run_function_optimization(
@@ -84,7 +91,8 @@ def test_state_save_load_roundtrip() -> None:
     opt_a.pop_size = 20
     p1 = opt_a.add("alpha", loc=2.0, scale=1.5)
     p2 = opt_a.add("beta", loc=-1.0, scale=2.0)
-    opt_a.load(None)
+    load_result = opt_a.load(None)
+    assert load_result == LoadResult(["alpha", "beta"], [], False)
 
     for _ in range(37):
         opt_a.tell(-(p1.value**2 + p2.value**2))
@@ -97,12 +105,80 @@ def test_state_save_load_roundtrip() -> None:
     opt_b.pop_size = 20
     opt_b.add("beta", loc=-999.0, scale=0.5)
     opt_b.add("alpha", loc=999.0, scale=0.5)
-    opt_b.load(state)
+    load_result = opt_b.load(state)
+    assert load_result == LoadResult([], [], False)
     loaded = opt_b.save()
 
     assert _read_names(loaded) == _read_names(state)
     assert np.allclose(_read_loc(loaded), _read_loc(state))
     assert np.allclose(_read_scale(loaded), _read_scale(state))
+
+
+def test_load_reconciles_added_and_removed_parameters() -> None:
+    base = Optimizer()
+    base.pop_size = 4
+    x = base.add("x", loc=2.0, scale=1.5)
+    y = base.add("y", loc=-1.0, scale=0.7)
+    load_result = base.load(None)
+    assert load_result == LoadResult(["x", "y"], [], False)
+
+    for _ in range(5):
+        base.tell(-(x.value**2 + 0.5 * y.value**2))
+
+    base_state = base.save()
+    base_loc = _read_loc(base_state)
+    base_scale = _read_scale(base_state)
+    base_step_size_path = _read_step_size_path(base_state)
+    assert any(result is not None for result in _read_results(base_state))
+
+    added = Optimizer()
+    added.pop_size = 4
+    added.add("x", loc=999.0, scale=9.0)
+    added.add("y", loc=999.0, scale=9.0)
+    added.add("z", loc=3.0, scale=2.0)
+    load_result = added.load(base_state)
+    assert load_result == LoadResult(["z"], [], True)
+    added_state = added.save()
+
+    assert _read_names(added_state) == ["x", "y", "z"]
+    assert np.allclose(_read_loc(added_state), np.array([base_loc[0], base_loc[1], 3.0]))
+    assert np.allclose(
+        _read_scale(added_state),
+        np.array(
+            [
+                [base_scale[0, 0], base_scale[0, 1], 0.0],
+                [base_scale[1, 0], base_scale[1, 1], 0.0],
+                [0.0, 0.0, 2.0],
+            ]
+        ),
+    )
+    assert np.allclose(
+        _read_step_size_path(added_state),
+        np.array([base_step_size_path[0], base_step_size_path[1], 0.0]),
+    )
+    assert all(result is None for result in _read_results(added_state))
+
+    z = next(item for item in added.get_info() if item.name == "z")
+    assert z.prior_loc == 3.0
+    assert z.prior_scale == 2.0
+
+    added.tell(-1.0)
+    added_partial_state = added.save()
+    assert any(result is not None for result in _read_results(added_partial_state))
+
+    removed = Optimizer()
+    removed.pop_size = 4
+    removed.add("x", loc=-999.0, scale=5.0)
+    removed.add("y", loc=-999.0, scale=5.0)
+    load_result = removed.load(added_partial_state)
+    assert load_result == LoadResult([], ["z"], True)
+    removed_state = removed.save()
+
+    assert _read_names(removed_state) == ["x", "y"]
+    assert np.allclose(_read_loc(removed_state), _read_loc(added_state)[:2])
+    assert np.allclose(_read_scale(removed_state), _read_scale(added_state)[:2, :2])
+    assert np.allclose(_read_step_size_path(removed_state), _read_step_size_path(added_state)[:2])
+    assert all(result is None for result in _read_results(removed_state))
 
 
 def test_registration_order_is_lexicographic() -> None:

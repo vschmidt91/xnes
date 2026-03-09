@@ -82,6 +82,21 @@ class Report:
     restarted: bool
 
 
+@dataclass(frozen=True)
+class LoadResult:
+    """Outcome of one `Optimizer.load` call.
+
+    Attributes:
+        parameters_added: Registered parameter names not present in the loaded state.
+        parameters_removed: Loaded parameter names not present in the current registry.
+        batch_discarded: Whether loading discarded the saved in-flight batch.
+    """
+
+    parameters_added: list[str]
+    parameters_removed: list[str]
+    batch_discarded: bool
+
+
 class Optimizer:
     """Maximizing optimizer with named scalar parameters.
 
@@ -194,37 +209,39 @@ class Optimizer:
             "rng_state": dict(self._rng.bit_generator.state),
         }
 
-    def load(self, state: object) -> None:
+    def load(self, state: object) -> LoadResult:
         """Restore optimizer state or initialize a fresh run.
 
         ``load(None)`` initializes a fresh optimizer state from the registered
-        parameter priors. ``load(state)`` restores a previously saved state.
+        parameter priors. ``load(state)`` restores a previously saved state. If
+        the registered parameter set changed, shared coordinates keep their
+        learned state, added parameters start from their priors, removed
+        parameters are dropped, and any in-flight batch is discarded.
 
         Args:
             state: `None` for a fresh run, or a serialized state produced by
                 `save`.
 
+        Returns:
+            A `LoadResult` describing added and removed parameters and whether
+            the saved in-flight batch was discarded.
+
         Raises:
             RuntimeError: If no parameters have been registered yet.
-            ValueError: If the saved parameter names do not match the
-                registered names.
         """
 
         if not self._registry:
             msg = "Register parameters with add() before load()."
             raise RuntimeError(msg)
+        expected_names = self._ordered_names()
         if state is None:
             self._reset_from_priors()
             self._loaded = True
-            return
+            return LoadResult(parameters_added=list(expected_names), parameters_removed=[], batch_discarded=False)
 
         state_obj = cast(Mapping[str, object], state)
 
         names = cast(list[str], state_obj["names"])
-        expected_names = self._ordered_names()
-        if names != expected_names:
-            msg = "Loaded parameter names must match the registered names."
-            raise ValueError(msg)
         loc = np.asarray(state_obj["loc"], dtype=float)
         scale = np.asarray(state_obj["scale"], dtype=float)
         step_size_path_json = state_obj["step_size_path"]
@@ -236,12 +253,31 @@ class Optimizer:
         context_waiting_rows = cast(Sequence[tuple[str, int]], state_obj["context_waiting"])
         context_waiting = dict(context_waiting_rows)
 
+        parameters_added = [name for name in expected_names if name not in names]
+        parameters_removed = [name for name in names if name not in expected_names]
+        loc, scale, step_size_path = self._reconcile_distribution_state(
+            names,
+            expected_names,
+            loc,
+            scale,
+            step_size_path,
+        )
+        names_changed = names != expected_names
+
         self._rng.bit_generator.state = dict(cast(Mapping[str, object], state_obj["rng_state"]))
         self._xnes = self._new_xnes(loc, scale, step_size_path)
         self._state_names = expected_names
-        self._scheduler.restore(batch_z, batch_x, results, context_waiting)
-        self._apply_active_sample_values()
+        if names_changed:
+            self._reset_batch()
+        else:
+            self._scheduler.restore(batch_z, batch_x, results, context_waiting)
+            self._apply_active_sample_values()
         self._loaded = True
+        return LoadResult(
+            parameters_added=parameters_added,
+            parameters_removed=parameters_removed,
+            batch_discarded=names_changed,
+        )
 
     def _reset_from_priors(self) -> None:
         names = self._ordered_names()
@@ -360,6 +396,37 @@ class Optimizer:
         loc = np.array([self._priors[name].loc for name in names], dtype=float)
         scale_diag = np.array([self._priors[name].scale for name in names], dtype=float)
         return loc, np.diag(scale_diag)
+
+    def _reconcile_distribution_state(
+        self,
+        saved_names: list[str],
+        current_names: list[str],
+        loc: np.ndarray,
+        scale: np.ndarray,
+        step_size_path: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        reconciled_loc, reconciled_scale = self._build_initial_state(current_names)
+        reconciled_step_size_path = np.zeros(len(current_names), dtype=float)
+
+        saved_index = {name: idx for idx, name in enumerate(saved_names)}
+        shared_current_indices: list[int] = []
+        shared_saved_indices: list[int] = []
+
+        for current_idx, name in enumerate(current_names):
+            saved_idx = saved_index.get(name)
+            if saved_idx is None:
+                continue
+            shared_current_indices.append(current_idx)
+            shared_saved_indices.append(saved_idx)
+            reconciled_loc[current_idx] = float(loc[saved_idx])
+            reconciled_step_size_path[current_idx] = float(step_size_path[saved_idx])
+
+        if shared_current_indices:
+            reconciled_scale[np.ix_(shared_current_indices, shared_current_indices)] = scale[
+                np.ix_(shared_saved_indices, shared_saved_indices)
+            ]
+
+        return reconciled_loc, reconciled_scale, reconciled_step_size_path
 
     def _new_xnes(self, loc: np.ndarray, scale: np.ndarray, step_size_path: np.ndarray) -> XNES:
         xnes = XNES(

@@ -15,7 +15,7 @@ opt = Optimizer()
 opt.pop_size = 32
 coeff_1 = opt.add("coeff_1", loc=2.0, scale=3.0)
 coeff_2 = opt.add("coeff_2")
-opt.load(state)
+load_result = opt.load(state)
 
 for _ in range(500):
     # Optional: mirrored-sample matching for recurring JSON-serializable
@@ -29,6 +29,11 @@ opt.set_best()  # switch parameter views to current population mean for testing
 ```
 
 `tell` uses maximize semantics. To minimize an objective `f(x)`, pass `-f(x)`.
+
+If you resume with a changed parameter set, shared learned state is preserved,
+new parameters start from priors, removed parameters are dropped, and the
+current unfinished batch is discarded.
+On `load(None)`, all currently registered parameters are reported as added.
 
 When switching between training and testing:
 - Training: evaluate sampled `Parameter.value` and call `tell`.

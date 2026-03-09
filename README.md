@@ -58,7 +58,7 @@ opt.pop_size = 32
 coeff_1 = opt.add("coeff_1", loc=2.0, scale=3.0)
 coeff_2 = opt.add("coeff_2")
 
-opt.load(state)
+load_result = opt.load(state)
 
 for _ in range(500):
     # Optional: use any JSON-serializable context to match mirrored samples.
@@ -89,6 +89,9 @@ Important constraints:
 
 - `add()` is setup-only and must happen before `load()`.
 - The registry is fixed after `load()`.
+- When `load(state)` sees a changed parameter set, shared learned state is reconciled, added parameters start from
+  priors, removed parameters are dropped, and any in-flight batch is discarded.
+- `load(None)` reports all currently registered parameters as added.
 - `save()` must happen after `tell()`, not after `set_context()` and before `tell()`.
 - If `set_context()` is never called, evaluation proceeds in the default batch order.
 - `set_context()` accepts JSON-serializable values and stores only a stable hash, not the original object.
@@ -97,8 +100,8 @@ Important constraints:
 
 - `Optimizer.add(name, loc=0.0, scale=1.0) -> Parameter`
   Register a named scalar parameter and get its mutable sampled view.
-- `Optimizer.load(state) -> None`
-  Initialize from priors with `None` or restore a previous snapshot from `save()`.
+- `Optimizer.load(state) -> LoadResult`
+  Initialize from priors with `None`, or restore and reconcile a previous snapshot from `save()`.
 - `Optimizer.tell(result) -> Report`
   Submit one scalar or tuple-like objective result for the current sample.
 - `Optimizer.save() -> dict[str, object]`
@@ -109,6 +112,8 @@ Important constraints:
   Inspect current values, means, scales, and registration priors.
 - `Optimizer.set_best() -> None`
   Overwrite exposed parameter views with the current population mean for evaluation or inference.
+- `LoadResult`
+  Reports parameters added, parameters removed, and whether loading discarded an unfinished batch.
 
 ## Configuration
 

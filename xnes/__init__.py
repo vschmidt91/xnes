@@ -14,7 +14,7 @@ Example:
     ```
 """
 
-from .optimizer import Optimizer, Parameter, ParameterInfo, Report
+from .optimizer import LoadResult, Optimizer, Parameter, ParameterInfo, Report
 from .xnes import XNES, XNESStatus
 
-__all__ = ["Optimizer", "Parameter", "ParameterInfo", "Report", "XNES", "XNESStatus"]
+__all__ = ["Optimizer", "Parameter", "ParameterInfo", "Report", "LoadResult", "XNES", "XNESStatus"]

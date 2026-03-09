@@ -8,6 +8,8 @@
 
 ::: xnes.Report
 
+::: xnes.LoadResult
+
 ::: xnes.XNESStatus
 
 ::: xnes.XNES
