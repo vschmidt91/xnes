@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import cast
 
 import numpy as np
-from xnes._scheduler import JSONValue
 
 from xnes import LoadResult, Optimizer, ParameterInfo, Report, XNESStatus
 
@@ -254,7 +252,7 @@ def test_context_reuses_mirror_on_repeat() -> None:
     x = optimizer.add("x", loc=0.0, scale=1.0)
     y = optimizer.add("y", loc=0.0, scale=1.0)
     optimizer.load(None)
-    context: JSONValue = {"map": "arena", "opponent": {"race": "zerg"}}
+    context = "arena:zerg"
 
     first = np.array([x.value, y.value], dtype=float)
     assert optimizer.set_context(context) is False
@@ -276,7 +274,7 @@ def test_save_requires_tell_after_context() -> None:
     optimizer.pop_size = 4
     optimizer.add("x", loc=0.0, scale=1.0)
     optimizer.load(None)
-    optimizer.set_context({"job": 1})
+    optimizer.set_context("job:1")
 
     try:
         optimizer.save()
@@ -286,18 +284,18 @@ def test_save_requires_tell_after_context() -> None:
         raise AssertionError("save() should reject in-flight context state")
 
 
-def test_set_context_rejects_non_json_serializable_value() -> None:
+def test_set_context_rejects_non_string_value() -> None:
     optimizer = Optimizer()
     optimizer.pop_size = 4
     optimizer.add("x", loc=0.0, scale=1.0)
     optimizer.load(None)
 
     try:
-        optimizer.set_context(cast(JSONValue, {"bad": object()}))
+        optimizer.set_context(1)  # type: ignore[arg-type]
     except TypeError:
         pass
     else:
-        raise AssertionError("set_context() should reject non-JSON-serializable values")
+        raise AssertionError("set_context() should reject non-string values")
 
 
 def test_runtime_config_is_not_persisted_or_loaded() -> None:

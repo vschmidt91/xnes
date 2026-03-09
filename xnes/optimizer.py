@@ -21,7 +21,7 @@ from typing import cast
 
 import numpy as np
 
-from ._scheduler import BatchScheduler, JSONValue
+from ._scheduler import BatchScheduler
 from .xnes import XNES, XNESStatus
 
 
@@ -189,7 +189,7 @@ class Optimizer:
             RuntimeError: If called after `set_context` but before `tell`.
         """
 
-        if self._scheduler.active_context_hash is not None:
+        if self._scheduler.active_context is not None:
             msg = "Cannot save after set_context() before tell()."
             raise RuntimeError(msg)
 
@@ -201,9 +201,7 @@ class Optimizer:
             "batch_z": self._scheduler.batch_z.tolist(),
             "batch_x": self._scheduler.batch_x.tolist(),
             "results": [None if item is None else list(item) for item in self._scheduler.results],
-            "context_waiting": [
-                [context_hash, sample_idx] for context_hash, sample_idx in self._scheduler.context_waiting.items()
-            ],
+            "context_waiting": dict(self._scheduler.context_waiting),
             "rng_state": dict(self._rng.bit_generator.state),
         }
 
@@ -248,8 +246,7 @@ class Optimizer:
         batch_x = np.asarray(state_obj["batch_x"], dtype=float)
         result_rows = cast(Sequence[Sequence[float] | None], state_obj["results"])
         results = [None if row is None else tuple(float(value) for value in row) for row in result_rows]
-        context_waiting_rows = cast(Sequence[tuple[str, int]], state_obj["context_waiting"])
-        context_waiting = dict(context_waiting_rows)
+        context_waiting = dict(cast(Mapping[str, int], state_obj["context_waiting"]))
 
         parameters_added = [name for name in expected_names if name not in names]
         parameters_removed = [name for name in names if name not in expected_names]
@@ -280,33 +277,34 @@ class Optimizer:
         self._state_names = names
         self._reset_batch()
 
-    def set_context(self, context: JSONValue) -> bool:
-        """Retarget the current sample selection using a JSON-serializable context.
+    def set_context(self, context: str) -> bool:
+        """Retarget the current sample selection using a string context.
 
-        The context is converted to a stable JSON hash immediately and only the
-        hash is retained. If the same context was already seen for one side of
-        a mirrored pair in the current batch, the mirrored sample is selected.
-        Otherwise the current pending sample stays selected.
+        If the same context string was already seen for one side of a mirrored
+        pair in the current batch, the mirrored sample is selected. Otherwise
+        the current pending sample stays selected.
 
         This method is optional. If it is never called, sampling proceeds in the
         default batch order.
 
         Args:
-            context: JSON-serializable objective-context identifier, such as a
-                scalar, list, or dictionary.
+            context: Human-readable objective-context identifier.
 
         Returns:
             `True` iff sample selection used the mirrored partner of a previously seen matching context.
 
         Raises:
             RuntimeError: If called before `load`.
-            TypeError: If `context` cannot be serialized by `json.dumps`.
+            TypeError: If `context` is not a string.
         """
         if not self._loaded:
             msg = "Call load() before set_context()."
             raise RuntimeError(msg)
         if self._scheduler.active_sample_index is None:
             return False
+        if not isinstance(context, str):
+            msg = "context must be a string."
+            raise TypeError(msg)
 
         matched_context = self._scheduler.set_context(context)
         self._apply_active_sample_values()

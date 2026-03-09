@@ -18,9 +18,9 @@ coeff_2 = opt.add("coeff_2")
 load_result = opt.load(state)
 
 for _ in range(500):
-    # Optional: mirrored-sample matching for recurring JSON-serializable
-    # contexts such as shards, opponents, maps, or task variants.
-    # opt.set_context({"task": "validation", "shard": 0})
+    # Optional: mirrored-sample matching for recurring string contexts
+    # such as shards, opponents, maps, or task variants.
+    # opt.set_context("validation:shard-0")
     value = coeff_1.value + np.exp(coeff_2.value)
     opt.tell(-value**2)
     state_path.write_text(json.dumps(opt.save()))

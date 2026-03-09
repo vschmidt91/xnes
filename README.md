@@ -12,7 +12,7 @@ agents, or other black-box programs where runs are noisy, resumable, and often o
 - Argument-free `Optimizer()` wrapper with sensible defaults inherited from `XNES`.
 - Named scalar parameters via `add(...)`, with lexicographic ordering independent of registration order.
 - JSON-compatible optimizer state through `save()` and `load(...)`.
-- Optional mirrored-sample routing through `set_context(...)` using JSON-serializable context values.
+- Optional mirrored-sample routing through `set_context(...)` using human-readable string contexts.
 
 ## Requirements
 
@@ -61,8 +61,8 @@ coeff_2 = opt.add("coeff_2")
 load_result = opt.load(state)
 
 for _ in range(500):
-    # Optional: use any JSON-serializable context to match mirrored samples.
-    # opt.set_context({"task": "validation", "shard": 0})
+    # Optional: use a string context to match mirrored samples.
+    # opt.set_context("validation:shard-0")
 
     value = coeff_1.value + np.exp(coeff_2.value)
     report = opt.tell(-value**2)  # `tell` maximizes, so minimize via `-f`
@@ -94,7 +94,7 @@ Important constraints:
 - `load(None)` reports all currently registered parameters as added.
 - `save()` must happen after `tell()`, not after `set_context()` and before `tell()`.
 - If `set_context()` is never called, evaluation proceeds in the default batch order.
-- `set_context()` accepts JSON-serializable values and stores only a stable hash, not the original object.
+- `set_context()` accepts strings and stores them directly in saved state.
 
 ## Core API
 
@@ -107,7 +107,7 @@ Important constraints:
 - `Optimizer.save() -> dict[str, object]`
   Return a JSON-compatible snapshot of optimizer state.
 - `Optimizer.set_context(context) -> bool`
-  Retarget the current sample using a JSON-serializable context value.
+  Retarget the current sample using a string context value.
 - `Optimizer.get_info() -> list[ParameterInfo]`
   Inspect current values, means, scales, and registration priors.
 - `Optimizer.set_best() -> None`

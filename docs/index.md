@@ -13,5 +13,5 @@ The docs are split into two parts:
 - an API reference generated from the source code and docstrings
 
 The implementation keeps parameter ordering lexicographic, so registration order
-does not affect the state layout. Context matching uses stable hashes of
-JSON-serializable values rather than object identity.
+does not affect the state layout. Context matching uses explicit string labels,
+so saved optimizer state keeps those labels human readable.
