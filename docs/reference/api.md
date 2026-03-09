@@ -2,10 +2,6 @@
 
 ::: xnes.Optimizer
 
-::: xnes.Parameter
-
-::: xnes.ParameterInfo
-
 ::: xnes.TellResult
 
 ::: xnes.LoadResult

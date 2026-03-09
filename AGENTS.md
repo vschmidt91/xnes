@@ -38,3 +38,4 @@ in decreasing priority:
 - don't worry about backwards compatibility, especially w.r.t. optimizer state
 - we are ion prototype/research phase
 - keep safety checks and error handling at a minimum
+- project uses poetry, use `poetry run ...` for testing etc.

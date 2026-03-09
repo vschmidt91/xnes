@@ -86,7 +86,7 @@ The wrapper is intentionally strict. The expected loop is:
 Important constraints:
 
 - `add()` is setup-only and must happen before `load()`.
-- The registry is fixed after `load()`.
+- The registered parameter set is fixed after `load()`.
 - When `load(state)` sees a changed parameter set, shared learned state is reconciled, added parameters start from
   priors, removed parameters are dropped, and any in-flight batch is reconciled rather than discarded.
 - `load(None)` reports all currently registered parameters as added.
@@ -96,8 +96,8 @@ Important constraints:
 
 ## Core API
 
-- `Optimizer.add(name, loc=0.0, scale=1.0) -> Parameter`
-  Register a named scalar parameter and get its mutable sampled view.
+- `Optimizer.add(name, loc=0.0, scale=1.0) -> None`
+  Register a named scalar parameter.
 - `Optimizer.load(state) -> LoadResult`
   Initialize from priors with `None`, or restore and reconcile a previous snapshot from `save()`.
 - `Optimizer.ask(context=None) -> Parameters`
@@ -106,10 +106,6 @@ Important constraints:
   Submit one scalar or tuple-like objective result for reserved parameters.
 - `Optimizer.save() -> dict[str, object]`
   Return a JSON-compatible snapshot of optimizer state.
-- `Optimizer.get_info() -> list[ParameterInfo]`
-  Inspect current values, means, scales, and registration priors.
-- `Optimizer.set_best() -> None`
-  Overwrite exposed parameter views with the current population mean for evaluation or inference.
 - `LoadResult`
   Reports parameters added and parameters removed.
 - `Parameters`
@@ -145,12 +141,9 @@ Behavior:
 - Higher tuples are better.
 - This is not a Pareto or multiobjective optimizer.
 
-## Training And Inference
+## Training Loop
 
 - During training, follow `load -> ask -> evaluate -> tell -> save`.
-- For evaluation or inference, call `set_best()` to expose the current population mean through each
-  `Parameter.value`.
-- If you want to resume training after `set_best()`, save state before calling it and later restore with `load(...)`.
 
 ## Development
 

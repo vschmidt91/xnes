@@ -10,7 +10,7 @@ The wrapper is designed for a strict checkpointed workflow:
 6. call `tell(params, result)` exactly once for that reservation
 7. call `save`
 
-The registry is fixed once `load` has been called.
+The registered parameter set is fixed once `load` has been called.
 """
 
 from __future__ import annotations
@@ -24,40 +24,6 @@ import numpy as np
 
 from ._scheduler import BatchScheduler
 from .xnes import XNES, XNESStatus
-
-
-@dataclass
-class Parameter:
-    """Mutable scalar parameter view exposed to the user.
-
-    Attributes:
-        name: Stable parameter identifier.
-        value: Current sample value for the active candidate.
-    """
-
-    name: str
-    value: float
-
-
-@dataclass(frozen=True)
-class ParameterInfo:
-    """Immutable snapshot of a registered parameter.
-
-    Attributes:
-        name: Stable parameter identifier.
-        value: Current sampled value exposed through `Parameter`.
-        loc: Current xNES population mean for this parameter.
-        scale: Current diagonal entry of the xNES scale matrix.
-        prior_loc: Registration-time mean used for fresh runs.
-        prior_scale: Registration-time standard deviation used for fresh runs.
-    """
-
-    name: str
-    value: float
-    loc: float
-    scale: float
-    prior_loc: float
-    prior_scale: float
 
 
 @dataclass(frozen=True)
@@ -89,7 +55,7 @@ class LoadResult:
 
     Attributes:
         parameters_added: Registered parameter names not present in the loaded state.
-        parameters_removed: Loaded parameter names not present in the current registry.
+        parameters_removed: Loaded parameter names not present in the current parameter set.
     """
 
     parameters_added: list[str]
@@ -144,7 +110,7 @@ class Optimizer:
     6. call `tell` with that `Parameters` instance
     7. call `save`
 
-    After `load`, the registry is fixed and `add` is no longer
+    After `load`, the registered parameter set is fixed and `add` is no longer
     allowed.
 
     Runtime configuration lives on the instance attributes `csa_enabled`,
@@ -167,7 +133,6 @@ class Optimizer:
         self.eta_B: float | None = None
 
         self._rng = np.random.default_rng()
-        self._registry: dict[str, Parameter] = {}
         self._priors: dict[str, _Prior] = {}
         self._loaded = False
 
@@ -178,8 +143,8 @@ class Optimizer:
         self._claimed_sample_indices: set[int] = set()
         self._next_claim_id = 0
 
-    def add(self, name: str, loc: float = 0.0, scale: float = 1.0) -> Parameter:
-        """Register a parameter or return the existing one.
+    def add(self, name: str, loc: float = 0.0, scale: float = 1.0) -> None:
+        """Register a parameter name.
 
         This is a setup-time operation. It must happen before `load`.
 
@@ -188,11 +153,8 @@ class Optimizer:
             loc: Initial mean used for new parameters.
             scale: Initial standard deviation used for new parameters.
 
-        Returns:
-            The mutable parameter view stored in the registry.
-
         Raises:
-            ValueError: If `scale <= 0`.
+            ValueError: If `scale <= 0` or `name` is already registered.
             RuntimeError: If called after `load`.
         """
 
@@ -200,17 +162,14 @@ class Optimizer:
             msg = "scale must be > 0."
             raise ValueError(msg)
 
-        existing = self._registry.get(name)
-        if existing is not None:
-            return existing
         if self._loaded:
             msg = "Cannot add parameters after load()."
             raise RuntimeError(msg)
+        if name in self._priors:
+            msg = f"Parameter '{name}' is already registered."
+            raise ValueError(msg)
 
-        parameter = Parameter(name=name, value=float(loc))
-        self._registry[name] = parameter
         self._priors[name] = _Prior(loc=float(loc), scale=float(scale))
-        return parameter
 
     def save(self) -> dict[str, object]:
         """Serialize the current optimizer state."""
@@ -247,7 +206,7 @@ class Optimizer:
             RuntimeError: If no parameters have been registered yet.
         """
 
-        if not self._registry:
+        if not self._priors:
             msg = "Register parameters with add() before load()."
             raise RuntimeError(msg)
         expected_names = self._ordered_names()
@@ -323,8 +282,6 @@ class Optimizer:
         self._claims_by_id[claim_id] = claim
 
         params = {name: float(self._scheduler.batch_x[row, sample_index]) for row, name in enumerate(self._state_names)}
-        for name, value in params.items():
-            self._registry[name].value = value
         return Parameters(
             id=claim_id,
             sample_index=sample_index,
@@ -347,41 +304,8 @@ class Optimizer:
             return TellResult(True, claim.matched_context, status, restarted)
         return TellResult(False, claim.matched_context, XNESStatus.OK, False)
 
-    def set_best(self) -> None:
-        """Set all registered parameter values to the current population mean.
-
-        This mutates exposed `Parameter` views in place without changing
-        optimizer state. It is intended for evaluation/inference after training.
-        To continue training afterwards, restore a previously saved state and
-        resume the normal `load -> ask -> evaluate -> tell ->
-        save` flow.
-        """
-
-        for row, name in enumerate(self._state_names):
-            self._registry[name].value = float(self._xnes.mu[row])
-
-    def get_info(self) -> list[ParameterInfo]:
-        """Return immutable snapshots of all registered parameters.
-
-        Returns:
-            Snapshots in lexicographic name order with current sampled values, xNES means/scales, and priors.
-        """
-
-        scale_diag = np.diag(self._xnes.scale)
-        return [
-            ParameterInfo(
-                name=name,
-                value=float(self._registry[name].value),
-                loc=float(self._xnes.mu[row]),
-                scale=float(scale_diag[row]),
-                prior_loc=self._priors[name].loc,
-                prior_scale=self._priors[name].scale,
-            )
-            for row, name in enumerate(self._state_names)
-        ]
-
     def _ordered_names(self) -> list[str]:
-        return sorted(self._registry)
+        return sorted(self._priors)
 
     def _build_initial_state(self, names: list[str]) -> tuple[np.ndarray, np.ndarray]:
         loc = np.array([self._priors[name].loc for name in names], dtype=float)

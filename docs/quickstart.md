@@ -22,8 +22,6 @@ for _ in range(500):
     value = params["coeff_1"] + np.exp(params["coeff_2"])
     opt.tell(params, -value**2)
     state_path.write_text(json.dumps(opt.save()))
-
-opt.set_best()  # switch parameter views to current population mean for testing
 ```
 
 `tell` uses maximize semantics. To minimize an objective `f(x)`, pass `-f(x)`.
@@ -33,7 +31,4 @@ new parameters start from priors, removed parameters are dropped, and the
 current unfinished batch is reconciled rather than discarded.
 On `load(None)`, all currently registered parameters are reported as added.
 
-When switching between training and testing:
-- Training: call `ask`, evaluate `params[...]`, then call `tell(params, result)`.
-- Testing: call `set_best()` and evaluate without `tell`.
-- Resume training: `load(state)` saved before `set_best()`.
+Training loop: call `ask`, evaluate `params[...]`, then call `tell(params, result)`.
