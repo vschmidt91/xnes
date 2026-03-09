@@ -1,6 +1,15 @@
 from __future__ import annotations
 
+import hashlib
+import json
+from typing import Any
+
 import numpy as np
+
+
+def _stable_hash(obj: Any) -> str:
+    data = json.dumps(obj, sort_keys=True, separators=(",", ":"))
+    return hashlib.blake2b(data.encode(), digest_size=16).hexdigest()
 
 
 class BatchScheduler:
@@ -11,9 +20,9 @@ class BatchScheduler:
         self.batch_x: np.ndarray = np.zeros((0, 0))
         self.results: list[tuple[float, ...] | None] = []
         self.active_sample_index: int | None = None
-        self.active_context_hash: int | None = None
+        self.active_context_hash: str | None = None
         self.active_context_matched = False
-        self.context_waiting: dict[int, int] = {}
+        self.context_waiting: dict[str, int] = {}
 
     def reset(self, batch_z: np.ndarray, batch_x: np.ndarray) -> None:
         self.batch_z = batch_z
@@ -28,7 +37,7 @@ class BatchScheduler:
         batch_z: np.ndarray,
         batch_x: np.ndarray,
         results: list[tuple[float, ...] | None],
-        context_waiting: dict[int, int],
+        context_waiting: dict[str, int],
     ) -> None:
         self.batch_z = batch_z
         self.batch_x = batch_x
@@ -46,10 +55,11 @@ class BatchScheduler:
         self._clear_active()
         self._activate_next_sample()
 
-    def set_context(self, context_hash: int) -> bool:
+    def set_context(self, context: Any) -> bool:
         if self.active_sample_index is None:
             return False
 
+        context_hash = _stable_hash(context)
         sample_index, matched_context = self._select_sample_index(context_hash)
         self._set_active_sample(sample_index, context_hash, matched_context)
         return matched_context
@@ -87,7 +97,7 @@ class BatchScheduler:
     def _set_active_sample(
         self,
         sample_index: int,
-        context_hash: int | None = None,
+        context_hash: str | None = None,
         matched_context: bool = False,
     ) -> None:
         self.active_sample_index = sample_index
@@ -99,7 +109,7 @@ class BatchScheduler:
         self.active_context_hash = None
         self.active_context_matched = False
 
-    def _select_sample_index(self, context_hash: int) -> tuple[int, bool]:
+    def _select_sample_index(self, context_hash: str) -> tuple[int, bool]:
         current_index = self.active_sample_index
         current_available = current_index is not None and self.results[current_index] is None
 
@@ -120,7 +130,7 @@ class BatchScheduler:
             raise RuntimeError(msg)
         return sample_index, False
 
-    def _register_context_match(self, sample_index: int, context_hash: int | None) -> None:
+    def _register_context_match(self, sample_index: int, context_hash: str | None) -> None:
         if context_hash is None:
             return
 

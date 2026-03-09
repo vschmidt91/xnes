@@ -224,8 +224,8 @@ class Optimizer:
         batch_x = np.asarray(state_obj["batch_x"], dtype=float)
         result_rows = cast(Sequence[Sequence[float] | None], state_obj["results"])
         results = [None if row is None else tuple(float(value) for value in row) for row in result_rows]
-        context_waiting_rows = cast(Sequence[Sequence[int]], state_obj["context_waiting"])
-        context_waiting = {row[0]: row[1] for row in context_waiting_rows}
+        context_waiting_rows = cast(Sequence[tuple[str, int]], state_obj["context_waiting"])
+        context_waiting = dict(context_waiting_rows)
 
         self._rng.bit_generator.state = dict(cast(Mapping[str, object], state_obj["rng_state"]))
         self._xnes = self._new_xnes(loc, scale, step_size_path)
@@ -268,7 +268,7 @@ class Optimizer:
         if self._scheduler.active_sample_index is None:
             return False
 
-        matched_context = self._scheduler.set_context(hash(context))
+        matched_context = self._scheduler.set_context(context)
         self._apply_active_sample_values()
         return matched_context
 
