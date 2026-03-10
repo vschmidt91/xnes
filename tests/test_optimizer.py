@@ -259,6 +259,40 @@ def test_ask_returns_parameters_mapping() -> None:
     assert params["b"] == params.params["b"]
 
 
+def test_ask_best_returns_current_means_without_context() -> None:
+    optimizer = Optimizer()
+    optimizer.pop_size = 6
+    optimizer.add("b", loc=2.0, scale=1.0)
+    optimizer.add("a", loc=-1.0, scale=1.0)
+    optimizer.load(None)
+
+    best = optimizer.ask_best()
+
+    assert isinstance(best, Mapping)
+    assert list(best) == ["a", "b"]
+    assert best.sample_id is None
+    assert best.context is None
+    assert best.matched_context is False
+    assert best["a"] == -1.0
+    assert best["b"] == 2.0
+
+
+def test_tell_rejects_ask_best_parameters() -> None:
+    optimizer = Optimizer()
+    optimizer.pop_size = 4
+    optimizer.add("x", loc=0.0, scale=1.0)
+    optimizer.load(None)
+
+    best = optimizer.ask_best()
+
+    try:
+        optimizer.tell(best, 1.0)
+    except RuntimeError as exc:
+        assert "ask_best" in str(exc)
+    else:
+        raise AssertionError("tell() should reject deterministic ask_best() parameters")
+
+
 def test_context_reuses_mirror_on_repeat() -> None:
     optimizer = Optimizer()
     optimizer.pop_size = 4

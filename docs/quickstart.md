@@ -22,6 +22,9 @@ for _ in range(500):
     value = params["coeff_1"] + np.exp(params["coeff_2"])
     opt.tell(params, -value**2)
     state_path.write_text(json.dumps(opt.save()))
+
+best = opt.ask_best()
+print(best["coeff_1"], best["coeff_2"])
 ```
 
 `tell` uses maximize semantics. To minimize an objective `f(x)`, pass `-f(x)`.
@@ -32,3 +35,6 @@ current unfinished batch is reconciled rather than discarded.
 On `load(None)`, all currently registered parameters are reported as added.
 
 Training loop: call `ask`, evaluate `params[...]`, then call `tell(params, result)`.
+
+For deterministic inference, call `ask_best()` after `load(...)`. It returns a
+context-free snapshot of the current means and cannot be passed to `tell()`.

@@ -12,6 +12,9 @@ Example:
     for _ in range(100):
         params = opt.ask()
         opt.tell(params, -(params["coeff"] - 3.0) ** 2)
+
+    best = opt.ask_best()
+    print(best["coeff"])
     ```
 """
 

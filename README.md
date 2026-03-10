@@ -13,6 +13,7 @@ agents, or other black-box programs where runs are noisy, resumable, and often o
 - Named scalar parameters via `add(...)`, with lexicographic ordering independent of registration order.
 - JSON-compatible optimizer state through `save()` and `load(...)`.
 - Optional mirrored-sample routing through `ask(context=...)` using human-readable string contexts.
+- Deterministic inference through `ask_best()`, which returns the current means without sampling.
 
 ## Requirements
 
@@ -68,6 +69,9 @@ for _ in range(500):
 
     if report.completed_batch:
         pass
+
+best = opt.ask_best()
+print(best["coeff_1"], best["coeff_2"])
 ```
 
 ## Workflow
@@ -83,6 +87,14 @@ The wrapper is intentionally strict. The expected loop is:
 7. Call `tell(params, result)`.
 8. Persist with `save()`.
 
+For deterministic inference after training:
+
+1. Create `Optimizer()`.
+2. Register parameters with `add(...)`.
+3. Call `load(state)`.
+4. Call `ask_best()`.
+5. Read mean values directly from `params[...]`.
+
 Important constraints:
 
 - `add()` is setup-only and must happen before `load()`.
@@ -91,8 +103,11 @@ Important constraints:
   priors, removed parameters are dropped, and any in-flight batch is reconciled rather than discarded.
 - `load(None)` reports all currently registered parameters as added.
 - `ask()` creates runtime-only reservations; these claims are not persisted.
+- `ask_best()` is context-free and returns a deterministic snapshot of the current means.
+- `ask_best()` returns parameters with `sample_id=None`; they are not sampled reservations.
 - If all samples in a batch are reserved and unresolved, `ask()` raises.
 - If `ask(context=...)` is never used, evaluation proceeds in the default batch order.
+- `tell()` only accepts sampled parameters returned by `ask()`.
 
 ## Core API
 
@@ -102,14 +117,17 @@ Important constraints:
   Initialize from priors with `None`, or restore and reconcile a previous snapshot from `save()`.
 - `Optimizer.ask(context=None) -> Parameters`
   Reserve one sample and return its parameter mapping plus reservation metadata.
+- `Optimizer.ask_best() -> Parameters`
+  Return a deterministic snapshot of the current means. This does not reserve a sample.
 - `Optimizer.tell(params, result) -> TellResult`
-  Submit one scalar or tuple-like objective result for reserved parameters.
+  Submit one scalar or tuple-like objective result for sampled parameters returned by `ask()`.
 - `Optimizer.save() -> dict[str, object]`
   Return a JSON-compatible snapshot of optimizer state.
 - `LoadResult`
   Reports parameters added and parameters removed.
 - `Parameters`
-  Runtime reservation payload returned by `ask()`.
+  Parameter mapping returned by `ask()` or `ask_best()`. Sampled parameters carry a concrete `sample_id`; `ask_best()`
+  returns `sample_id=None`.
 
 ## Configuration
 
@@ -144,6 +162,12 @@ Behavior:
 ## Training Loop
 
 - During training, follow `load -> ask -> evaluate -> tell -> save`.
+
+## Inference
+
+- For deterministic inference, follow `load -> ask_best`.
+- `ask_best()` ignores context because it does not sample.
+- Outputs from `ask_best()` are read-only snapshots of current means and must not be passed to `tell()`.
 
 ## Development
 

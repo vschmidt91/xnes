@@ -5,7 +5,8 @@ update rule and a strict named-parameter wrapper.
 
 It is designed for expensive, stateful evaluation loops where you want to tune
 scalar parameters, checkpoint progress, and optionally route mirrored samples by
-context using `ask(context=...)`.
+context using `ask(context=...)`. For deterministic inference, use
+`ask_best()` to read the current means without sampling.
 
 The docs are split into two parts:
 
@@ -14,4 +15,5 @@ The docs are split into two parts:
 
 The implementation keeps parameter ordering lexicographic, so registration order
 does not affect the state layout. Context matching uses explicit string labels,
-while trial reservations remain runtime-only and are not persisted.
+while trial reservations remain runtime-only and are not persisted. Mean
+snapshots from `ask_best()` are context-free and non-tellable by design.

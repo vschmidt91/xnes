@@ -1,6 +1,6 @@
 """Named-parameter optimizer built on top of the xNES update rule.
 
-The wrapper is designed for a strict checkpointed workflow:
+The wrapper is designed for a strict checkpointed training workflow:
 
 1. create `Optimizer`
 2. register parameters with `add`
@@ -9,6 +9,10 @@ The wrapper is designed for a strict checkpointed workflow:
 5. read sampled values from `Parameters` (e.g. `params["x"]`)
 6. call `tell(params, result)` exactly once for that reservation
 7. call `save`
+
+For deterministic inference, call `ask_best()` to get a read-only snapshot of
+the current means. These parameters are not sampled and cannot be passed to
+`tell()`.
 
 The registered parameter set is fixed once `load` has been called.
 """
@@ -64,14 +68,16 @@ class LoadResult:
 
 @dataclass(frozen=True)
 class Parameters(Mapping[str, float]):
-    """Reserved sample values and reservation metadata returned by `ask`.
+    """Parameter values and reservation metadata returned by `ask` or `ask_best`.
 
-    This is a mapping over sampled parameter values, so values can be read
-    directly via `params["name"]`.
+    This is a mapping over parameter values, so values can be read directly
+    via `params["name"]`. Sampled parameters returned by `ask` carry a
+    concrete `sample_id`; deterministic mean snapshots returned by
+    `ask_best` use `sample_id=None`.
     """
 
     id: int
-    sample_index: int
+    sample_id: int | None
     params: Mapping[str, float]
     context: str | None
     matched_context: bool
@@ -100,7 +106,7 @@ class Optimizer:
     Parameters are registered by name and sampled in lexicographic order so the
     optimization state is independent of registration order.
 
-    Intended call flow:
+    Intended training call flow:
 
     1. create the optimizer
     2. register all parameters with `add`
@@ -109,6 +115,11 @@ class Optimizer:
     5. evaluate sampled parameter values
     6. call `tell` with that `Parameters` instance
     7. call `save`
+
+    For deterministic inference, call `ask_best()` after `load` to read the
+    current parameter means without reserving a sample or interacting with
+    batch state. These parameters are read-only snapshots and cannot be passed
+    to `tell()`.
 
     After `load`, the registered parameter set is fixed and `add` is no longer
     allowed.
@@ -258,7 +269,7 @@ class Optimizer:
         self._reset_batch()
 
     def ask(self, context: str | None = None) -> Parameters:
-        """Reserve a sample for one evaluation run."""
+        """Reserve a sampled parameter set for one evaluation run."""
         if not self._loaded:
             msg = "Call load() before ask()."
             raise RuntimeError(msg)
@@ -284,14 +295,34 @@ class Optimizer:
         params = {name: float(self._scheduler.batch_x[row, sample_index]) for row, name in enumerate(self._state_names)}
         return Parameters(
             id=claim_id,
-            sample_index=sample_index,
+            sample_id=sample_index,
             params=MappingProxyType(params),
             context=context,
             matched_context=matched_context,
         )
 
+    def ask_best(self) -> Parameters:
+        """Return a deterministic, context-free snapshot of the current means."""
+        if not self._loaded:
+            msg = "Call load() before ask_best()."
+            raise RuntimeError(msg)
+
+        params_id = self._next_claim_id
+        self._next_claim_id += 1
+        params = {name: float(self._xnes.mu[row]) for row, name in enumerate(self._state_names)}
+        return Parameters(
+            id=params_id,
+            sample_id=None,
+            params=MappingProxyType(params),
+            context=None,
+            matched_context=False,
+        )
+
     def tell(self, params: Parameters, result: float | Sequence[float] | np.ndarray) -> TellResult:
-        """Submit the objective result for reserved parameters."""
+        """Submit the objective result for sampled parameters returned by `ask`."""
+        if params.sample_id is None:
+            msg = "Parameters from ask_best() were not sampled and cannot be told."
+            raise RuntimeError(msg)
         claim = self._claims_by_id.pop(params.id, None)
         if claim is None:
             msg = "Unknown parameters reservation."
