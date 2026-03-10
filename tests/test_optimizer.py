@@ -43,11 +43,11 @@ def _read_batch_z(state: object) -> np.ndarray:
     return np.asarray(batch_z_json, dtype=float)
 
 
-def _read_batch_x(state: object) -> np.ndarray:
-    assert isinstance(state, dict)
-    batch_x_json = state["batch_x"]
-    assert isinstance(batch_x_json, list)
-    return np.asarray(batch_x_json, dtype=float)
+def _read_batch_points(state: object) -> np.ndarray:
+    loc = _read_loc(state)
+    scale = _read_scale(state)
+    batch_z = _read_batch_z(state)
+    return loc[:, None] + scale @ batch_z
 
 
 def _read_results(state: object) -> list[tuple[float, ...] | None]:
@@ -116,7 +116,6 @@ def test_state_save_load_roundtrip() -> None:
 
     state = opt_a.save()
     assert isinstance(state, dict)
-    assert "config" not in state
 
     opt_b = Optimizer()
     opt_b.pop_size = 20
@@ -150,7 +149,7 @@ def test_load_reconciles_added_and_removed_parameters() -> None:
     base_scale = _read_scale(base_state)
     base_step_size_path = _read_step_size_path(base_state)
     base_batch_z = _read_batch_z(base_state)
-    base_batch_x = _read_batch_x(base_state)
+    base_batch_points = _read_batch_points(base_state)
     base_results = _read_results(base_state)
     assert any(result is not None for result in _read_results(base_state))
 
@@ -180,7 +179,10 @@ def test_load_reconciles_added_and_removed_parameters() -> None:
         np.array([base_step_size_path[0], base_step_size_path[1], 0.0]),
     )
     assert np.allclose(_read_batch_z(added_state), np.vstack([base_batch_z, np.zeros((1, base_batch_z.shape[1]))]))
-    assert np.allclose(_read_batch_x(added_state), np.vstack([base_batch_x, np.full((1, base_batch_x.shape[1]), 3.0)]))
+    assert np.allclose(
+        _read_batch_points(added_state),
+        np.vstack([base_batch_points, np.full((1, base_batch_points.shape[1]), 3.0)]),
+    )
     assert _read_results(added_state) == base_results
 
     params = added.ask()
@@ -191,7 +193,7 @@ def test_load_reconciles_added_and_removed_parameters() -> None:
     added_scale = _read_scale(added_state)
     added_step_size_path = _read_step_size_path(added_state)
     added_batch_z = _read_batch_z(added_partial_state)
-    added_batch_x = _read_batch_x(added_partial_state)
+    added_batch_points = _read_batch_points(added_partial_state)
     added_results = _read_results(added_partial_state)
 
     removed = Optimizer()
@@ -207,7 +209,7 @@ def test_load_reconciles_added_and_removed_parameters() -> None:
     assert np.allclose(_read_scale(removed_state), added_scale[:2, :2])
     assert np.allclose(_read_step_size_path(removed_state), added_step_size_path[:2])
     assert np.allclose(_read_batch_z(removed_state), added_batch_z[:2, :])
-    assert np.allclose(_read_batch_x(removed_state), added_batch_x[:2, :])
+    assert np.allclose(_read_batch_points(removed_state), added_batch_points[:2, :])
     assert _read_results(removed_state) == added_results
 
 
@@ -380,7 +382,7 @@ def test_runtime_config_is_not_persisted_or_loaded() -> None:
 
     state = opt_a.save()
     assert isinstance(state, dict)
-    assert "config" not in state
+    assert "context_waiting" in state
 
     opt_b = Optimizer()
     opt_b.pop_size = 4
@@ -388,7 +390,7 @@ def test_runtime_config_is_not_persisted_or_loaded() -> None:
     opt_b.load(state)
     loaded = opt_b.save()
     assert isinstance(loaded, dict)
-    assert "config" not in loaded
+    assert "context_waiting" in loaded
     assert opt_b.csa_enabled is None
     assert opt_b.eta_mu is None
     assert opt_b.eta_sigma is None

@@ -20,13 +20,13 @@ The registered parameter set is fixed once `load` has been called.
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import cast
 
 import numpy as np
 
-from ._scheduler import BatchScheduler
+from ._scheduler import BatchCompletion, BatchReservation, BatchScheduler
 from .xnes import XNES, XNESStatus
 
 
@@ -76,11 +76,15 @@ class Parameters(Mapping[str, float]):
     `ask_best` use `sample_id=None`.
     """
 
-    id: int
     sample_id: int | None
     params: Mapping[str, float]
     context: str | None
     matched_context: bool
+    _reservation: BatchReservation | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
 
     def __getitem__(self, key: str) -> float:
         return self.params[key]
@@ -90,14 +94,6 @@ class Parameters(Mapping[str, float]):
 
     def __len__(self) -> int:
         return len(self.params)
-
-
-@dataclass(frozen=True)
-class _Claim:
-    id: int
-    sample_index: int
-    context: str | None
-    matched_context: bool
 
 
 class Optimizer:
@@ -150,9 +146,6 @@ class Optimizer:
         self._xnes: XNES = self._new_xnes(np.zeros(0), np.eye(0), np.zeros(0))
         self._state_names: list[str] = []
         self._scheduler = BatchScheduler()
-        self._claims_by_id: dict[int, _Claim] = {}
-        self._claimed_sample_indices: set[int] = set()
-        self._next_claim_id = 0
 
     def add(self, name: str, loc: float = 0.0, scale: float = 1.0) -> None:
         """Register a parameter name.
@@ -190,7 +183,6 @@ class Optimizer:
             "scale": self._xnes.scale.tolist(),
             "step_size_path": self._xnes.p_sigma.tolist(),
             "batch_z": self._scheduler.batch_z.tolist(),
-            "batch_x": self._scheduler.batch_x.tolist(),
             "results": [None if item is None else list(item) for item in self._scheduler.results],
             "context_waiting": dict(self._scheduler.context_waiting),
             "rng_state": dict(self._rng.bit_generator.state),
@@ -234,7 +226,6 @@ class Optimizer:
         step_size_path_json = state_obj["step_size_path"]
         step_size_path = np.asarray(step_size_path_json, dtype=float)
         batch_z = np.asarray(state_obj["batch_z"], dtype=float)
-        batch_x = np.asarray(state_obj["batch_x"], dtype=float)
         result_rows = cast(Sequence[Sequence[float] | None], state_obj["results"])
         results = [None if row is None else tuple(float(value) for value in row) for row in result_rows]
         context_waiting = dict(cast(Mapping[str, int], state_obj["context_waiting"]))
@@ -248,13 +239,12 @@ class Optimizer:
             scale,
             step_size_path,
         )
-        batch_z, batch_x = self._reconcile_batch_state(names, expected_names, batch_z, batch_x)
+        batch_z = self._reconcile_batch_state(names, expected_names, batch_z)
 
         self._rng.bit_generator.state = dict(cast(Mapping[str, object], state_obj["rng_state"]))
         self._xnes = self._new_xnes(loc, scale, step_size_path)
         self._state_names = expected_names
-        self._scheduler.restore(batch_z, batch_x, results, context_waiting)
-        self._clear_claims()
+        self._scheduler.restore(batch_z, results, context_waiting)
         self._loaded = True
         return LoadResult(
             parameters_added=parameters_added,
@@ -274,31 +264,15 @@ class Optimizer:
             msg = "Call load() before ask()."
             raise RuntimeError(msg)
 
-        sample_index, matched_context = self._scheduler.pick_sample(context, self._claimed_sample_indices)
-        if sample_index is None:
-            if self._claimed_sample_indices:
-                msg = "No unclaimed sample available. Pending trials must be told first."
-                raise RuntimeError(msg)
-            if all(item is not None for item in self._scheduler.results):
-                self._complete_batch()
-                sample_index, matched_context = self._scheduler.pick_sample(context, self._claimed_sample_indices)
-            if sample_index is None:
-                msg = "No sample available."
-                raise RuntimeError(msg)
-
-        claim_id = self._next_claim_id
-        self._next_claim_id += 1
-        self._claimed_sample_indices.add(sample_index)
-        claim = _Claim(claim_id, sample_index, context, matched_context)
-        self._claims_by_id[claim_id] = claim
-
-        params = {name: float(self._scheduler.batch_x[row, sample_index]) for row, name in enumerate(self._state_names)}
+        reservation = self._reserve(context)
+        sample = self._xnes.transform(self._scheduler.batch_z[:, [reservation.sample_index]])[:, 0]
+        params = {name: float(sample[row]) for row, name in enumerate(self._state_names)}
         return Parameters(
-            id=claim_id,
-            sample_id=sample_index,
+            sample_id=reservation.sample_index,
             params=MappingProxyType(params),
-            context=context,
-            matched_context=matched_context,
+            context=reservation.context,
+            matched_context=reservation.matched_context,
+            _reservation=reservation,
         )
 
     def ask_best(self) -> Parameters:
@@ -307,11 +281,8 @@ class Optimizer:
             msg = "Call load() before ask_best()."
             raise RuntimeError(msg)
 
-        params_id = self._next_claim_id
-        self._next_claim_id += 1
         params = {name: float(self._xnes.mu[row]) for row, name in enumerate(self._state_names)}
         return Parameters(
-            id=params_id,
             sample_id=None,
             params=MappingProxyType(params),
             context=None,
@@ -323,17 +294,16 @@ class Optimizer:
         if params.sample_id is None:
             msg = "Parameters from ask_best() were not sampled and cannot be told."
             raise RuntimeError(msg)
-        claim = self._claims_by_id.pop(params.id, None)
-        if claim is None:
+        reservation = params._reservation
+        if reservation is None:
             msg = "Unknown parameters reservation."
             raise RuntimeError(msg)
-        self._claimed_sample_indices.discard(claim.sample_index)
 
-        completed_batch = self._scheduler.record_result(claim.sample_index, claim.context, _normalize_result(result))
-        if completed_batch:
-            status, restarted = self._complete_batch()
-            return TellResult(True, claim.matched_context, status, restarted)
-        return TellResult(False, claim.matched_context, XNESStatus.OK, False)
+        completion = self._scheduler.record_result(reservation, _normalize_result(result))
+        if completion is not None:
+            status, restarted = self._complete_batch(completion)
+            return TellResult(True, reservation.matched_context, status, restarted)
+        return TellResult(False, reservation.matched_context, XNESStatus.OK, False)
 
     def _ordered_names(self) -> list[str]:
         return sorted(self._priors)
@@ -379,14 +349,9 @@ class Optimizer:
         saved_names: list[str],
         current_names: list[str],
         batch_z: np.ndarray,
-        batch_x: np.ndarray,
-    ) -> tuple[np.ndarray, np.ndarray]:
-        sample_count = batch_x.shape[1]
+    ) -> np.ndarray:
+        sample_count = batch_z.shape[1]
         reconciled_batch_z = np.zeros((len(current_names), sample_count), dtype=float)
-        reconciled_batch_x = np.tile(
-            np.array([self._priors[name].loc for name in current_names], dtype=float).reshape(-1, 1),
-            (1, sample_count),
-        )
 
         saved_index = {name: idx for idx, name in enumerate(saved_names)}
         for current_idx, name in enumerate(current_names):
@@ -394,9 +359,8 @@ class Optimizer:
             if saved_idx is None:
                 continue
             reconciled_batch_z[current_idx, :] = batch_z[saved_idx, :]
-            reconciled_batch_x[current_idx, :] = batch_x[saved_idx, :]
 
-        return reconciled_batch_z, reconciled_batch_x
+        return reconciled_batch_z
 
     def _new_xnes(self, loc: np.ndarray, scale: np.ndarray, step_size_path: np.ndarray) -> XNES:
         xnes = XNES(
@@ -415,9 +379,8 @@ class Optimizer:
         return xnes
 
     def _reset_batch(self) -> None:
-        batch_z, batch_x = self._xnes.ask(self.pop_size, self._rng)
-        self._scheduler.reset(batch_z, batch_x)
-        self._clear_claims()
+        batch_z = self._xnes.ask(self.pop_size, self._rng)
+        self._scheduler.reset(batch_z)
 
     def _restart_distribution(self) -> None:
         names = self._ordered_names()
@@ -426,10 +389,8 @@ class Optimizer:
         self._state_names = names
         self._reset_batch()
 
-    def _complete_batch(self) -> tuple[XNESStatus, bool]:
-        results = self._scheduler.completed_results()
-        ranking = sorted(range(len(results)), key=lambda idx: results[idx], reverse=True)
-        status = self._xnes.tell(self._scheduler.batch_z, ranking)
+    def _complete_batch(self, completion: BatchCompletion) -> tuple[XNESStatus, bool]:
+        status = self._xnes.tell(self._scheduler.batch_z, completion.ranking)
         restarted = status is not XNESStatus.OK
         if restarted:
             self._restart_distribution()
@@ -437,9 +398,18 @@ class Optimizer:
             self._reset_batch()
         return status, restarted
 
-    def _clear_claims(self) -> None:
-        self._claims_by_id.clear()
-        self._claimed_sample_indices.clear()
+    def _reserve(self, context: str | None) -> BatchReservation:
+        result = self._scheduler.reserve(context)
+        if result is None:
+            msg = "No unclaimed sample available. Pending trials must be told first."
+            raise RuntimeError(msg)
+        if isinstance(result, BatchCompletion):
+            self._complete_batch(result)
+            result = self._scheduler.reserve(context)
+        if not isinstance(result, BatchReservation):
+            msg = "No sample available."
+            raise RuntimeError(msg)
+        return result
 
 
 def _normalize_result(result: float | Sequence[float] | np.ndarray) -> tuple[float, ...]:

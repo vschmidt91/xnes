@@ -28,9 +28,11 @@ def test_xnes_rank_invariance_under_monotonic_transform() -> None:
     rng_b = np.random.default_rng(5)
 
     for _ in range(steps):
-        z_a, x_a = xnes_a.ask(n, rng_a)
-        z_b, _ = xnes_b.ask(n, rng_b)
+        z_a = xnes_a.ask(n, rng_a)
+        x_a = xnes_a.transform(z_a)
+        z_b = xnes_b.ask(n, rng_b)
         assert np.allclose(z_a, z_b)
+        assert np.allclose(x_a, xnes_a.transform(z_a))
 
         raw_scores = -np.sum(x_a**2, axis=0) + 1e-12 * np.arange(n)
         transformed_scores = 3.0 * raw_scores + 2.0
@@ -83,8 +85,8 @@ def test_xnes_linear_invariance_with_stress_values() -> None:
     score_projection = np.array([1.7, -0.2, 3.3], dtype=float)
 
     for _ in range(steps):
-        z_x, _ = xnes_x.ask(n, rng_x)
-        z_y, _ = xnes_y.ask(n, rng_y)
+        z_x = xnes_x.ask(n, rng_x)
+        z_y = xnes_y.ask(n, rng_y)
         assert np.allclose(z_x, z_y)
 
         scores = score_projection @ z_x + 1e-12 * np.arange(n)

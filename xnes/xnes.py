@@ -117,12 +117,27 @@ class XNES:
 
         return self.sigma * self.B
 
+    def transform(self, samples: np.ndarray) -> np.ndarray:
+        """Map standardized samples `z` into parameter-space points `x`."""
+
+        z = np.asarray(samples, dtype=float)
+        if z.ndim != 2:
+            msg = "samples must have shape (dim, n)."
+            raise ValueError(msg)
+        if z.shape[0] != self.dim:
+            msg = f"Sample shape mismatch, expected {self.dim} rows, got {z.shape[0]}"
+            raise ValueError(msg)
+        if not np.all(np.isfinite(z)):
+            msg = "samples must be finite."
+            raise ValueError(msg)
+        return self.mu[:, None] + self.scale @ z
+
     def ask(
         self,
         num_samples: int | None = None,
         rng: np.random.Generator | None = None,
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """Sample a mirrored candidate batch.
+    ) -> np.ndarray:
+        """Sample a mirrored standardized batch.
 
         Args:
             num_samples: Optional batch size. Values below two are clamped, and
@@ -130,12 +145,12 @@ class XNES:
             rng: Optional NumPy random generator.
 
         Returns:
-            Standardized samples `z` together with transformed candidate points `x`.
+            Standardized samples `z`.
         """
 
         if self.dim == 0:
             n = int(num_samples) if num_samples is not None else 4
-            return np.zeros((0, n)), np.zeros((0, n))
+            return np.zeros((0, n))
 
         n = int(num_samples) if num_samples is not None else (4 + int(3 * np.log(self.dim)))
         if n <= 1:
@@ -155,9 +170,7 @@ class XNES:
             basis, _ = qr(raw, mode="economic")
             z_half[:, start:end] = basis * lengths
 
-        z = np.hstack([z_half, -z_half])
-        x = self.mu[:, None] + self.scale @ z
-        return z, x
+        return np.hstack([z_half, -z_half])
 
     def tell(self, samples: np.ndarray, ranking: list[int], eps: float = 1e-10) -> XNESStatus:
         """Apply one xNES update from ranked standardized samples.
