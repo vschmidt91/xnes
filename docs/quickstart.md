@@ -18,11 +18,10 @@ class Params:
 
 
 state_path = Path("optimizer-state.json")
-state = json.loads(state_path.read_text()) if state_path.exists() else None
-
-opt = Optimizer(Params)
-opt.pop_size = 32
-load_result = opt.load(state)
+opt = Optimizer(Params, pop_size=32)
+if state_path.exists():
+    state = json.loads(state_path.read_text())
+    load_result = opt.load(state)
 
 for _ in range(500):
     trial, params = opt.ask(context="validation:shard-0")
@@ -44,11 +43,10 @@ Current schema requirements:
 
 If you resume with a changed schema, shared learned state is preserved, new
 fields start from parameter defaults, removed fields are dropped, and the current
-unfinished batch is reconciled rather than discarded. On `load(None)`, all
-current schema fields are reported as added.
+unfinished batch is reconciled rather than discarded.
 
 Training loop: call `ask`, evaluate `params.field`, then call
 `tell(trial, result)`.
 
-For deterministic inference, call `ask_best()` after `load(...)`. It returns
-the current mean parameters directly.
+For deterministic inference, call `ask_best()`. If you want the means from a
+saved run rather than a fresh optimizer, call `load(...)` first.

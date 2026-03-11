@@ -26,10 +26,7 @@ def _make_identity_schema(schema_name: str, **parameters: tuple[float, float]) -
 
 
 def _initialized_optimizer(schema: type[Any], *, pop_size: int) -> Optimizer[Any]:
-    optimizer: Optimizer[Any] = Optimizer(schema)
-    optimizer.pop_size = pop_size
-    optimizer.load(None)
-    return optimizer
+    return Optimizer(schema, pop_size=pop_size)
 
 
 def _initialized_state(schema: type[Any], *, pop_size: int) -> dict[str, object]:
@@ -133,9 +130,7 @@ def _run_function_optimization(
         "SphereParams",
         **{f"x{i}": (init_loc, init_scale) for i in range(dim)},
     )
-    optimizer: Optimizer[Any] = Optimizer(schema)
-    optimizer.pop_size = pop_size
-    optimizer.load(None)
+    optimizer: Optimizer[Any] = Optimizer(schema, pop_size=pop_size)
 
     initial_loc = _read_loc(optimizer.save())
     initial_value = objective(initial_loc)
@@ -167,10 +162,7 @@ def test_optimizer_improves_sphere() -> None:
 
 def test_state_save_load_roundtrip() -> None:
     schema_a = _make_identity_schema("RoundtripA", alpha=(2.0, 1.5), beta=(-1.0, 2.0))
-    opt_a = Optimizer(schema_a)
-    opt_a.pop_size = 20
-    load_result = opt_a.load(None)
-    assert load_result == SchemaDiff(added=["alpha", "beta"], removed=[], changed=[], unchanged=[])
+    opt_a = Optimizer(schema_a, pop_size=20)
 
     for _ in range(37):
         trial, params = opt_a.ask()
@@ -182,8 +174,7 @@ def test_state_save_load_roundtrip() -> None:
     assert isinstance(state, dict)
 
     schema_b = _make_identity_schema("RoundtripB", beta=(-1.0, 2.0), alpha=(2.0, 1.5))
-    opt_b = Optimizer(schema_b)
-    opt_b.pop_size = 20
+    opt_b = Optimizer(schema_b, pop_size=20)
     load_result = opt_b.load(state)
     assert load_result == SchemaDiff(added=[], removed=[], changed=[], unchanged=["alpha", "beta"])
     loaded = opt_b.save()
@@ -212,10 +203,7 @@ def test_schema_state_is_human_readable_parameter_specs() -> None:
 
 def test_load_reconciles_added_and_removed_parameters() -> None:
     base_schema = _make_identity_schema("BaseSchema", x=(2.0, 1.5), y=(-1.0, 0.7))
-    base = Optimizer(base_schema)
-    base.pop_size = 4
-    load_result = base.load(None)
-    assert load_result == SchemaDiff(added=["x", "y"], removed=[], changed=[], unchanged=[])
+    base = Optimizer(base_schema, pop_size=4)
 
     for _ in range(5):
         trial, params = base.ask()
@@ -233,8 +221,7 @@ def test_load_reconciles_added_and_removed_parameters() -> None:
     assert any(result is not None for result in base_results)
 
     added_schema = _make_identity_schema("AddedSchema", x=(2.0, 1.5), y=(-1.0, 0.7), z=(3.0, 2.0))
-    added = Optimizer(added_schema)
-    added.pop_size = 4
+    added = Optimizer(added_schema, pop_size=4)
     load_result = added.load(base_state)
     assert load_result == SchemaDiff(added=["z"], removed=[], changed=[], unchanged=["x", "y"])
     added_state = added.save()
@@ -274,8 +261,7 @@ def test_load_reconciles_added_and_removed_parameters() -> None:
     assert any(result is not None for result in added_results)
 
     removed_schema = _make_identity_schema("RemovedSchema", x=(2.0, 1.5), y=(-1.0, 0.7))
-    removed = Optimizer(removed_schema)
-    removed.pop_size = 4
+    removed = Optimizer(removed_schema, pop_size=4)
     load_result = removed.load(added_partial_state)
     assert load_result == SchemaDiff(added=[], removed=["z"], changed=[], unchanged=["x", "y"])
     removed_state = removed.save()
@@ -295,9 +281,7 @@ def test_load_reconciles_same_name_spec_changes_and_selectively_preserves_batch(
         x=Parameter(loc=3.0, scale=1.0, min=0.0),
         y=Parameter(loc=-1.0, scale=0.7),
     )
-    base = Optimizer(base_schema)
-    base.pop_size = 4
-    base.load(None)
+    base = Optimizer(base_schema, pop_size=4)
 
     for _ in range(5):
         trial, params = base.ask()
@@ -326,8 +310,7 @@ def test_load_reconciles_same_name_spec_changes_and_selectively_preserves_batch(
         x=Parameter(loc=0.25, scale=2.0, min=0.0, max=1.0),
         y=Parameter(loc=-1.0, scale=0.7),
     )
-    changed = Optimizer(changed_schema)
-    changed.pop_size = 4
+    changed = Optimizer(changed_schema, pop_size=4)
     load_result = changed.load(base_state)
     assert load_result == SchemaDiff(added=[], removed=[], changed=["x"], unchanged=["y"])
     changed_state = changed.save()
@@ -369,8 +352,7 @@ def test_loc_and_scale_changes_trigger_schema_changeover() -> None:
         x=Parameter(loc=4.0, scale=1.5),
         y=Parameter(loc=-1.0, scale=2.0),
     )
-    changed = Optimizer(changed_schema)
-    changed.pop_size = 4
+    changed = Optimizer(changed_schema, pop_size=4)
     load_result = changed.load(base_state)
     assert load_result == SchemaDiff(added=[], removed=[], changed=["x", "y"], unchanged=[])
 
@@ -430,12 +412,8 @@ def test_nested_schema_flattens_leaf_names_and_rebuilds_dataclasses() -> None:
         frozen=True,
     )
 
-    optimizer: Optimizer[Any] = Optimizer(schema)
-    optimizer.pop_size = 6
-    load_result = optimizer.load(None)
-
     expected_names = ["alpha", "combat.attack_threshold", "combat.retreat_threshold", "mining.gas_priority"]
-    assert load_result == SchemaDiff(added=expected_names, removed=[], changed=[], unchanged=[])
+    optimizer: Optimizer[Any] = Optimizer(schema, pop_size=6)
     assert _read_schema_names(optimizer.save()) == expected_names
 
     best = optimizer.ask_best()
@@ -579,13 +557,7 @@ def test_stale_tell_is_rejected() -> None:
 
 def test_runtime_config_is_not_persisted_or_loaded() -> None:
     schema = _make_identity_schema("RuntimeConfig", x=(4.0, 2.0))
-    opt_a = Optimizer(schema)
-    opt_a.pop_size = 14
-    opt_a.csa_enabled = False
-    opt_a.eta_mu = 0.9
-    opt_a.eta_sigma = 0.7
-    opt_a.eta_B = 0.2
-    opt_a.load(None)
+    opt_a = Optimizer(schema, pop_size=14, csa_enabled=False, eta_mu=0.9, eta_sigma=0.7, eta_B=0.2)
     for _ in range(20):
         trial, params = opt_a.ask()
         x = params.x
@@ -595,16 +567,15 @@ def test_runtime_config_is_not_persisted_or_loaded() -> None:
     assert isinstance(state, dict)
     assert "context_pending" in state
 
-    opt_b = Optimizer(schema)
-    opt_b.pop_size = 4
+    opt_b = Optimizer(schema, pop_size=4)
     opt_b.load(state)
     loaded = opt_b.save()
     assert isinstance(loaded, dict)
     assert "context_pending" in loaded
-    assert opt_b.csa_enabled is None
-    assert opt_b.eta_mu is None
-    assert opt_b.eta_sigma is None
-    assert opt_b.eta_B is None
+    assert opt_b.csa_enabled is True
+    assert opt_b.eta_mu == 1.0
+    assert opt_b.eta_sigma == 1.0
+    assert opt_b.eta_B == 1.0
 
 
 def test_restart_on_conditioning_failure() -> None:
@@ -615,8 +586,7 @@ def test_restart_on_conditioning_failure() -> None:
     assert isinstance(state, dict)
     state["scale"] = [[1e-10, 0.0], [0.0, 1e10]]
 
-    restored = Optimizer(schema)
-    restored.pop_size = 10
+    restored = Optimizer(schema, pop_size=10)
     restored.load(state)
 
     for _ in range(10):
@@ -643,8 +613,7 @@ def test_save_load_preserves_optimizer_state() -> None:
         direct_result = -(direct_x**2 + 0.5 * direct_y**2)
         direct.tell(direct_trial, direct_result)
 
-        recreated = Optimizer(schema)
-        recreated.pop_size = 12
+        recreated = Optimizer(schema, pop_size=12)
         recreated.load(recreated_state)
         recreated_trial, recreated_params = recreated.ask()
         recreated_x = recreated_params.x
@@ -668,11 +637,7 @@ def test_transformed_parameters_use_latent_state_but_emit_user_space_values() ->
         c=Parameter(loc=3.0, scale=1.0, min=0.0),
         d=Parameter(loc=3.0, scale=1.0, max=4.0),
     )
-    optimizer = Optimizer(schema)
-    optimizer.pop_size = 6
-    load_result = optimizer.load(None)
-
-    assert load_result == SchemaDiff(added=["a", "b", "c", "d"], removed=[], changed=[], unchanged=[])
+    optimizer = Optimizer(schema, pop_size=6)
 
     state = optimizer.save()
     expected_latent_loc = np.array(
@@ -700,8 +665,7 @@ def test_transformed_parameters_use_latent_state_but_emit_user_space_values() ->
     for trial, _ in samples:
         optimizer.tell(trial, 0.0)
 
-    reloaded = Optimizer(schema)
-    reloaded.pop_size = 6
+    reloaded = Optimizer(schema, pop_size=6)
     reloaded.load(state)
     reloaded_best = reloaded.ask_best()
     assert reloaded_best.a == pytest.approx(best.a)

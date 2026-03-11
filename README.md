@@ -61,11 +61,10 @@ class Params:
 
 
 state_path = Path("optimizer-state.json")
-state = json.loads(state_path.read_text()) if state_path.exists() else None
-
-opt = Optimizer(Params)
-opt.pop_size = 32
-load_result = opt.load(state)
+opt = Optimizer(Params, pop_size=32)
+if state_path.exists():
+    state = json.loads(state_path.read_text())
+    load_result = opt.load(state)
 
 for _ in range(500):
     trial, params = opt.ask(context="validation:shard-0")
@@ -101,7 +100,7 @@ The wrapper is intentionally strict. The expected training loop is:
 
 1. Define a schema dataclass.
 2. Construct `Optimizer(Schema)`.
-3. Call `load(None)` for a fresh run or `load(state)` to resume.
+3. Optionally call `load(state)` to resume from a previous snapshot.
 4. Call `ask(context=...)` to reserve one sampled parameter set.
 5. Read runtime values from `params.field`.
 6. Evaluate exactly once.
@@ -117,8 +116,6 @@ For deterministic inference after training:
 
 Important constraints:
 
-- `load()` must be called before `ask()` or `ask_best()`.
-- `load(None)` reports all current schema fields as added.
 - `load(state)` reconciles changed schemas by persisted parameter definition.
 - Shared learned state is preserved for unchanged fields.
 - Added fields start from their parameter defaults.
@@ -133,10 +130,10 @@ Important constraints:
 
 - `Parameter(loc=0.0, scale=1.0, min=None, max=None)`
   Parameter metadata attached to one schema field. Add `min` and/or `max` for one-sided softplus or two-sided sigmoid bounds.
-- `Optimizer(schema_type)`
+- `Optimizer(schema_type, pop_size=None, csa_enabled=True, eta_mu=1.0, eta_sigma=1.0, eta_B=1.0)`
   Construct a maximizing optimizer over a dataclass schema.
 - `Optimizer.load(state) -> SchemaDiff`
-  Initialize from schema defaults with `None`, or restore and reconcile a previous snapshot from `save()`.
+  Restore and reconcile a previous snapshot from `save()`.
 - `Optimizer.ask(context=None) -> tuple[Trial, T]`
   Reserve one sample and return `(trial, params)`.
 - `Optimizer.ask_best() -> T`
@@ -154,24 +151,24 @@ Important constraints:
 
 ## Configuration
 
-`Optimizer(Schema)` keeps optional tuning on instance attributes:
+`Optimizer(Schema, ...)` takes runtime tuning in the constructor:
 
 ```python
-opt = Optimizer(Params)
-opt.pop_size = 32
-opt.csa_enabled = False
-opt.eta_mu = 0.9
-opt.eta_sigma = 0.7
-opt.eta_B = 0.2
+opt = Optimizer(
+    Params,
+    pop_size=32,
+    csa_enabled=False,
+    eta_mu=0.9,
+    eta_sigma=0.7,
+    eta_B=0.2,
+)
 ```
 
 Behavior:
 
 - Leaving `pop_size` as `None` keeps the xNES default batch size.
 - Odd `pop_size` values are rounded up to the next even value when a new batch is created.
-- Leaving `csa_enabled`, `eta_mu`, `eta_sigma`, or `eta_B` as `None` keeps the defaults defined by `XNES`.
-- A bare `XNES(...)` instance starts with `csa_enabled = True`, `eta_mu = 1.0`, `eta_sigma = 1.0`, and
-  `eta_B = 1.0`.
+- The default runtime settings are `csa_enabled = True`, `eta_mu = 1.0`, `eta_sigma = 1.0`, and `eta_B = 1.0`.
 - `eta_B` scales the built-in dimension-dependent shape learning rate multiplicatively.
 
 ## Objective Semantics

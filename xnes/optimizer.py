@@ -57,20 +57,28 @@ class Optimizer(Generic[T]):
     leaf name rather than dataclass declaration order.
     """
 
-    def __init__(self, schema_type: type[T]) -> None:
-        self.pop_size: int | None = None
-        self.csa_enabled: bool | None = None
-        self.eta_mu: float | None = None
-        self.eta_sigma: float | None = None
-        self.eta_B: float | None = None
+    def __init__(
+        self,
+        schema_type: type[T],
+        pop_size: int | None = None,
+        csa_enabled: bool = True,
+        eta_mu: float = 1.0,
+        eta_sigma: float = 1.0,
+        eta_B: float = 1.0,
+    ) -> None:
+        self.pop_size = pop_size
+        self.csa_enabled = csa_enabled
+        self.eta_mu = eta_mu
+        self.eta_sigma = eta_sigma
+        self.eta_B = eta_B
 
         self._schema: SchemaSpec[T] = parse_schema(schema_type)
         self._rng = np.random.default_rng()
-        self._loaded = False
+        self._scheduler = BatchScheduler()
 
         loc, scale, step_size_path = self._schema.initial_distribution()
         self._xnes: XNES = self._new_xnes(loc, scale, step_size_path)
-        self._scheduler = BatchScheduler()
+        self._sample_batch()
 
     def save(self) -> dict[str, object]:
         """Serialize the current optimizer state into a JSON-compatible mapping."""
@@ -86,19 +94,15 @@ class Optimizer(Generic[T]):
         }
 
     def load(self, state: object) -> SchemaDiff:
-        """Restore optimizer state or initialize a fresh run from schema metadata.
+        """Restore optimizer state from a previous snapshot.
 
-        Passing `None` starts a new run from the schema metadata and reports all
-        current schema leaf names as added. Loading a previous snapshot
-        reconciles added, removed, and changed schema leaves by persisted
-        parameter definition while preserving shared learned state.
+        Loading a previous snapshot reconciles added, removed, and changed
+        schema leaves by persisted parameter definition while preserving shared
+        learned state.
         """
-
-        expected_names = list(self._schema.names)
         if state is None:
-            self._reset_from_schema()
-            self._loaded = True
-            return SchemaDiff(added=expected_names, removed=[], changed=[], unchanged=[])
+            msg = "state must be a saved optimizer snapshot, not None."
+            raise TypeError(msg)
 
         state_obj = cast(Mapping[str, object], state)
 
@@ -132,7 +136,6 @@ class Optimizer(Generic[T]):
         else:
             batch = self._reconcile_batch_state(saved_names, schema_diff, batch, results)
             self._scheduler.restore(batch, results, context_pending)
-        self._loaded = True
         return schema_diff
 
     def _reset_from_schema(self) -> None:
@@ -148,10 +151,6 @@ class Optimizer(Generic[T]):
         dataclass subtrees. The `trial` must be passed back to `tell()`
         exactly once.
         """
-        if not self._loaded:
-            msg = "Call load() before ask()."
-            raise RuntimeError(msg)
-
         batch_trial = self._reserve(context)
         latent_sample = self._xnes.transform(self._scheduler.batch[:, [batch_trial.sample_index]])[:, 0]
         return (
@@ -166,10 +165,6 @@ class Optimizer(Generic[T]):
 
     def ask_best(self) -> T:
         """Return a deterministic, context-free snapshot of the current means."""
-        if not self._loaded:
-            msg = "Call load() before ask_best()."
-            raise RuntimeError(msg)
-
         return self._schema.build_params(self._xnes.mu)
 
     def tell(self, trial: Trial, result: float | Sequence[float] | np.ndarray) -> TellResult:
@@ -260,14 +255,10 @@ class Optimizer(Generic[T]):
             scale,
             p_sigma=step_size_path,
         )
-        if self.csa_enabled is not None:
-            xnes.csa_enabled = self.csa_enabled
-        if self.eta_mu is not None:
-            xnes.eta_mu = self.eta_mu
-        if self.eta_sigma is not None:
-            xnes.eta_sigma = self.eta_sigma
-        if self.eta_B is not None:
-            xnes.eta_B = self.eta_B
+        xnes.csa_enabled = self.csa_enabled
+        xnes.eta_mu = self.eta_mu
+        xnes.eta_sigma = self.eta_sigma
+        xnes.eta_B = self.eta_B
         return xnes
 
     def _sample_batch(self) -> None:

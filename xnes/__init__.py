@@ -15,9 +15,7 @@ Example:
         coeff: Annotated[float, Parameter(loc=1.0, scale=0.5, min=0.0)]
         ratio: Annotated[float, Parameter(min=0.0, max=1.0)]
 
-    opt = Optimizer(Params)
-    opt.pop_size = 32
-    opt.load(None)
+    opt = Optimizer(Params, pop_size=32)
 
     for _ in range(100):
         trial, params = opt.ask()
