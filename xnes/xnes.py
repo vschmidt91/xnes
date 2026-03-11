@@ -118,7 +118,7 @@ class XNES:
         return self.sigma * self.B
 
     def transform(self, samples: np.ndarray) -> np.ndarray:
-        """Map standardized samples `z` into parameter-space points `x`."""
+        """Map standardized samples `z` into current distribution coordinates."""
 
         z = np.asarray(samples, dtype=float)
         if z.ndim != 2:

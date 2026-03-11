@@ -7,36 +7,241 @@ from dataclasses import dataclass, fields, is_dataclass
 from typing import Annotated, Any, Generic, TypeVar, cast, get_args, get_origin, get_type_hints
 
 import numpy as np
+from scipy.special import expit, logit
 
 T = TypeVar("T")
 Path = tuple[str, ...]
 BuildFn = Callable[[Mapping[Path, float]], Any]
 
 
-@dataclass(frozen=True)
-class Prior:
-    """Latent Gaussian prior for one optimized schema leaf.
+class Parameter:
+    """User-facing metadata for one optimized scalar schema field."""
 
-    The optimizer operates in continuous latent space. For the currently
-    supported schema mode, each leaf field maps directly to one latent float
-    coordinate with mean `mean` and standard deviation `sigma`, while parent
-    nodes may be nested dataclasses.
-    """
+    loc: float
+    scale: float
 
-    mean: float = 0.0
-    sigma: float = 1.0
+    def __new__(cls, *args: Any, **kwargs: Any) -> Parameter:
+        if cls is Parameter:
+            return _UnboundedParameter(*args, **kwargs)
+        return super().__new__(cls)
 
-    def __post_init__(self) -> None:
-        mean = float(self.mean)
-        sigma = float(self.sigma)
-        if not np.isfinite(mean):
-            msg = "Prior.mean must be a finite float."
+    @classmethod
+    def unbounded(cls, *, loc: float = 0.0, scale: float = 1.0) -> Parameter:
+        return _UnboundedParameter(loc=loc, scale=scale)
+
+    @classmethod
+    def between(
+        cls,
+        *,
+        lower: float,
+        upper: float,
+        loc: float | None = None,
+        scale: float = 1.0,
+    ) -> Parameter:
+        midpoint = 0.5 * (float(lower) + float(upper))
+        return _BetweenParameter(
+            lower=lower,
+            upper=upper,
+            loc=midpoint if loc is None else loc,
+            scale=scale,
+        )
+
+    @classmethod
+    def above(cls, *, lower: float, loc: float | None = None, scale: float = 1.0) -> Parameter:
+        default_loc = float(lower) + float(_softplus(0.0))
+        return _AboveParameter(
+            lower=lower,
+            loc=default_loc if loc is None else loc,
+            scale=scale,
+        )
+
+    @classmethod
+    def below(cls, *, upper: float, loc: float | None = None, scale: float = 1.0) -> Parameter:
+        default_loc = float(upper) - float(_softplus(0.0))
+        return _BelowParameter(
+            upper=upper,
+            loc=default_loc if loc is None else loc,
+            scale=scale,
+        )
+
+    @classmethod
+    def above_exponential(cls, *, lower: float, loc: float | None = None, scale: float = 1.0) -> Parameter:
+        return _AboveExponentialParameter(
+            lower=lower,
+            loc=(float(lower) + 1.0) if loc is None else loc,
+            scale=scale,
+        )
+
+    @classmethod
+    def below_exponential(cls, *, upper: float, loc: float | None = None, scale: float = 1.0) -> Parameter:
+        return _BelowExponentialParameter(
+            upper=upper,
+            loc=(float(upper) - 1.0) if loc is None else loc,
+            scale=scale,
+        )
+
+    def forward_scalar(self, z: float) -> float:
+        return float(self.forward(z))
+
+    def forward(self, z: np.ndarray | float) -> np.ndarray:
+        """Map latent coordinates into user-space values."""
+        raise NotImplementedError
+
+    def inverse_loc(self, x: float) -> float:
+        """Map a user-space central value into latent coordinates."""
+        raise NotImplementedError
+
+    def validate(self, name: str) -> None:
+        """Validate the parameter specification for one schema field."""
+        raise NotImplementedError
+
+    def _validate_loc_and_scale(self, name: str) -> None:
+        _coerce_finite(self.loc, _field_component_name(name, "loc"))
+        _coerce_positive(self.scale, _field_component_name(name, "scale"))
+
+
+@dataclass(frozen=True, repr=False)
+class _UnboundedParameter(Parameter):
+    loc: float = 0.0
+    scale: float = 1.0
+
+    def forward(self, z: np.ndarray | float) -> np.ndarray:
+        return np.asarray(z, dtype=float)
+
+    def inverse_loc(self, x: float) -> float:
+        return float(x)
+
+    def validate(self, name: str) -> None:
+        self._validate_loc_and_scale(name)
+
+    def __repr__(self) -> str:
+        return f"Parameter(loc={self.loc!r}, scale={self.scale!r})"
+
+
+@dataclass(frozen=True, repr=False)
+class _BetweenParameter(Parameter):
+    lower: float
+    upper: float
+    loc: float
+    scale: float = 1.0
+
+    def forward(self, z: np.ndarray | float) -> np.ndarray:
+        values = np.asarray(z, dtype=float)
+        lower = float(self.lower)
+        upper = float(self.upper)
+        return lower + (upper - lower) * expit(values)
+
+    def inverse_loc(self, x: float) -> float:
+        lower = float(self.lower)
+        upper = float(self.upper)
+        return float(logit((float(x) - lower) / (upper - lower)))
+
+    def validate(self, name: str) -> None:
+        self._validate_loc_and_scale(name)
+        lower = _coerce_finite(self.lower, _field_component_name(name, "lower"))
+        upper = _coerce_finite(self.upper, _field_component_name(name, "upper"))
+        loc = float(self.loc)
+        if not lower < upper:
+            msg = f"xnes schema field '{name}' must satisfy lower < upper for Parameter.between(...)"
             raise ValueError(msg)
-        if not np.isfinite(sigma) or sigma <= 0.0:
-            msg = "Prior.sigma must be a positive finite float."
+        if not lower < loc < upper:
+            msg = f"xnes schema field '{name}' must satisfy lower < loc < upper for Parameter.between(...)"
             raise ValueError(msg)
-        object.__setattr__(self, "mean", mean)
-        object.__setattr__(self, "sigma", sigma)
+
+    def __repr__(self) -> str:
+        return f"Parameter.between(lower={self.lower!r}, upper={self.upper!r}, loc={self.loc!r}, scale={self.scale!r})"
+
+
+@dataclass(frozen=True, repr=False)
+class _AboveParameter(Parameter):
+    lower: float
+    loc: float
+    scale: float = 1.0
+
+    def forward(self, z: np.ndarray | float) -> np.ndarray:
+        return float(self.lower) + _softplus(z)
+
+    def inverse_loc(self, x: float) -> float:
+        return float(_softplus_inverse(float(x) - float(self.lower)))
+
+    def validate(self, name: str) -> None:
+        self._validate_loc_and_scale(name)
+        lower = _coerce_finite(self.lower, _field_component_name(name, "lower"))
+        if not float(self.loc) > lower:
+            msg = f"xnes schema field '{name}' must satisfy loc > lower for Parameter.above(...)"
+            raise ValueError(msg)
+
+    def __repr__(self) -> str:
+        return f"Parameter.above(lower={self.lower!r}, loc={self.loc!r}, scale={self.scale!r})"
+
+
+@dataclass(frozen=True, repr=False)
+class _BelowParameter(Parameter):
+    upper: float
+    loc: float
+    scale: float = 1.0
+
+    def forward(self, z: np.ndarray | float) -> np.ndarray:
+        return float(self.upper) - _softplus(-np.asarray(z, dtype=float))
+
+    def inverse_loc(self, x: float) -> float:
+        return float(-_softplus_inverse(float(self.upper) - float(x)))
+
+    def validate(self, name: str) -> None:
+        self._validate_loc_and_scale(name)
+        upper = _coerce_finite(self.upper, _field_component_name(name, "upper"))
+        if not float(self.loc) < upper:
+            msg = f"xnes schema field '{name}' must satisfy loc < upper for Parameter.below(...)"
+            raise ValueError(msg)
+
+    def __repr__(self) -> str:
+        return f"Parameter.below(upper={self.upper!r}, loc={self.loc!r}, scale={self.scale!r})"
+
+
+@dataclass(frozen=True, repr=False)
+class _AboveExponentialParameter(Parameter):
+    lower: float
+    loc: float
+    scale: float = 1.0
+
+    def forward(self, z: np.ndarray | float) -> np.ndarray:
+        return float(self.lower) + np.exp(np.asarray(z, dtype=float))
+
+    def inverse_loc(self, x: float) -> float:
+        return float(np.log(float(x) - float(self.lower)))
+
+    def validate(self, name: str) -> None:
+        self._validate_loc_and_scale(name)
+        lower = _coerce_finite(self.lower, _field_component_name(name, "lower"))
+        if not float(self.loc) > lower:
+            msg = f"xnes schema field '{name}' must satisfy loc > lower for Parameter.above_exponential(...)"
+            raise ValueError(msg)
+
+    def __repr__(self) -> str:
+        return f"Parameter.above_exponential(lower={self.lower!r}, loc={self.loc!r}, scale={self.scale!r})"
+
+
+@dataclass(frozen=True, repr=False)
+class _BelowExponentialParameter(Parameter):
+    upper: float
+    loc: float
+    scale: float = 1.0
+
+    def forward(self, z: np.ndarray | float) -> np.ndarray:
+        return float(self.upper) - np.exp(-np.asarray(z, dtype=float))
+
+    def inverse_loc(self, x: float) -> float:
+        return float(-np.log(float(self.upper) - float(x)))
+
+    def validate(self, name: str) -> None:
+        self._validate_loc_and_scale(name)
+        upper = _coerce_finite(self.upper, _field_component_name(name, "upper"))
+        if not float(self.loc) < upper:
+            msg = f"xnes schema field '{name}' must satisfy loc < upper for Parameter.below_exponential(...)"
+            raise ValueError(msg)
+
+    def __repr__(self) -> str:
+        return f"Parameter.below_exponential(upper={self.upper!r}, loc={self.loc!r}, scale={self.scale!r})"
 
 
 @dataclass(frozen=True)
@@ -46,7 +251,9 @@ class FieldSpec:
     name: str
     path: Path
     runtime_type: type[float]
-    prior: Prior
+    parameter: Parameter
+    mu0: float
+    sigma0: float
 
 
 @dataclass(frozen=True)
@@ -62,7 +269,7 @@ def parse_schema(model_type: type[T]) -> SchemaSpec[T]:
     """Parse and validate a dataclass schema tree for schema-mode optimization.
 
     Internal nodes must be dataclasses and leaf fields must be declared as
-    `Annotated[float, Prior(...)]`. The resulting leaf specifications are
+    `Annotated[float, Parameter(...)]`. The resulting leaf specifications are
     ordered lexicographically by dotted path name so dataclass declaration
     order does not affect persisted state layout.
     """
@@ -115,7 +322,7 @@ def _parse_dataclass_field(annotation: Any, path: Path, init: bool) -> tuple[tup
     if isinstance(annotation, type) and is_dataclass(annotation):
         return _parse_dataclass_type(annotation, path)
 
-    msg = f"xnes schema field '{name}' must be annotated as Annotated[float, Prior(...)] or be a dataclass type"
+    msg = f"xnes schema field '{name}' must be annotated as Annotated[float, Parameter(...)] or be a dataclass type"
     raise TypeError(msg)
 
 
@@ -123,20 +330,34 @@ def _parse_leaf_field(annotation: Any, path: Path) -> tuple[tuple[FieldSpec, ...
     name = _path_name(path)
     runtime_type, *metadata = get_args(annotation)
     if runtime_type is not float:
-        msg = f"xnes schema field '{name}' must be annotated as Annotated[float, Prior(...)]"
+        msg = f"xnes schema field '{name}' must be annotated as Annotated[float, Parameter(...)]"
         raise TypeError(msg)
 
-    priors = [item for item in metadata if isinstance(item, Prior)]
-    if len(priors) != 1:
-        msg = f"xnes schema field '{name}' must include exactly one Prior(...) metadata value"
+    parameters = [item for item in metadata if isinstance(item, Parameter)]
+    if len(parameters) != 1:
+        msg = f"xnes schema field '{name}' must include exactly one Parameter(...) metadata value"
         raise TypeError(msg)
 
-    field_spec = FieldSpec(name=name, path=path, runtime_type=float, prior=priors[0])
+    field_spec = _normalize_field_spec(name, path, parameters[0])
 
     def instantiate(values: Mapping[Path, float]) -> Any:
         return float(values[path])
 
     return (field_spec,), instantiate
+
+
+def _normalize_field_spec(name: str, path: Path, parameter: Parameter) -> FieldSpec:
+    parameter.validate(name)
+    mu0 = _coerce_finite(parameter.inverse_loc(parameter.loc), _field_component_name(name, "latent loc"))
+    sigma0 = _coerce_positive(parameter.scale, _field_component_name(name, "scale"))
+    return FieldSpec(
+        name=name,
+        path=path,
+        runtime_type=float,
+        parameter=parameter,
+        mu0=mu0,
+        sigma0=sigma0,
+    )
 
 
 def _field_name(field_spec: FieldSpec) -> str:
@@ -145,3 +366,32 @@ def _field_name(field_spec: FieldSpec) -> str:
 
 def _path_name(path: Path) -> str:
     return ".".join(path)
+
+
+def _field_component_name(field_name: str, component: str) -> str:
+    return f"xnes schema field '{field_name}' {component}"
+
+
+def _coerce_finite(value: float, name: str) -> float:
+    out = float(value)
+    if not np.isfinite(out):
+        msg = f"{name} must be a finite float."
+        raise ValueError(msg)
+    return out
+
+
+def _coerce_positive(value: float, name: str) -> float:
+    out = _coerce_finite(value, name)
+    if out <= 0.0:
+        msg = f"{name} must be a positive finite float."
+        raise ValueError(msg)
+    return out
+
+
+def _softplus(z: np.ndarray | float) -> np.ndarray:
+    return np.logaddexp(0.0, np.asarray(z, dtype=float))
+
+
+def _softplus_inverse(y: np.ndarray | float) -> np.ndarray:
+    values = np.asarray(y, dtype=float)
+    return values + np.log1p(-np.exp(-values))

@@ -9,7 +9,7 @@ from typing import Generic, TypeVar, cast
 import numpy as np
 
 from ._scheduler import BatchCompletion, BatchReservation, BatchScheduler
-from .schema import Prior, SchemaSpec, parse_schema
+from .schema import FieldSpec, SchemaSpec, parse_schema
 from .xnes import XNES, XNESStatus
 
 T = TypeVar("T")
@@ -23,7 +23,7 @@ class TellResult:
         completed_batch: Whether this result completed the current batch.
         matched_context: Whether sample selection used a mirrored context match.
         status: xNES status returned after the batch update.
-        restarted: Whether the wrapper restarted from priors after the update.
+        restarted: Whether the wrapper restarted from schema metadata after the update.
     """
 
     completed_batch: bool
@@ -69,7 +69,7 @@ class Optimizer(Generic[T]):
     """Maximizing optimizer over dataclass schemas.
 
     The schema must be a dataclass tree whose internal nodes are dataclasses
-    and whose optimized leaves are declared as `Annotated[float, Prior(...)]`.
+    and whose optimized leaves are declared as `Annotated[float, Parameter(...)]`.
     The wrapper exposes typed runtime values via `Sample.params` while keeping
     optimizer state keyed by stable dotted leaf names. Field ordering is
     lexicographic by leaf name rather than dataclass declaration order.
@@ -84,7 +84,7 @@ class Optimizer(Generic[T]):
 
         self._schema: SchemaSpec[T] = parse_schema(schema_type)
         self._rng = np.random.default_rng()
-        self._priors: dict[str, Prior] = {field_spec.name: field_spec.prior for field_spec in self._schema.fields}
+        self._field_specs: dict[str, FieldSpec] = {field_spec.name: field_spec for field_spec in self._schema.fields}
         self._loaded = False
 
         self._xnes: XNES = self._new_xnes(np.zeros(0), np.eye(0), np.zeros(0))
@@ -105,9 +105,9 @@ class Optimizer(Generic[T]):
         }
 
     def load(self, state: object) -> LoadResult:
-        """Restore optimizer state or initialize a fresh run from schema priors.
+        """Restore optimizer state or initialize a fresh run from schema metadata.
 
-        Passing `None` starts a new run from the schema priors and reports all
+        Passing `None` starts a new run from the schema metadata and reports all
         current schema leaf names as added. Loading a previous snapshot
         reconciles added and removed schema leaves by name while preserving
         shared learned state and any unfinished batch results.
@@ -115,7 +115,7 @@ class Optimizer(Generic[T]):
 
         expected_names = self._ordered_names()
         if state is None:
-            self._reset_from_priors()
+            self._reset_from_schema()
             self._loaded = True
             return LoadResult(parameters_added=list(expected_names), parameters_removed=[])
 
@@ -152,7 +152,7 @@ class Optimizer(Generic[T]):
             parameters_removed=parameters_removed,
         )
 
-    def _reset_from_priors(self) -> None:
+    def _reset_from_schema(self) -> None:
         names = self._ordered_names()
         loc, scale = self._build_initial_state(names)
         self._xnes = self._new_xnes(loc, scale, np.zeros(len(names), dtype=float))
@@ -171,10 +171,10 @@ class Optimizer(Generic[T]):
             raise RuntimeError(msg)
 
         reservation = self._reserve(context)
-        sample = self._xnes.transform(self._scheduler.batch_z[:, [reservation.sample_index]])[:, 0]
+        latent_sample = self._xnes.transform(self._scheduler.batch_z[:, [reservation.sample_index]])[:, 0]
         return Sample(
             sample_id=reservation.sample_index,
-            params=self._build_params(sample),
+            params=self._build_params(latent_sample),
             context=reservation.context,
             matched_context=reservation.matched_context,
             _reservation=reservation,
@@ -221,13 +221,14 @@ class Optimizer(Generic[T]):
         return [field_spec.name for field_spec in self._schema.fields]
 
     def _build_initial_state(self, names: list[str]) -> tuple[np.ndarray, np.ndarray]:
-        loc = np.array([self._priors[name].mean for name in names], dtype=float)
-        scale_diag = np.array([self._priors[name].sigma for name in names], dtype=float)
+        loc = np.array([self._field_specs[name].mu0 for name in names], dtype=float)
+        scale_diag = np.array([self._field_specs[name].sigma0 for name in names], dtype=float)
         return loc, np.diag(scale_diag)
 
     def _build_params(self, values: np.ndarray) -> T:
         leaf_values = {
-            field_spec.path: float(value) for field_spec, value in zip(self._schema.fields, values, strict=True)
+            field_spec.path: field_spec.parameter.forward_scalar(float(value))
+            for field_spec, value in zip(self._schema.fields, values, strict=True)
         }
         return self._schema.instantiate(leaf_values)
 
