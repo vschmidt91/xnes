@@ -282,6 +282,11 @@ def test_load_reconciles_same_name_spec_changes_and_selectively_preserves_batch(
     base_results = _read_results(base_state)
     completed_mask = np.array([result is not None for result in base_results], dtype=bool)
     pending_mask = ~completed_mask
+    half = base_batch.shape[1] // 2
+    mirror_index = np.arange(base_batch.shape[1])
+    mirror_index[:half] += half
+    mirror_index[half:] -= half
+    mirror_pending_mask = pending_mask & pending_mask[mirror_index]
     assert completed_mask.any()
     assert pending_mask.any()
 
@@ -318,7 +323,8 @@ def test_load_reconciles_same_name_spec_changes_and_selectively_preserves_batch(
     )
     assert np.allclose(changed_batch[1, :], base_batch[1, :])
     assert np.allclose(changed_batch[0, completed_mask], 0.0)
-    assert np.allclose(changed_batch[0, pending_mask], base_batch[0, pending_mask])
+    assert np.allclose(changed_batch[0, mirror_pending_mask], base_batch[0, mirror_pending_mask])
+    assert np.allclose(changed_batch[0, ~mirror_pending_mask], 0.0)
     assert _read_results(changed_state) == base_results
     assert _read_context_pending(changed_state) == _read_context_pending(base_state)
 

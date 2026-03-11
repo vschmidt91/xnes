@@ -231,6 +231,15 @@ class Optimizer(Generic[T]):
         for idx, result in enumerate(results[:sample_count]):
             completed_mask[idx] = result is not None
         pending_mask = ~completed_mask
+        half = sample_count // 2
+        mirror_index = np.arange(sample_count)
+        if half:
+            mirror_index[:half] += half
+            mirror_index[half:] -= half
+        # For changed dimensions, keep exactly those samples whose whole mirror
+        # pair is still pending; zero all others. This keeps each pair either
+        # both old or both zero, so changed coordinates remain exact mirrors.
+        mirror_pending_mask = pending_mask & pending_mask[mirror_index]
 
         saved_index = {name: idx for idx, name in enumerate(saved_names)}
         current_index = self._schema.index_by_name()
@@ -241,7 +250,7 @@ class Optimizer(Generic[T]):
         for name in schema_diff.changed:
             current_idx = current_index[name]
             saved_idx = saved_index[name]
-            reconciled_batch[current_idx, pending_mask] = batch[saved_idx, pending_mask]
+            reconciled_batch[current_idx, mirror_pending_mask] = batch[saved_idx, mirror_pending_mask]
 
         return reconciled_batch
 
