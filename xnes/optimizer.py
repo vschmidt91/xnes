@@ -8,7 +8,7 @@ from typing import Generic, TypeVar, cast
 
 import numpy as np
 
-from .scheduler import BatchCompletion, BatchScheduler, BatchTrial
+from .scheduler import BatchScheduler, BatchTrial
 from .schema import Parameter, SchemaDiff, SchemaSpec, parse_schema
 from .xnes import XNES, XNESStatus
 
@@ -47,7 +47,7 @@ class Trial:
 
 
 class Optimizer(Generic[T]):
-    """Maximizing optimizer over dataclass schemas.
+    """Schema-first xNES optimizer over dataclass schemas.
 
     The schema must be a dataclass tree whose internal nodes are dataclasses
     and whose optimized leaves are declared as `Annotated[float, Parameter(...)]`.
@@ -55,18 +55,24 @@ class Optimizer(Generic[T]):
     while keeping optimizer state keyed by stable dotted leaf names
     plus persisted parameter definitions. Field ordering is lexicographic by
     leaf name rather than dataclass declaration order.
+
+    Results are ranked for maximization by default. Pass `minimize=True` to
+    rank lower results as better instead. This optimization direction is
+    runtime configuration and is not persisted by `save()`.
     """
 
     def __init__(
         self,
         schema_type: type[T],
         pop_size: int | None = None,
+        minimize: bool = False,
         csa_enabled: bool = True,
         eta_mu: float = 1.0,
         eta_sigma: float = 1.0,
         eta_B: float = 1.0,
     ) -> None:
         self.pop_size = pop_size
+        self.minimize = minimize
         self.csa_enabled = csa_enabled
         self.eta_mu = eta_mu
         self.eta_sigma = eta_sigma
@@ -170,17 +176,18 @@ class Optimizer(Generic[T]):
     def tell(self, trial: Trial, result: float | Sequence[float] | np.ndarray) -> TellResult:
         """Submit the objective result for one trial returned by `ask()`.
 
-        Results use maximize semantics. Scalars are treated as one-element
-        tuples, and sequence results are ranked lexicographically.
+        Scalars are treated as one-element tuples, and sequence results are
+        ranked lexicographically. Higher results are better unless
+        `minimize=True`, in which case lower results are better.
         """
         batch_trial = trial._trial
         if batch_trial is None:
             msg = "Unknown trial."
             raise RuntimeError(msg)
 
-        completion = self._scheduler.record_result(batch_trial, _normalize_result(result))
-        if completion is not None:
-            status, restarted = self._complete_batch(completion)
+        completed_batch = self._scheduler.record_result(batch_trial, _normalize_result(result))
+        if completed_batch:
+            status, restarted = self._complete_batch()
             return TellResult(True, batch_trial.matched_context, status, restarted)
         return TellResult(False, batch_trial.matched_context, XNESStatus.OK, False)
 
@@ -270,8 +277,8 @@ class Optimizer(Generic[T]):
         self._xnes = self._new_xnes(loc, scale, step_size_path)
         self._sample_batch()
 
-    def _complete_batch(self, completion: BatchCompletion) -> tuple[XNESStatus, bool]:
-        status = self._xnes.tell(self._scheduler.batch, completion.ranking)
+    def _complete_batch(self) -> tuple[XNESStatus, bool]:
+        status = self._xnes.tell(self._scheduler.batch, self._ranking())
         restarted = status is not XNESStatus.OK
         if restarted:
             self._restart_distribution()
@@ -282,15 +289,20 @@ class Optimizer(Generic[T]):
     def _reserve(self, context: str | None) -> BatchTrial:
         result = self._scheduler.reserve(context)
         if result is None:
-            msg = "No unclaimed sample available. Pending trials must be told first."
-            raise RuntimeError(msg)
-        if isinstance(result, BatchCompletion):
-            self._complete_batch(result)
+            if not self._scheduler.is_complete():
+                msg = "No unclaimed sample available. Pending trials must be told first."
+                raise RuntimeError(msg)
+            self._complete_batch()
             result = self._scheduler.reserve(context)
-        if not isinstance(result, BatchTrial):
-            msg = "No sample available."
-            raise RuntimeError(msg)
+            if result is None:
+                msg = "No sample available."
+                raise RuntimeError(msg)
         return result
+
+    def _ranking(self) -> list[int]:
+        assert self._scheduler.is_complete()
+        results = [cast(tuple[float, ...], item) for item in self._scheduler.results]
+        return sorted(range(len(results)), key=lambda idx: results[idx], reverse=not self.minimize)
 
 
 def _normalize_result(result: float | Sequence[float] | np.ndarray) -> tuple[float, ...]:

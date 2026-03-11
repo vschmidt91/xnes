@@ -25,8 +25,8 @@ def _make_identity_schema(schema_name: str, **parameters: tuple[float, float]) -
     )
 
 
-def _initialized_optimizer(schema: type[Any], *, pop_size: int) -> Optimizer[Any]:
-    return Optimizer(schema, pop_size=pop_size)
+def _initialized_optimizer(schema: type[Any], *, pop_size: int, minimize: bool = False) -> Optimizer[Any]:
+    return Optimizer(schema, pop_size=pop_size, minimize=minimize)
 
 
 def _initialized_state(schema: type[Any], *, pop_size: int) -> dict[str, object]:
@@ -125,12 +125,13 @@ def _run_function_optimization(
     dim: int,
     pop_size: int,
     evaluations: int,
+    minimize: bool = False,
 ) -> tuple[float, float]:
     schema = _make_identity_schema(
         "SphereParams",
         **{f"x{i}": (init_loc, init_scale) for i in range(dim)},
     )
-    optimizer: Optimizer[Any] = Optimizer(schema, pop_size=pop_size)
+    optimizer: Optimizer[Any] = Optimizer(schema, pop_size=pop_size, minimize=minimize)
 
     initial_loc = _read_loc(optimizer.save())
     initial_value = objective(initial_loc)
@@ -138,7 +139,8 @@ def _run_function_optimization(
     for _ in range(evaluations):
         trial, params = optimizer.ask()
         point = np.array([getattr(params, f"x{i}") for i in range(dim)], dtype=float)
-        optimizer.tell(trial, -objective(point))
+        result = objective(point) if minimize else -objective(point)
+        optimizer.tell(trial, result)
 
     final_loc = _read_loc(optimizer.save())
     final_value = objective(final_loc)
@@ -156,6 +158,22 @@ def test_optimizer_improves_sphere() -> None:
         dim=4,
         pop_size=28,
         evaluations=1400,
+    )
+    assert final < 0.15 * initial
+
+
+def test_optimizer_improves_sphere_in_minimization_mode() -> None:
+    def sphere(x: np.ndarray) -> float:
+        return float(np.sum(x**2))
+
+    initial, final = _run_function_optimization(
+        sphere,
+        init_loc=3.0,
+        init_scale=2.0,
+        dim=4,
+        pop_size=28,
+        evaluations=1400,
+        minimize=True,
     )
     assert final < 0.15 * initial
 
@@ -557,25 +575,51 @@ def test_stale_tell_is_rejected() -> None:
 
 def test_runtime_config_is_not_persisted_or_loaded() -> None:
     schema = _make_identity_schema("RuntimeConfig", x=(4.0, 2.0))
-    opt_a = Optimizer(schema, pop_size=14, csa_enabled=False, eta_mu=0.9, eta_sigma=0.7, eta_B=0.2)
+    opt_a = Optimizer(schema, pop_size=14, minimize=True, csa_enabled=False, eta_mu=0.9, eta_sigma=0.7, eta_B=0.2)
     for _ in range(20):
         trial, params = opt_a.ask()
         x = params.x
-        opt_a.tell(trial, -(x**2))
+        opt_a.tell(trial, x**2)
 
     state = opt_a.save()
     assert isinstance(state, dict)
     assert "context_pending" in state
+    assert "minimize" not in state
 
     opt_b = Optimizer(schema, pop_size=4)
     opt_b.load(state)
     loaded = opt_b.save()
     assert isinstance(loaded, dict)
     assert "context_pending" in loaded
+    assert opt_b.minimize is False
     assert opt_b.csa_enabled is True
     assert opt_b.eta_mu == 1.0
     assert opt_b.eta_sigma == 1.0
     assert opt_b.eta_B == 1.0
+
+
+def test_load_allows_switching_optimization_direction_mid_batch() -> None:
+    schema = _make_identity_schema("SwitchDirection", x=(0.0, 1.0))
+    base = Optimizer(schema, pop_size=4, minimize=True)
+
+    first_trial, first_params = base.ask()
+    base.tell(first_trial, first_params.x)
+    state = base.save()
+    saved_results = _read_results(state)
+    assert saved_results[first_trial.sample_id] == pytest.approx((first_params.x,))
+
+    minimizing = Optimizer(schema, pop_size=4, minimize=True)
+    maximizing = Optimizer(schema, pop_size=4)
+    minimizing.load(state)
+    maximizing.load(state)
+
+    for optimizer in (minimizing, maximizing):
+        for _ in range(3):
+            trial, params = optimizer.ask()
+            optimizer.tell(trial, params.x)
+
+    assert minimizing.ask_best().x < 0.0
+    assert maximizing.ask_best().x > 0.0
 
 
 def test_restart_on_conditioning_failure() -> None:

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import cast
 
 import numpy as np
 
@@ -11,11 +10,6 @@ class BatchTrial:
     sample_index: int
     context: str | None
     matched_context: bool
-
-
-@dataclass(frozen=True)
-class BatchCompletion:
-    ranking: list[int]
 
 
 class BatchScheduler:
@@ -53,7 +47,7 @@ class BatchScheduler:
         }
         self._reserved_indices = set()
 
-    def reserve(self, context: str | None) -> BatchTrial | BatchCompletion | None:
+    def reserve(self, context: str | None) -> BatchTrial | None:
         sample_index, matched_context = self._pick_sample(context)
         if sample_index is not None:
             trial = BatchTrial(
@@ -63,14 +57,12 @@ class BatchScheduler:
             )
             self._reserved_indices.add(sample_index)
             return trial
-        if self._reserved_indices:
+        if self._reserved_indices or self.is_complete():
             return None
-        if self.is_complete():
-            return BatchCompletion(self._ranking())
         msg = "Scheduler has no reservable sample and no completed batch."
         raise RuntimeError(msg)
 
-    def record_result(self, trial: BatchTrial, result: tuple[float, ...]) -> BatchCompletion | None:
+    def record_result(self, trial: BatchTrial, result: tuple[float, ...]) -> bool:
         sample_index = trial.sample_index
         if not 0 <= sample_index < len(self.results):
             msg = "Sample index out of range."
@@ -85,17 +77,10 @@ class BatchScheduler:
         self._reserved_indices.remove(sample_index)
         self.results[sample_index] = result
         self._update_context_pending(sample_index, trial.context)
-        if not self.is_complete():
-            return None
-        return BatchCompletion(self._ranking())
+        return self.is_complete()
 
     def is_complete(self) -> bool:
         return all(item is not None for item in self.results)
-
-    def _ranking(self) -> list[int]:
-        assert self.is_complete()
-        results = [cast(tuple[float, ...], item) for item in self.results]
-        return sorted(range(len(results)), key=lambda idx: results[idx], reverse=True)
 
     def _pick_sample(self, context: str | None) -> tuple[int | None, bool]:
         if context is not None:
