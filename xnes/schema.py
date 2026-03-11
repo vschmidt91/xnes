@@ -32,9 +32,9 @@ class Parameter:
     @classmethod
     def between(
         cls,
-        *,
         lower: float,
         upper: float,
+        *,
         loc: float | None = None,
         scale: float = 1.0,
     ) -> Parameter:
@@ -47,7 +47,7 @@ class Parameter:
         )
 
     @classmethod
-    def above(cls, *, lower: float, loc: float | None = None, scale: float = 1.0) -> Parameter:
+    def above(cls, lower: float, *, loc: float | None = None, scale: float = 1.0) -> Parameter:
         default_loc = float(lower) + float(_softplus(0.0))
         return _AboveParameter(
             lower=lower,
@@ -56,7 +56,7 @@ class Parameter:
         )
 
     @classmethod
-    def below(cls, *, upper: float, loc: float | None = None, scale: float = 1.0) -> Parameter:
+    def below(cls, upper: float, *, loc: float | None = None, scale: float = 1.0) -> Parameter:
         default_loc = float(upper) - float(_softplus(0.0))
         return _BelowParameter(
             upper=upper,
@@ -65,7 +65,7 @@ class Parameter:
         )
 
     @classmethod
-    def above_exponential(cls, *, lower: float, loc: float | None = None, scale: float = 1.0) -> Parameter:
+    def above_exponential(cls, lower: float, *, loc: float | None = None, scale: float = 1.0) -> Parameter:
         return _AboveExponentialParameter(
             lower=lower,
             loc=(float(lower) + 1.0) if loc is None else loc,
@@ -73,7 +73,7 @@ class Parameter:
         )
 
     @classmethod
-    def below_exponential(cls, *, upper: float, loc: float | None = None, scale: float = 1.0) -> Parameter:
+    def below_exponential(cls, upper: float, *, loc: float | None = None, scale: float = 1.0) -> Parameter:
         return _BelowExponentialParameter(
             upper=upper,
             loc=(float(upper) - 1.0) if loc is None else loc,
