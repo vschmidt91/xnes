@@ -1,19 +1,20 @@
 # xnes
 
-Small Python library for black-box optimization with named scalar parameters, strict checkpointing, and a
-lightweight xNES implementation.
+Small Python library for black-box optimization with a canonical xNES core,
+strict checkpointing, and a typed schema-first wrapper.
 
-It is aimed at expensive, stateful evaluation loops: tuning heuristic weights in simulators, control systems, game
-agents, or other black-box programs where runs are noisy, resumable, and often organized around recurring contexts.
+It is aimed at expensive, stateful evaluation loops: tuning heuristic weights
+in simulators, control systems, game agents, or other black-box programs where
+runs are noisy, resumable, and sometimes organized around recurring contexts.
 
 ## Highlights
 
 - Canonical xNES core with optional CSA step-size adaptation.
-- Argument-free `Optimizer()` wrapper with sensible defaults inherited from `XNES`.
-- Named scalar parameters via `add(...)`, with lexicographic ordering independent of registration order.
+- Schema-first `Optimizer(Schema)` wrapper returning typed dataclass params.
+- Priors colocated with fields via `Annotated[float, Prior(...)]`.
 - JSON-compatible optimizer state through `save()` and `load(...)`.
-- Optional mirrored-sample routing through `ask(context=...)` using human-readable string contexts.
-- Deterministic inference through `ask_best()`, which returns the current means without sampling.
+- Optional mirrored-sample routing through `ask(context=...)`.
+- Deterministic inference through `ask_best()`.
 
 ## Requirements
 
@@ -28,113 +29,137 @@ Install the package locally:
 python -m pip install -e .
 ```
 
-Install with development tools:
+Install development tools with Poetry:
 
 ```bash
-python -m pip install -e ".[dev]"
+poetry install --with dev
 ```
 
-Install with development tools and documentation dependencies:
+Install development tools and documentation dependencies:
 
 ```bash
-python -m pip install -e ".[dev,docs]"
+poetry install --with dev,docs
 ```
 
 ## Quickstart
 
 ```python
 import json
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Annotated
 
 import numpy as np
 
-from xnes import Optimizer
+from xnes import Optimizer, Prior
+
+
+@dataclass(frozen=True)
+class Params:
+    coeff_1: Annotated[float, Prior(mean=2.0, sigma=3.0)]
+    coeff_2: Annotated[float, Prior()]
+
 
 state_path = Path("optimizer-state.json")
 state = json.loads(state_path.read_text()) if state_path.exists() else None
 
-opt = Optimizer()
+opt = Optimizer(Params)
 opt.pop_size = 32
-
-opt.add("coeff_1", loc=2.0, scale=3.0)
-opt.add("coeff_2")
-
 load_result = opt.load(state)
 
 for _ in range(500):
-    params = opt.ask(context="validation:shard-0")
-    value = params["coeff_1"] + np.exp(params["coeff_2"])
-    report = opt.tell(params, -value**2)  # `tell` maximizes, so minimize via `-f`
+    sample = opt.ask(context="validation:shard-0")
+    params = sample.params
+    value = params.coeff_1 + np.exp(params.coeff_2)
+    report = opt.tell(sample, -value**2)  # `tell` maximizes, so minimize via `-f`
     state_path.write_text(json.dumps(opt.save()))
 
     if report.completed_batch:
         pass
 
 best = opt.ask_best()
-print(best["coeff_1"], best["coeff_2"])
+print(best.params.coeff_1, best.params.coeff_2)
 ```
+
+## Schema Model
+
+The public wrapper is schema-first:
+
+1. Define a dataclass schema.
+2. Annotate each optimized field as `Annotated[float, Prior(...)]`.
+3. Construct `Optimizer(Schema)`.
+
+Current schema constraints:
+
+- The schema must be a dataclass type.
+- Optimized fields must currently be `Annotated[float, Prior(...)]`.
+- Fields must be `init=True`.
+- State layout is ordered lexicographically by field name, not by declaration order.
 
 ## Workflow
 
-The wrapper is intentionally strict. The expected loop is:
+The wrapper is intentionally strict. The expected training loop is:
 
-1. Create `Optimizer()`.
-2. Register parameters with `add(...)`.
+1. Define a schema dataclass.
+2. Construct `Optimizer(Schema)`.
 3. Call `load(None)` for a fresh run or `load(state)` to resume.
-4. Call `ask(context=...)` to reserve one parameter sample.
-5. Read sampled values directly from `params[...]`.
+4. Call `ask(context=...)` to reserve one sampled parameter set.
+5. Read runtime values from `sample.params.field`.
 6. Evaluate exactly once.
-7. Call `tell(params, result)`.
+7. Call `tell(sample, result)`.
 8. Persist with `save()`.
 
 For deterministic inference after training:
 
-1. Create `Optimizer()`.
-2. Register parameters with `add(...)`.
-3. Call `load(state)`.
-4. Call `ask_best()`.
-5. Read mean values directly from `params[...]`.
+1. Construct `Optimizer(Schema)`.
+2. Call `load(state)`.
+3. Call `ask_best()`.
+4. Read mean values from `best.params.field`.
 
 Important constraints:
 
-- `add()` is setup-only and must happen before `load()`.
-- The registered parameter set is fixed after `load()`.
-- When `load(state)` sees a changed parameter set, shared learned state is reconciled, added parameters start from
-  priors, removed parameters are dropped, and any in-flight batch is reconciled rather than discarded.
-- `load(None)` reports all currently registered parameters as added.
-- `ask()` creates runtime-only reservations; these claims are not persisted.
-- `ask_best()` is context-free and returns a deterministic snapshot of the current means.
-- `ask_best()` returns parameters with `sample_id=None`; they are not sampled reservations.
+- `load()` must be called before `ask()` or `ask_best()`.
+- `load(None)` reports all current schema fields as added.
+- `load(state)` reconciles changed schemas by field name.
+- Shared learned state is preserved for common fields.
+- Added fields start from their priors.
+- Removed fields are dropped.
+- Any unfinished batch is reconciled rather than discarded.
+- `ask()` creates runtime-only reservations; claims are not persisted.
+- `ask_best()` is context-free and returns a deterministic snapshot of current means.
+- `ask_best()` returns `Sample[T]` with `sample_id=None`; it cannot be passed to `tell()`.
 - If all samples in a batch are reserved and unresolved, `ask()` raises.
 - If `ask(context=...)` is never used, evaluation proceeds in the default batch order.
-- `tell()` only accepts sampled parameters returned by `ask()`.
 
 ## Core API
 
-- `Optimizer.add(name, loc=0.0, scale=1.0) -> None`
-  Register a named scalar parameter.
+- `Prior(mean=0.0, sigma=1.0)`
+  Latent Gaussian prior attached to one schema field.
+- `Optimizer(schema_type)`
+  Construct a maximizing optimizer over a dataclass schema.
 - `Optimizer.load(state) -> LoadResult`
   Initialize from priors with `None`, or restore and reconcile a previous snapshot from `save()`.
-- `Optimizer.ask(context=None) -> Parameters`
-  Reserve one sample and return its parameter mapping plus reservation metadata.
-- `Optimizer.ask_best() -> Parameters`
+- `Optimizer.ask(context=None) -> Sample[T]`
+  Reserve one sample and return the typed schema instance plus reservation metadata.
+- `Optimizer.ask_best() -> Sample[T]`
   Return a deterministic snapshot of the current means. This does not reserve a sample.
-- `Optimizer.tell(params, result) -> TellResult`
-  Submit one scalar or tuple-like objective result for sampled parameters returned by `ask()`.
+- `Optimizer.tell(sample, result) -> TellResult`
+  Submit one scalar or tuple-like objective result for a sampled `Sample` returned by `ask()`.
 - `Optimizer.save() -> dict[str, object]`
   Return a JSON-compatible snapshot of optimizer state.
+- `Sample[T]`
+  Wrapper returned by `ask()` and `ask_best()` with typed `params`, `sample_id`, `context`, and `matched_context`.
 - `LoadResult`
-  Reports parameters added and parameters removed.
-- `Parameters`
-  Parameter mapping returned by `ask()` or `ask_best()`. Sampled parameters carry a concrete `sample_id`; `ask_best()`
-  returns `sample_id=None`.
+  Reports schema fields added and removed when loading.
+- `TellResult`
+  Reports whether a batch completed, whether context matching occurred, and whether xNES restarted.
 
 ## Configuration
 
-`Optimizer()` intentionally takes no constructor arguments. Optional tuning lives on instance attributes:
+`Optimizer(Schema)` keeps optional tuning on instance attributes:
 
 ```python
-opt = Optimizer()
+opt = Optimizer(Params)
 opt.pop_size = 32
 opt.csa_enabled = False
 opt.eta_mu = 0.9
@@ -149,7 +174,7 @@ Behavior:
 - Leaving `csa_enabled`, `eta_mu`, `eta_sigma`, or `eta_B` as `None` keeps the defaults defined by `XNES`.
 - A bare `XNES(...)` instance starts with `csa_enabled = True`, `eta_mu = 1.0`, `eta_sigma = 1.0`, and
   `eta_B = 1.0`.
-- `eta_B` scales the built-in dimension-dependent shape-learning rate multiplicatively.
+- `eta_B` scales the built-in dimension-dependent shape learning rate multiplicatively.
 
 ## Objective Semantics
 
@@ -158,16 +183,6 @@ Behavior:
 - Sequence results are ranked lexicographically.
 - Higher tuples are better.
 - This is not a Pareto or multiobjective optimizer.
-
-## Training Loop
-
-- During training, follow `load -> ask -> evaluate -> tell -> save`.
-
-## Inference
-
-- For deterministic inference, follow `load -> ask_best`.
-- `ask_best()` ignores context because it does not sample.
-- Outputs from `ask_best()` are read-only snapshots of current means and must not be passed to `tell()`.
 
 ## Development
 

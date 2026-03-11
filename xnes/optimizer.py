@@ -1,39 +1,18 @@
-"""Named-parameter optimizer built on top of the xNES update rule.
-
-The wrapper is designed for a strict checkpointed training workflow:
-
-1. create `Optimizer`
-2. register parameters with `add`
-3. call `load` with `None` for a fresh run or a previously saved state
-4. call `ask` (optionally with `context=...`)
-5. read sampled values from `Parameters` (e.g. `params["x"]`)
-6. call `tell(params, result)` exactly once for that reservation
-7. call `save`
-
-For deterministic inference, call `ask_best()` to get a read-only snapshot of
-the current means. These parameters are not sampled and cannot be passed to
-`tell()`.
-
-The registered parameter set is fixed once `load` has been called.
-"""
+"""Schema-first optimizer wrapper built on top of the xNES update rule."""
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from types import MappingProxyType
-from typing import cast
+from typing import Generic, TypeVar, cast
 
 import numpy as np
 
 from ._scheduler import BatchCompletion, BatchReservation, BatchScheduler
+from .schema import Prior, SchemaSpec, parse_schema
 from .xnes import XNES, XNESStatus
 
-
-@dataclass(frozen=True)
-class _Prior:
-    loc: float
-    scale: float
+T = TypeVar("T")
 
 
 @dataclass(frozen=True)
@@ -58,8 +37,8 @@ class LoadResult:
     """Outcome of one `Optimizer.load` call.
 
     Attributes:
-        parameters_added: Registered parameter names not present in the loaded state.
-        parameters_removed: Loaded parameter names not present in the current parameter set.
+        parameters_added: Current schema leaf names not present in the loaded state.
+        parameters_removed: Loaded schema leaf names not present in the current schema.
     """
 
     parameters_added: list[str]
@@ -67,17 +46,16 @@ class LoadResult:
 
 
 @dataclass(frozen=True)
-class Parameters(Mapping[str, float]):
-    """Parameter values and reservation metadata returned by `ask` or `ask_best`.
+class Sample(Generic[T]):
+    """Typed parameter values and reservation metadata returned by `ask` or `ask_best`.
 
-    This is a mapping over parameter values, so values can be read directly
-    via `params["name"]`. Sampled parameters returned by `ask` carry a
-    concrete `sample_id`; deterministic mean snapshots returned by
-    `ask_best` use `sample_id=None`.
+    `params` is an instance of the root schema dataclass passed to `Optimizer`,
+    including any nested dataclass subtrees. Samples returned by `ask_best()`
+    have `sample_id=None` and cannot be passed to `tell()`.
     """
 
     sample_id: int | None
-    params: Mapping[str, float]
+    params: T
     context: str | None
     matched_context: bool
     _reservation: BatchReservation | None = field(
@@ -86,97 +64,35 @@ class Parameters(Mapping[str, float]):
         compare=False,
     )
 
-    def __getitem__(self, key: str) -> float:
-        return self.params[key]
 
-    def __iter__(self) -> Iterator[str]:
-        return iter(self.params)
+class Optimizer(Generic[T]):
+    """Maximizing optimizer over dataclass schemas.
 
-    def __len__(self) -> int:
-        return len(self.params)
-
-
-class Optimizer:
-    """Maximizing optimizer with named scalar parameters.
-
-    Parameters are registered by name and sampled in lexicographic order so the
-    optimization state is independent of registration order.
-
-    Intended training call flow:
-
-    1. create the optimizer
-    2. register all parameters with `add`
-    3. call `load`
-    4. call `ask`
-    5. evaluate sampled parameter values
-    6. call `tell` with that `Parameters` instance
-    7. call `save`
-
-    For deterministic inference, call `ask_best()` after `load` to read the
-    current parameter means without reserving a sample or interacting with
-    batch state. These parameters are read-only snapshots and cannot be passed
-    to `tell()`.
-
-    After `load`, the registered parameter set is fixed and `add` is no longer
-    allowed.
-
-    Runtime configuration lives on the instance attributes `csa_enabled`,
-    `eta_mu`, `eta_sigma`, and `eta_B`. Leaving any of them as `None`
-    preserves the default chosen by `XNES`; assigning a concrete value
-    overrides that default for newly created internal xNES states. `eta_B`
-    scales the built-in dimension-dependent shape learning rate
-    multiplicatively.
-
-    Batch size is configured via the instance attribute `pop_size`. Leaving it
-    as `None` keeps the xNES default; assigning an odd value rounds up to the
-    next even batch size when a new batch is created.
+    The schema must be a dataclass tree whose internal nodes are dataclasses
+    and whose optimized leaves are declared as `Annotated[float, Prior(...)]`.
+    The wrapper exposes typed runtime values via `Sample.params` while keeping
+    optimizer state keyed by stable dotted leaf names. Field ordering is
+    lexicographic by leaf name rather than dataclass declaration order.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, schema_type: type[T]) -> None:
         self.pop_size: int | None = None
         self.csa_enabled: bool | None = None
         self.eta_mu: float | None = None
         self.eta_sigma: float | None = None
         self.eta_B: float | None = None
 
+        self._schema: SchemaSpec[T] = parse_schema(schema_type)
         self._rng = np.random.default_rng()
-        self._priors: dict[str, _Prior] = {}
+        self._priors: dict[str, Prior] = {field_spec.name: field_spec.prior for field_spec in self._schema.fields}
         self._loaded = False
 
         self._xnes: XNES = self._new_xnes(np.zeros(0), np.eye(0), np.zeros(0))
         self._state_names: list[str] = []
         self._scheduler = BatchScheduler()
 
-    def add(self, name: str, loc: float = 0.0, scale: float = 1.0) -> None:
-        """Register a parameter name.
-
-        This is a setup-time operation. It must happen before `load`.
-
-        Args:
-            name: Unique parameter name.
-            loc: Initial mean used for new parameters.
-            scale: Initial standard deviation used for new parameters.
-
-        Raises:
-            ValueError: If `scale <= 0` or `name` is already registered.
-            RuntimeError: If called after `load`.
-        """
-
-        if scale <= 0:
-            msg = "scale must be > 0."
-            raise ValueError(msg)
-
-        if self._loaded:
-            msg = "Cannot add parameters after load()."
-            raise RuntimeError(msg)
-        if name in self._priors:
-            msg = f"Parameter '{name}' is already registered."
-            raise ValueError(msg)
-
-        self._priors[name] = _Prior(loc=float(loc), scale=float(scale))
-
     def save(self) -> dict[str, object]:
-        """Serialize the current optimizer state."""
+        """Serialize the current optimizer state into a JSON-compatible mapping."""
         return {
             "names": list(self._state_names),
             "loc": self._xnes.mu.tolist(),
@@ -189,29 +105,14 @@ class Optimizer:
         }
 
     def load(self, state: object) -> LoadResult:
-        """Restore optimizer state or initialize a fresh run.
+        """Restore optimizer state or initialize a fresh run from schema priors.
 
-        ``load(None)`` initializes a fresh optimizer state from the registered
-        parameter priors. ``load(state)`` restores a previously saved state. If
-        the registered parameter set changed, shared coordinates keep their
-        learned state, added parameters start from their priors, removed
-        parameters are dropped, and the in-flight batch is reconciled into the
-        new parameter space.
-
-        Args:
-            state: `None` for a fresh run, or a serialized state produced by
-                `save`.
-
-        Returns:
-            A `LoadResult` describing added and removed parameters.
-
-        Raises:
-            RuntimeError: If no parameters have been registered yet.
+        Passing `None` starts a new run from the schema priors and reports all
+        current schema leaf names as added. Loading a previous snapshot
+        reconciles added and removed schema leaves by name while preserving
+        shared learned state and any unfinished batch results.
         """
 
-        if not self._priors:
-            msg = "Register parameters with add() before load()."
-            raise RuntimeError(msg)
         expected_names = self._ordered_names()
         if state is None:
             self._reset_from_priors()
@@ -258,45 +159,56 @@ class Optimizer:
         self._state_names = names
         self._reset_batch()
 
-    def ask(self, context: str | None = None) -> Parameters:
-        """Reserve a sampled parameter set for one evaluation run."""
+    def ask(self, context: str | None = None) -> Sample[T]:
+        """Reserve one sampled parameter set for an evaluation run.
+
+        The returned `Sample` contains the typed root schema instance on
+        `sample.params`, including any nested dataclass values, plus
+        reservation metadata required by `tell()`.
+        """
         if not self._loaded:
             msg = "Call load() before ask()."
             raise RuntimeError(msg)
 
         reservation = self._reserve(context)
         sample = self._xnes.transform(self._scheduler.batch_z[:, [reservation.sample_index]])[:, 0]
-        params = {name: float(sample[row]) for row, name in enumerate(self._state_names)}
-        return Parameters(
+        return Sample(
             sample_id=reservation.sample_index,
-            params=MappingProxyType(params),
+            params=self._build_params(sample),
             context=reservation.context,
             matched_context=reservation.matched_context,
             _reservation=reservation,
         )
 
-    def ask_best(self) -> Parameters:
-        """Return a deterministic, context-free snapshot of the current means."""
+    def ask_best(self) -> Sample[T]:
+        """Return a deterministic, context-free snapshot of the current means.
+
+        This does not reserve a sample and the returned `Sample` is not
+        tellable.
+        """
         if not self._loaded:
             msg = "Call load() before ask_best()."
             raise RuntimeError(msg)
 
-        params = {name: float(self._xnes.mu[row]) for row, name in enumerate(self._state_names)}
-        return Parameters(
+        return Sample(
             sample_id=None,
-            params=MappingProxyType(params),
+            params=self._build_params(self._xnes.mu),
             context=None,
             matched_context=False,
         )
 
-    def tell(self, params: Parameters, result: float | Sequence[float] | np.ndarray) -> TellResult:
-        """Submit the objective result for sampled parameters returned by `ask`."""
-        if params.sample_id is None:
-            msg = "Parameters from ask_best() were not sampled and cannot be told."
+    def tell(self, sample: Sample[T], result: float | Sequence[float] | np.ndarray) -> TellResult:
+        """Submit the objective result for sampled parameters returned by `ask`.
+
+        Results use maximize semantics. Scalars are treated as one-element
+        tuples, and sequence results are ranked lexicographically.
+        """
+        if sample.sample_id is None:
+            msg = "Samples from ask_best() were not sampled and cannot be told."
             raise RuntimeError(msg)
-        reservation = params._reservation
+        reservation = sample._reservation
         if reservation is None:
-            msg = "Unknown parameters reservation."
+            msg = "Unknown sample reservation."
             raise RuntimeError(msg)
 
         completion = self._scheduler.record_result(reservation, _normalize_result(result))
@@ -306,12 +218,18 @@ class Optimizer:
         return TellResult(False, reservation.matched_context, XNESStatus.OK, False)
 
     def _ordered_names(self) -> list[str]:
-        return sorted(self._priors)
+        return [field_spec.name for field_spec in self._schema.fields]
 
     def _build_initial_state(self, names: list[str]) -> tuple[np.ndarray, np.ndarray]:
-        loc = np.array([self._priors[name].loc for name in names], dtype=float)
-        scale_diag = np.array([self._priors[name].scale for name in names], dtype=float)
+        loc = np.array([self._priors[name].mean for name in names], dtype=float)
+        scale_diag = np.array([self._priors[name].sigma for name in names], dtype=float)
         return loc, np.diag(scale_diag)
+
+    def _build_params(self, values: np.ndarray) -> T:
+        leaf_values = {
+            field_spec.path: float(value) for field_spec, value in zip(self._schema.fields, values, strict=True)
+        }
+        return self._schema.instantiate(leaf_values)
 
     def _reconcile_distribution_state(
         self,

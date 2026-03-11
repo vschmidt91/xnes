@@ -1,10 +1,21 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
+from dataclasses import make_dataclass
+from typing import Annotated, Any
 
 import numpy as np
+import pytest
 
-from xnes import LoadResult, Optimizer, TellResult, XNESStatus
+from xnes import LoadResult, Optimizer, Prior, TellResult, XNESStatus
+
+
+def _make_schema(schema_name: str, **priors: tuple[float, float]) -> type[Any]:
+    return make_dataclass(
+        schema_name,
+        [(field_name, Annotated[float, Prior(mean=mean, sigma=sigma)]) for field_name, (mean, sigma) in priors.items()],
+        frozen=True,
+    )
 
 
 def _read_loc(state: object) -> np.ndarray:
@@ -66,19 +77,21 @@ def _run_function_optimization(
     pop_size: int,
     evaluations: int,
 ) -> tuple[float, float]:
-    optimizer = Optimizer()
+    schema = _make_schema(
+        "SphereParams",
+        **{f"x{i}": (init_loc, init_scale) for i in range(dim)},
+    )
+    optimizer: Optimizer[Any] = Optimizer(schema)
     optimizer.pop_size = pop_size
-    for i in range(dim):
-        optimizer.add(f"x{i}", loc=init_loc, scale=init_scale)
     optimizer.load(None)
 
     initial_loc = _read_loc(optimizer.save())
     initial_value = objective(initial_loc)
 
     for _ in range(evaluations):
-        params = optimizer.ask()
-        point = np.array([params[f"x{i}"] for i in range(dim)], dtype=float)
-        optimizer.tell(params, -objective(point))
+        sample = optimizer.ask()
+        point = np.array([getattr(sample.params, f"x{i}") for i in range(dim)], dtype=float)
+        optimizer.tell(sample, -objective(point))
 
     final_loc = _read_loc(optimizer.save())
     final_value = objective(final_loc)
@@ -101,26 +114,24 @@ def test_optimizer_improves_sphere() -> None:
 
 
 def test_state_save_load_roundtrip() -> None:
-    opt_a = Optimizer()
+    schema_a = _make_schema("RoundtripA", alpha=(2.0, 1.5), beta=(-1.0, 2.0))
+    opt_a = Optimizer(schema_a)
     opt_a.pop_size = 20
-    opt_a.add("alpha", loc=2.0, scale=1.5)
-    opt_a.add("beta", loc=-1.0, scale=2.0)
     load_result = opt_a.load(None)
     assert load_result == LoadResult(["alpha", "beta"], [])
 
     for _ in range(37):
-        params = opt_a.ask()
-        alpha = params["alpha"]
-        beta = params["beta"]
-        opt_a.tell(params, -(alpha**2 + beta**2))
+        sample = opt_a.ask()
+        alpha = sample.params.alpha
+        beta = sample.params.beta
+        opt_a.tell(sample, -(alpha**2 + beta**2))
 
     state = opt_a.save()
     assert isinstance(state, dict)
 
-    opt_b = Optimizer()
+    schema_b = _make_schema("RoundtripB", beta=(-999.0, 0.5), alpha=(999.0, 0.5))
+    opt_b = Optimizer(schema_b)
     opt_b.pop_size = 20
-    opt_b.add("beta", loc=-999.0, scale=0.5)
-    opt_b.add("alpha", loc=999.0, scale=0.5)
     load_result = opt_b.load(state)
     assert load_result == LoadResult([], [])
     loaded = opt_b.save()
@@ -131,18 +142,17 @@ def test_state_save_load_roundtrip() -> None:
 
 
 def test_load_reconciles_added_and_removed_parameters() -> None:
-    base = Optimizer()
+    base_schema = _make_schema("BaseSchema", x=(2.0, 1.5), y=(-1.0, 0.7))
+    base = Optimizer(base_schema)
     base.pop_size = 4
-    base.add("x", loc=2.0, scale=1.5)
-    base.add("y", loc=-1.0, scale=0.7)
     load_result = base.load(None)
     assert load_result == LoadResult(["x", "y"], [])
 
     for _ in range(5):
-        params = base.ask()
-        x = params["x"]
-        y = params["y"]
-        base.tell(params, -(x**2 + 0.5 * y**2))
+        sample = base.ask()
+        x = sample.params.x
+        y = sample.params.y
+        base.tell(sample, -(x**2 + 0.5 * y**2))
 
     base_state = base.save()
     base_loc = _read_loc(base_state)
@@ -151,13 +161,11 @@ def test_load_reconciles_added_and_removed_parameters() -> None:
     base_batch_z = _read_batch_z(base_state)
     base_batch_points = _read_batch_points(base_state)
     base_results = _read_results(base_state)
-    assert any(result is not None for result in _read_results(base_state))
+    assert any(result is not None for result in base_results)
 
-    added = Optimizer()
+    added_schema = _make_schema("AddedSchema", x=(999.0, 9.0), y=(999.0, 9.0), z=(3.0, 2.0))
+    added = Optimizer(added_schema)
     added.pop_size = 4
-    added.add("x", loc=999.0, scale=9.0)
-    added.add("y", loc=999.0, scale=9.0)
-    added.add("z", loc=3.0, scale=2.0)
     load_result = added.load(base_state)
     assert load_result == LoadResult(["z"], [])
     added_state = added.save()
@@ -185,8 +193,8 @@ def test_load_reconciles_added_and_removed_parameters() -> None:
     )
     assert _read_results(added_state) == base_results
 
-    params = added.ask()
-    added.tell(params, -1.0)
+    sample = added.ask()
+    added.tell(sample, -1.0)
     added_partial_state = added.save()
     assert any(result is not None for result in _read_results(added_partial_state))
     added_loc = _read_loc(added_state)
@@ -196,10 +204,9 @@ def test_load_reconciles_added_and_removed_parameters() -> None:
     added_batch_points = _read_batch_points(added_partial_state)
     added_results = _read_results(added_partial_state)
 
-    removed = Optimizer()
+    removed_schema = _make_schema("RemovedSchema", x=(-999.0, 5.0), y=(-999.0, 5.0))
+    removed = Optimizer(removed_schema)
     removed.pop_size = 4
-    removed.add("x", loc=-999.0, scale=5.0)
-    removed.add("y", loc=-999.0, scale=5.0)
     load_result = removed.load(added_partial_state)
     assert load_result == LoadResult([], ["z"])
     removed_state = removed.save()
@@ -213,20 +220,16 @@ def test_load_reconciles_added_and_removed_parameters() -> None:
     assert _read_results(removed_state) == added_results
 
 
-def test_registration_order_is_lexicographic() -> None:
-    first = Optimizer()
+def test_schema_order_is_lexicographic() -> None:
+    first_schema = _make_schema("FirstSchema", zeta=(3.0, 1.0), alpha=(1.0, 2.0), mu=(2.0, 3.0))
+    first = Optimizer(first_schema)
     first.pop_size = 18
-    first.add("zeta", loc=3.0, scale=1.0)
-    first.add("alpha", loc=1.0, scale=2.0)
-    first.add("mu", loc=2.0, scale=3.0)
     first.load(None)
     state_first = first.save()
 
-    second = Optimizer()
+    second_schema = _make_schema("SecondSchema", mu=(2.0, 3.0), zeta=(3.0, 1.0), alpha=(1.0, 2.0))
+    second = Optimizer(second_schema)
     second.pop_size = 18
-    second.add("mu", loc=2.0, scale=3.0)
-    second.add("zeta", loc=3.0, scale=1.0)
-    second.add("alpha", loc=1.0, scale=2.0)
     second.load(None)
     state_second = second.save()
 
@@ -235,94 +238,135 @@ def test_registration_order_is_lexicographic() -> None:
     assert np.allclose(_read_loc(state_first), _read_loc(state_second))
 
 
-def test_add_raises_on_duplicate_name() -> None:
-    optimizer = Optimizer()
-    optimizer.add("x", loc=1.0, scale=2.0)
-    try:
-        optimizer.add("x", loc=9.0, scale=3.0)
-    except ValueError as exc:
-        assert "already registered" in str(exc)
-    else:
-        raise AssertionError("add() should reject duplicate parameter names")
+def test_nested_schema_flattens_leaf_names_and_rebuilds_dataclasses() -> None:
+    combat = make_dataclass(
+        "CombatParameters",
+        [
+            ("retreat_threshold", Annotated[float, Prior(mean=-1.0, sigma=2.0)]),
+            ("attack_threshold", Annotated[float, Prior(mean=2.0, sigma=3.0)]),
+        ],
+        frozen=True,
+    )
+    mining = make_dataclass(
+        "MiningParameters",
+        [("gas_priority", Annotated[float, Prior(mean=0.5, sigma=1.0)])],
+        frozen=True,
+    )
+    schema = make_dataclass(
+        "NestedParameters",
+        [
+            ("mining", mining),
+            ("alpha", Annotated[float, Prior(mean=1.5, sigma=0.25)]),
+            ("combat", combat),
+        ],
+        frozen=True,
+    )
 
-
-def test_ask_returns_parameters_mapping() -> None:
-    optimizer = Optimizer()
+    optimizer: Optimizer[Any] = Optimizer(schema)
     optimizer.pop_size = 6
-    optimizer.add("b", loc=2.0, scale=1.0)
-    optimizer.add("a", loc=-1.0, scale=1.0)
+    load_result = optimizer.load(None)
+
+    expected_names = ["alpha", "combat.attack_threshold", "combat.retreat_threshold", "mining.gas_priority"]
+    assert load_result == LoadResult(expected_names, [])
+    assert _read_names(optimizer.save()) == expected_names
+
+    best = optimizer.ask_best()
+
+    assert best.params.__class__ is schema
+    assert best.params.combat.__class__ is combat
+    assert best.params.mining.__class__ is mining
+    assert best.params.alpha == 1.5
+    assert best.params.combat.attack_threshold == 2.0
+    assert best.params.combat.retreat_threshold == -1.0
+    assert best.params.mining.gas_priority == 0.5
+
+    sample = optimizer.ask()
+    assert sample.params.__class__ is schema
+    assert sample.params.combat.__class__ is combat
+    assert sample.params.mining.__class__ is mining
+    assert isinstance(sample.params.alpha, float)
+    assert isinstance(sample.params.combat.attack_threshold, float)
+    assert isinstance(sample.params.mining.gas_priority, float)
+
+
+def test_schema_requires_prior_annotated_float_fields() -> None:
+    bad_schema = make_dataclass("BadSchema", [("x", float)], frozen=True)
+
+    with pytest.raises(TypeError, match=r"Annotated\[float, Prior"):
+        Optimizer(bad_schema)
+
+
+def test_ask_returns_typed_sample() -> None:
+    schema = _make_schema("TypedSample", b=(2.0, 1.0), a=(-1.0, 1.0))
+    optimizer = Optimizer(schema)
+    optimizer.pop_size = 6
     optimizer.load(None)
 
-    params = optimizer.ask()
-    assert isinstance(params, Mapping)
-    assert len(params) == 2
-    assert list(params) == ["a", "b"]
-    assert params["a"] == params.params["a"]
-    assert params["b"] == params.params["b"]
+    sample = optimizer.ask()
+
+    assert sample.sample_id is not None
+    assert sample.context is None
+    assert sample.matched_context is False
+    assert sample.params.__class__ is schema
+    assert isinstance(sample.params.a, float)
+    assert isinstance(sample.params.b, float)
 
 
 def test_ask_best_returns_current_means_without_context() -> None:
-    optimizer = Optimizer()
+    schema = _make_schema("BestParams", b=(2.0, 1.0), a=(-1.0, 1.0))
+    optimizer = Optimizer(schema)
     optimizer.pop_size = 6
-    optimizer.add("b", loc=2.0, scale=1.0)
-    optimizer.add("a", loc=-1.0, scale=1.0)
     optimizer.load(None)
 
     best = optimizer.ask_best()
 
-    assert isinstance(best, Mapping)
-    assert list(best) == ["a", "b"]
     assert best.sample_id is None
     assert best.context is None
     assert best.matched_context is False
-    assert best["a"] == -1.0
-    assert best["b"] == 2.0
+    assert best.params.__class__ is schema
+    assert best.params.a == -1.0
+    assert best.params.b == 2.0
 
 
-def test_tell_rejects_ask_best_parameters() -> None:
-    optimizer = Optimizer()
+def test_tell_rejects_ask_best_sample() -> None:
+    schema = _make_schema("SingleParam", x=(0.0, 1.0))
+    optimizer = Optimizer(schema)
     optimizer.pop_size = 4
-    optimizer.add("x", loc=0.0, scale=1.0)
     optimizer.load(None)
 
     best = optimizer.ask_best()
 
-    try:
+    with pytest.raises(RuntimeError, match="ask_best"):
         optimizer.tell(best, 1.0)
-    except RuntimeError as exc:
-        assert "ask_best" in str(exc)
-    else:
-        raise AssertionError("tell() should reject deterministic ask_best() parameters")
 
 
 def test_context_reuses_mirror_on_repeat() -> None:
-    optimizer = Optimizer()
+    schema = _make_schema("ContextParams", x=(0.0, 1.0), y=(0.0, 1.0))
+    optimizer = Optimizer(schema)
     optimizer.pop_size = 4
-    optimizer.add("x", loc=0.0, scale=1.0)
-    optimizer.add("y", loc=0.0, scale=1.0)
     optimizer.load(None)
     context = "arena:zerg"
 
-    first_params = optimizer.ask(context=context)
-    first = np.array([first_params["x"], first_params["y"]], dtype=float)
-    first_report = optimizer.tell(first_params, 1.0)
+    first_sample = optimizer.ask(context=context)
+    first = np.array([first_sample.params.x, first_sample.params.y], dtype=float)
+    first_report = optimizer.tell(first_sample, 1.0)
     assert first_report == TellResult(False, False, XNESStatus.OK, False)
 
-    second_params = optimizer.ask()
-    second_report = optimizer.tell(second_params, 0.0)
+    second_sample = optimizer.ask()
+    second_report = optimizer.tell(second_sample, 0.0)
     assert second_report == TellResult(False, False, XNESStatus.OK, False)
 
-    mirror_params = optimizer.ask(context=context)
-    mirror = np.array([mirror_params["x"], mirror_params["y"]], dtype=float)
+    mirror_sample = optimizer.ask(context=context)
+    mirror = np.array([mirror_sample.params.x, mirror_sample.params.y], dtype=float)
     assert np.allclose(mirror, -first)
-    third_report = optimizer.tell(mirror_params, -1.0)
+    third_report = optimizer.tell(mirror_sample, -1.0)
     assert third_report == TellResult(False, True, XNESStatus.OK, False)
 
 
 def test_ask_allows_out_of_order_tells() -> None:
-    optimizer = Optimizer()
+    schema = _make_schema("OutOfOrder", x=(0.0, 1.0))
+    optimizer = Optimizer(schema)
     optimizer.pop_size = 4
-    optimizer.add("x", loc=0.0, scale=1.0)
     optimizer.load(None)
 
     first = optimizer.ask()
@@ -335,58 +379,50 @@ def test_ask_allows_out_of_order_tells() -> None:
 
 
 def test_ask_raises_when_batch_is_fully_claimed() -> None:
-    optimizer = Optimizer()
+    schema = _make_schema("ClaimedBatch", x=(0.0, 1.0))
+    optimizer = Optimizer(schema)
     optimizer.pop_size = 4
-    optimizer.add("x", loc=0.0, scale=1.0)
     optimizer.load(None)
 
-    params_batch = [optimizer.ask() for _ in range(4)]
-    assert len(params_batch) == 4
-    try:
+    samples = [optimizer.ask() for _ in range(4)]
+    assert len(samples) == 4
+    with pytest.raises(RuntimeError, match="Pending"):
         optimizer.ask()
-    except RuntimeError as exc:
-        assert "Pending" in str(exc)
-    else:
-        raise AssertionError("ask() should reject when all samples are reserved")
 
 
 def test_stale_tell_is_rejected() -> None:
-    optimizer = Optimizer()
+    schema = _make_schema("StaleTell", x=(0.0, 1.0))
+    optimizer = Optimizer(schema)
     optimizer.pop_size = 4
-    optimizer.add("x", loc=0.0, scale=1.0)
     optimizer.load(None)
 
-    params = optimizer.ask()
-    optimizer.tell(params, 1.0)
-    try:
-        optimizer.tell(params, 1.0)
-    except RuntimeError:
-        pass
-    else:
-        raise AssertionError("tell() should reject stale params ids")
+    sample = optimizer.ask()
+    optimizer.tell(sample, 1.0)
+
+    with pytest.raises(RuntimeError, match="Unknown"):
+        optimizer.tell(sample, 1.0)
 
 
 def test_runtime_config_is_not_persisted_or_loaded() -> None:
-    opt_a = Optimizer()
+    schema = _make_schema("RuntimeConfig", x=(4.0, 2.0))
+    opt_a = Optimizer(schema)
     opt_a.pop_size = 14
     opt_a.csa_enabled = False
     opt_a.eta_mu = 0.9
     opt_a.eta_sigma = 0.7
     opt_a.eta_B = 0.2
-    opt_a.add("x", loc=4.0, scale=2.0)
     opt_a.load(None)
     for _ in range(20):
-        params = opt_a.ask()
-        x = params["x"]
-        opt_a.tell(params, -(x**2))
+        sample = opt_a.ask()
+        x = sample.params.x
+        opt_a.tell(sample, -(x**2))
 
     state = opt_a.save()
     assert isinstance(state, dict)
     assert "context_waiting" in state
 
-    opt_b = Optimizer()
+    opt_b = Optimizer(schema)
     opt_b.pop_size = 4
-    opt_b.add("x", loc=4.0, scale=2.0)
     opt_b.load(state)
     loaded = opt_b.save()
     assert isinstance(loaded, dict)
@@ -398,27 +434,24 @@ def test_runtime_config_is_not_persisted_or_loaded() -> None:
 
 
 def test_restart_on_conditioning_failure() -> None:
-    optimizer = Optimizer()
+    schema = _make_schema("RestartSchema", x=(0.0, 1.0), y=(0.0, 1.0))
+    optimizer = Optimizer(schema)
     optimizer.pop_size = 10
-    optimizer.add("x", loc=0.0, scale=1.0)
-    optimizer.add("y", loc=0.0, scale=1.0)
     optimizer.load(None)
 
     state = optimizer.save()
     assert isinstance(state, dict)
     state["scale"] = [[1e-10, 0.0], [0.0, 1e10]]
 
-    restored = Optimizer()
+    restored = Optimizer(schema)
     restored.pop_size = 10
-    restored.add("x", loc=0.0, scale=1.0)
-    restored.add("y", loc=0.0, scale=1.0)
     restored.load(state)
 
     for _ in range(10):
-        params = restored.ask()
-        x = params["x"]
-        y = params["y"]
-        restored.tell(params, -(x**2 + y**2))
+        sample = restored.ask()
+        x = sample.params.x
+        y = sample.params.y
+        restored.tell(sample, -(x**2 + y**2))
 
     conditioned = restored.save()
     assert np.allclose(_read_loc(conditioned), np.array([0.0, 0.0]))
@@ -427,30 +460,27 @@ def test_restart_on_conditioning_failure() -> None:
 
 
 def test_save_load_preserves_optimizer_state() -> None:
-    direct = Optimizer()
+    schema = _make_schema("PreserveState", x=(2.0, 1.5), y=(-1.0, 0.7))
+    direct = Optimizer(schema)
     direct.pop_size = 12
-    direct.add("x", loc=2.0, scale=1.5)
-    direct.add("y", loc=-1.0, scale=0.7)
     direct.load(None)
 
     recreated_state = direct.save()
     for _ in range(40):
-        direct_params = direct.ask()
-        direct_x = direct_params["x"]
-        direct_y = direct_params["y"]
+        direct_sample = direct.ask()
+        direct_x = direct_sample.params.x
+        direct_y = direct_sample.params.y
         direct_result = -(direct_x**2 + 0.5 * direct_y**2)
-        direct.tell(direct_params, direct_result)
+        direct.tell(direct_sample, direct_result)
 
-        recreated = Optimizer()
+        recreated = Optimizer(schema)
         recreated.pop_size = 12
-        recreated.add("x", loc=2.0, scale=1.5)
-        recreated.add("y", loc=-1.0, scale=0.7)
         recreated.load(recreated_state)
-        recreated_params = recreated.ask()
-        recreated_x = recreated_params["x"]
-        recreated_y = recreated_params["y"]
+        recreated_sample = recreated.ask()
+        recreated_x = recreated_sample.params.x
+        recreated_y = recreated_sample.params.y
         recreated_result = -(recreated_x**2 + 0.5 * recreated_y**2)
-        recreated.tell(recreated_params, recreated_result)
+        recreated.tell(recreated_sample, recreated_result)
         recreated_state = recreated.save()
 
     direct_state = direct.save()

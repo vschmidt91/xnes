@@ -2,11 +2,13 @@
 
 ::: xnes.Optimizer
 
+::: xnes.Prior
+
+::: xnes.Sample
+
 ::: xnes.TellResult
 
 ::: xnes.LoadResult
-
-::: xnes.Parameters
 
 ::: xnes.XNESStatus
 
