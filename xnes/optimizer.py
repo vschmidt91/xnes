@@ -103,8 +103,8 @@ class Optimizer(Generic[T]):
         """Restore optimizer state from a previous snapshot.
 
         Loading a previous snapshot reconciles added, removed, and changed
-        schema leaves by persisted parameter definition while preserving shared
-        learned state.
+        schema leaves by persisted transform compatibility while preserving
+        shared learned state.
         """
         if state is None:
             msg = "state must be a saved optimizer snapshot, not None."

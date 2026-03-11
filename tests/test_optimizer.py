@@ -293,10 +293,10 @@ def test_load_reconciles_added_and_removed_parameters() -> None:
     assert _read_results(removed_state) == added_results
 
 
-def test_load_reconciles_same_name_spec_changes_and_selectively_preserves_batch() -> None:
+def test_load_reconciles_bounds_changes_and_selectively_preserves_batch() -> None:
     base_schema = _make_schema(
         "BaseChangedSchema",
-        x=Parameter(loc=3.0, scale=1.0, min=0.0),
+        x=Parameter(loc=0.25, scale=1.0, min=0.0),
         y=Parameter(loc=-1.0, scale=0.7),
     )
     base = Optimizer(base_schema, pop_size=4)
@@ -305,7 +305,7 @@ def test_load_reconciles_same_name_spec_changes_and_selectively_preserves_batch(
         trial, params = base.ask()
         x = params.x
         y = params.y
-        base.tell(trial, -((x - 2.0) ** 2 + 0.5 * y**2))
+        base.tell(trial, -((x - 0.2) ** 2 + 0.5 * y**2))
 
     base_state = base.save()
     base_loc = _read_loc(base_state)
@@ -325,7 +325,7 @@ def test_load_reconciles_same_name_spec_changes_and_selectively_preserves_batch(
 
     changed_schema = _make_schema(
         "ChangedSchema",
-        x=Parameter(loc=0.25, scale=2.0, min=0.0, max=1.0),
+        x=Parameter(loc=0.25, scale=1.0, min=0.0, max=1.0),
         y=Parameter(loc=-1.0, scale=0.7),
     )
     changed = Optimizer(changed_schema, pop_size=4)
@@ -361,7 +361,7 @@ def test_load_reconciles_same_name_spec_changes_and_selectively_preserves_batch(
     assert _read_context_pending(changed_state) == _read_context_pending(base_state)
 
 
-def test_loc_and_scale_changes_trigger_schema_changeover() -> None:
+def test_loc_and_scale_changes_do_not_trigger_schema_changeover() -> None:
     base_schema = _make_identity_schema("StrictBase", x=(2.0, 1.5), y=(-1.0, 0.5))
     base_state = _initialized_state(base_schema, pop_size=4)
 
@@ -372,14 +372,18 @@ def test_loc_and_scale_changes_trigger_schema_changeover() -> None:
     )
     changed = Optimizer(changed_schema, pop_size=4)
     load_result = changed.load(base_state)
-    assert load_result == SchemaDiff(added=[], removed=[], changed=["x", "y"], unchanged=[])
+    assert load_result == SchemaDiff(added=[], removed=[], changed=[], unchanged=["x", "y"])
 
     changed_state = changed.save()
-    fresh_state = _initialized_state(changed_schema, pop_size=4)
-
-    assert np.allclose(_read_loc(changed_state), _read_loc(fresh_state))
-    assert np.allclose(_read_scale(changed_state), _read_scale(fresh_state))
-    assert np.allclose(_read_step_size_path(changed_state), _read_step_size_path(fresh_state))
+    assert _read_schema(changed_state) == {
+        "x": _parameter_spec(loc=4.0, scale=1.5),
+        "y": _parameter_spec(loc=-1.0, scale=2.0),
+    }
+    assert np.allclose(_read_loc(changed_state), _read_loc(base_state))
+    assert np.allclose(_read_scale(changed_state), _read_scale(base_state))
+    assert np.allclose(_read_step_size_path(changed_state), _read_step_size_path(base_state))
+    assert np.allclose(_read_batch(changed_state), _read_batch(base_state))
+    assert _read_results(changed_state) == _read_results(base_state)
 
 
 def test_schema_order_is_lexicographic() -> None:

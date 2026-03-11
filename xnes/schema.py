@@ -94,6 +94,10 @@ class Parameter:
     def state_spec(self) -> dict[str, object]:
         return cast(dict[str, object], _json_normalize(asdict(self)))
 
+    def reconciliation_key(self) -> tuple[float | None, float | None]:
+        """Return the persisted transform data that must match to reuse latent state."""
+        return self.min, self.max
+
     def initial_state(self, name: str) -> tuple[float, float]:
         self.validate(name)
         mu0 = _coerce_finite(self.inverse_loc(self.loc), _field_component_name(name, "latent loc"))
@@ -112,8 +116,8 @@ class SchemaDiff:
     Attributes:
         added: Current schema leaf names absent from the loaded state.
         removed: Loaded schema leaf names absent from the current schema.
-        changed: Shared leaf names whose persisted parameter definition differs.
-        unchanged: Shared leaf names whose persisted parameter definition matches.
+        changed: Shared leaf names whose persisted transform compatibility differs.
+        unchanged: Shared leaf names whose persisted transform compatibility matches.
     """
 
     added: list[str]
@@ -162,10 +166,16 @@ class SchemaSpec(Generic[T]):
         added = [name for name in current_names if name not in saved_schema]
         removed = [name for name in saved_names if name not in current_schema]
         changed = [
-            name for name in current_names if name in saved_schema and saved_schema[name] != current_schema[name]
+            name
+            for name in current_names
+            if name in saved_schema
+            and saved_schema[name].reconciliation_key() != current_schema[name].reconciliation_key()
         ]
         unchanged = [
-            name for name in current_names if name in saved_schema and saved_schema[name] == current_schema[name]
+            name
+            for name in current_names
+            if name in saved_schema
+            and saved_schema[name].reconciliation_key() == current_schema[name].reconciliation_key()
         ]
         return SchemaDiff(added=added, removed=removed, changed=changed, unchanged=unchanged)
 
