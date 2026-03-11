@@ -1,19 +1,19 @@
 .PHONY: fix check docs docs-serve
-POETRY ?= poetry
+PYTHON ?= python
 SOURCES = xnes tests
 
 fix:
-	$(POETRY) run ruff format $(SOURCES)
-	$(POETRY) run ruff check --fix --unsafe-fixes $(SOURCES)
+	$(PYTHON) -m ruff check --fix --unsafe-fixes $(SOURCES)
+	$(PYTHON) -m ruff format $(SOURCES)
 
 check:
-	$(POETRY) run ruff check $(SOURCES)
-	$(POETRY) run ruff format --check $(SOURCES)
-	$(POETRY) run mypy $(SOURCES)
-	$(POETRY) run pytest -q
+	$(PYTHON) -m ruff check $(SOURCES)
+	$(PYTHON) -m ruff format --check $(SOURCES)
+	$(PYTHON) -m mypy $(SOURCES)
+	$(PYTHON) -m pytest -q
 
 docs:
-	$(POETRY) run mkdocs build
+	$(PYTHON) -m mkdocs build
 
 docs-serve:
-	$(POETRY) run mkdocs serve
+	$(PYTHON) -m mkdocs serve
