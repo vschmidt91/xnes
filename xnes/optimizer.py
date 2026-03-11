@@ -9,7 +9,7 @@ from typing import Generic, TypeVar, cast
 import numpy as np
 
 from .scheduler import BatchCompletion, BatchScheduler, BatchTrial
-from .schema import SchemaDiff, SchemaSpec, parse_schema
+from .schema import Parameter, SchemaDiff, SchemaSpec, parse_schema
 from .xnes import XNES, XNESStatus
 
 T = TypeVar("T")
@@ -53,8 +53,8 @@ class Optimizer(Generic[T]):
     and whose optimized leaves are declared as `Annotated[float, Parameter(...)]`.
     The wrapper exposes typed runtime values separately from trial handles
     while keeping optimizer state keyed by stable dotted leaf names
-    plus persisted schema hashes. Field ordering is lexicographic by leaf name
-    rather than dataclass declaration order.
+    plus persisted parameter definitions. Field ordering is lexicographic by
+    leaf name rather than dataclass declaration order.
     """
 
     def __init__(self, schema_type: type[T]) -> None:
@@ -91,7 +91,7 @@ class Optimizer(Generic[T]):
         Passing `None` starts a new run from the schema metadata and reports all
         current schema leaf names as added. Loading a previous snapshot
         reconciles added, removed, and changed schema leaves by persisted
-        schema hash while preserving shared learned state.
+        parameter definition while preserving shared learned state.
         """
 
         expected_names = list(self._schema.names)
@@ -103,7 +103,7 @@ class Optimizer(Generic[T]):
         state_obj = cast(Mapping[str, object], state)
 
         schema_json = cast(Mapping[str, object], state_obj["schema"])
-        saved_schema = {str(name): str(spec_hash) for name, spec_hash in schema_json.items()}
+        saved_schema = {str(name): Parameter.from_state(spec) for name, spec in schema_json.items()}
         saved_names = sorted(saved_schema)
         loc = np.asarray(state_obj["loc"], dtype=float)
         scale = np.asarray(state_obj["scale"], dtype=float)

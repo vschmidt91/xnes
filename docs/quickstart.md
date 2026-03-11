@@ -13,7 +13,7 @@ from xnes import Optimizer, Parameter
 
 @dataclass(frozen=True)
 class Params:
-    coeff_1: Annotated[float, Parameter(loc=2.0, scale=3.0)]
+    coeff_1: Annotated[float, Parameter(loc=2.0, scale=3.0, min=0.0)]
     coeff_2: Annotated[float, Parameter()]
 
 

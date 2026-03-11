@@ -12,7 +12,7 @@ runs are noisy, resumable, and sometimes organized around recurring contexts.
 - Canonical xNES core with optional CSA step-size adaptation.
 - Schema-first `Optimizer(Schema)` wrapper returning typed dataclass params.
 - Parameter metadata colocated with fields via `Annotated[float, Parameter(...)]`.
-- JSON-compatible optimizer state through `save()` and `load(...)`.
+- JSON-compatible optimizer state with human-readable parameter schema definitions through `save()` and `load(...)`.
 - Optional mirrored-sample routing through `ask(context=...)`.
 - Deterministic inference through `ask_best()`.
 
@@ -56,7 +56,7 @@ from xnes import Optimizer, Parameter
 
 @dataclass(frozen=True)
 class Params:
-    coeff_1: Annotated[float, Parameter(loc=2.0, scale=3.0)]
+    coeff_1: Annotated[float, Parameter(loc=2.0, scale=3.0, min=0.0)]
     coeff_2: Annotated[float, Parameter()]
 
 
@@ -119,7 +119,7 @@ Important constraints:
 
 - `load()` must be called before `ask()` or `ask_best()`.
 - `load(None)` reports all current schema fields as added.
-- `load(state)` reconciles changed schemas by persisted schema hash.
+- `load(state)` reconciles changed schemas by persisted parameter definition.
 - Shared learned state is preserved for unchanged fields.
 - Added fields start from their parameter defaults.
 - Removed fields are dropped.
@@ -131,8 +131,8 @@ Important constraints:
 
 ## Core API
 
-- `Parameter(loc=0.0, scale=1.0)`
-  Parameter metadata attached to one schema field.
+- `Parameter(loc=0.0, scale=1.0, min=None, max=None)`
+  Parameter metadata attached to one schema field. Add `min` and/or `max` for one-sided softplus or two-sided sigmoid bounds.
 - `Optimizer(schema_type)`
   Construct a maximizing optimizer over a dataclass schema.
 - `Optimizer.load(state) -> SchemaDiff`
@@ -144,7 +144,7 @@ Important constraints:
 - `Optimizer.tell(trial, result) -> TellResult`
   Submit one scalar or tuple-like objective result for a trial returned by `ask()`.
 - `Optimizer.save() -> dict[str, object]`
-  Return a JSON-compatible snapshot of optimizer state.
+  Return a JSON-compatible snapshot of optimizer state, including readable per-field parameter definitions.
 - `Trial`
   Runtime-only handle returned by `ask()` with `sample_id`, `context`, and `matched_context`.
 - `SchemaDiff`

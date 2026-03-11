@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, fields, is_dataclass
 from typing import Annotated, Any, Generic, TypeVar, cast, get_args, get_origin, get_type_hints
@@ -16,70 +14,34 @@ Path = tuple[str, ...]
 BuildFn = Callable[[Mapping[Path, float]], Any]
 
 
+@dataclass(frozen=True)
 class Parameter:
-    """User-facing metadata for one optimized scalar schema field."""
+    """User-facing metadata for one optimized scalar schema field.
 
-    loc: float
-    scale: float
+    `loc` is the user-space center value. `scale` is the latent-space standard
+    deviation. `min` and `max`, when provided, are asymptotic user-space
+    bounds applied through monotone coordinate transforms.
+    """
 
-    def __new__(cls, *args: Any, **kwargs: Any) -> Parameter:
-        if cls is Parameter:
-            return _UnboundedParameter(*args, **kwargs)
-        return super().__new__(cls)
+    loc: float = 0.0
+    scale: float = 1.0
+    min: float | None = None
+    max: float | None = None
 
-    @classmethod
-    def unbounded(cls, *, loc: float = 0.0, scale: float = 1.0) -> Parameter:
-        return _UnboundedParameter(loc=loc, scale=scale)
-
-    @classmethod
-    def between(
-        cls,
-        lower: float,
-        upper: float,
-        *,
-        loc: float | None = None,
-        scale: float = 1.0,
-    ) -> Parameter:
-        midpoint = 0.5 * (float(lower) + float(upper))
-        return _BetweenParameter(
-            lower=lower,
-            upper=upper,
-            loc=midpoint if loc is None else loc,
-            scale=scale,
-        )
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "loc", float(self.loc))
+        object.__setattr__(self, "scale", float(self.scale))
+        object.__setattr__(self, "min", None if self.min is None else float(self.min))
+        object.__setattr__(self, "max", None if self.max is None else float(self.max))
 
     @classmethod
-    def above(cls, lower: float, *, loc: float | None = None, scale: float = 1.0) -> Parameter:
-        default_loc = float(lower) + float(_softplus(0.0))
-        return _AboveParameter(
-            lower=lower,
-            loc=default_loc if loc is None else loc,
-            scale=scale,
-        )
-
-    @classmethod
-    def below(cls, upper: float, *, loc: float | None = None, scale: float = 1.0) -> Parameter:
-        default_loc = float(upper) - float(_softplus(0.0))
-        return _BelowParameter(
-            upper=upper,
-            loc=default_loc if loc is None else loc,
-            scale=scale,
-        )
-
-    @classmethod
-    def above_exponential(cls, lower: float, *, loc: float | None = None, scale: float = 1.0) -> Parameter:
-        return _AboveExponentialParameter(
-            lower=lower,
-            loc=(float(lower) + 1.0) if loc is None else loc,
-            scale=scale,
-        )
-
-    @classmethod
-    def below_exponential(cls, upper: float, *, loc: float | None = None, scale: float = 1.0) -> Parameter:
-        return _BelowExponentialParameter(
-            upper=upper,
-            loc=(float(upper) - 1.0) if loc is None else loc,
-            scale=scale,
+    def from_state(cls, state: object) -> Parameter:
+        state_obj = cast(Mapping[str, object], state)
+        return cls(
+            loc=float(cast(Any, state_obj["loc"])),
+            scale=float(cast(Any, state_obj["scale"])),
+            min=None if state_obj["min"] is None else float(cast(Any, state_obj["min"])),
+            max=None if state_obj["max"] is None else float(cast(Any, state_obj["max"])),
         )
 
     def decode_scalar(self, z: float) -> float:
@@ -87,25 +49,50 @@ class Parameter:
 
     def forward(self, z: np.ndarray | float) -> np.ndarray:
         """Map latent coordinates into user-space values."""
-        raise NotImplementedError
+        if self.min is None:
+            if self.max is None:
+                return np.asarray(z, dtype=float)
+            return float(self.max) - _softplus(-np.asarray(z, dtype=float))
+        if self.max is None:
+            return float(self.min) + _softplus(z)
+        values = np.asarray(z, dtype=float)
+        return float(self.min) + (float(self.max) - float(self.min)) * expit(values)
 
     def inverse_loc(self, x: float) -> float:
         """Map a user-space central value into latent coordinates."""
-        raise NotImplementedError
+        if self.min is None:
+            if self.max is None:
+                return float(x)
+            return float(-_softplus_inverse(float(self.max) - float(x)))
+        if self.max is None:
+            return float(_softplus_inverse(float(x) - float(self.min)))
+        return float(logit((float(x) - float(self.min)) / (float(self.max) - float(self.min))))
 
     def validate(self, name: str) -> None:
         """Validate the parameter specification for one schema field."""
-        raise NotImplementedError
+        self._validate_loc_and_scale(name)
+        min_value = None if self.min is None else _coerce_finite(self.min, _field_component_name(name, "min"))
+        max_value = None if self.max is None else _coerce_finite(self.max, _field_component_name(name, "max"))
 
-    def state_payload(self) -> dict[str, object]:
-        return {
-            "kind": f"{type(self).__module__}.{type(self).__qualname__}",
-            "spec": _json_normalize(asdict(cast(Any, self))),
-        }
+        if min_value is not None and max_value is not None:
+            if not min_value < max_value:
+                msg = f"xnes schema field '{name}' must satisfy min < max for Parameter(...)"
+                raise ValueError(msg)
+            if not min_value < self.loc < max_value:
+                msg = f"xnes schema field '{name}' must satisfy min < loc < max for Parameter(...)"
+                raise ValueError(msg)
+            return
 
-    def state_hash(self) -> str:
-        blob = json.dumps(self.state_payload(), sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
-        return hashlib.blake2b(blob, digest_size=16).hexdigest()
+        if min_value is not None and not self.loc > min_value:
+            msg = f"xnes schema field '{name}' must satisfy loc > min for Parameter(...)"
+            raise ValueError(msg)
+
+        if max_value is not None and not self.loc < max_value:
+            msg = f"xnes schema field '{name}' must satisfy loc < max for Parameter(...)"
+            raise ValueError(msg)
+
+    def state_spec(self) -> dict[str, object]:
+        return cast(dict[str, object], _json_normalize(asdict(self)))
 
     def initial_state(self, name: str) -> tuple[float, float]:
         self.validate(name)
@@ -118,159 +105,15 @@ class Parameter:
         _coerce_positive(self.scale, _field_component_name(name, "scale"))
 
 
-@dataclass(frozen=True, repr=False)
-class _UnboundedParameter(Parameter):
-    loc: float = 0.0
-    scale: float = 1.0
-
-    def forward(self, z: np.ndarray | float) -> np.ndarray:
-        return np.asarray(z, dtype=float)
-
-    def inverse_loc(self, x: float) -> float:
-        return float(x)
-
-    def validate(self, name: str) -> None:
-        self._validate_loc_and_scale(name)
-
-    def __repr__(self) -> str:
-        return f"Parameter(loc={self.loc!r}, scale={self.scale!r})"
-
-
-@dataclass(frozen=True, repr=False)
-class _BetweenParameter(Parameter):
-    lower: float
-    upper: float
-    loc: float
-    scale: float = 1.0
-
-    def forward(self, z: np.ndarray | float) -> np.ndarray:
-        values = np.asarray(z, dtype=float)
-        lower = float(self.lower)
-        upper = float(self.upper)
-        return lower + (upper - lower) * expit(values)
-
-    def inverse_loc(self, x: float) -> float:
-        lower = float(self.lower)
-        upper = float(self.upper)
-        return float(logit((float(x) - lower) / (upper - lower)))
-
-    def validate(self, name: str) -> None:
-        self._validate_loc_and_scale(name)
-        lower = _coerce_finite(self.lower, _field_component_name(name, "lower"))
-        upper = _coerce_finite(self.upper, _field_component_name(name, "upper"))
-        loc = float(self.loc)
-        if not lower < upper:
-            msg = f"xnes schema field '{name}' must satisfy lower < upper for Parameter.between(...)"
-            raise ValueError(msg)
-        if not lower < loc < upper:
-            msg = f"xnes schema field '{name}' must satisfy lower < loc < upper for Parameter.between(...)"
-            raise ValueError(msg)
-
-    def __repr__(self) -> str:
-        return f"Parameter.between(lower={self.lower!r}, upper={self.upper!r}, loc={self.loc!r}, scale={self.scale!r})"
-
-
-@dataclass(frozen=True, repr=False)
-class _AboveParameter(Parameter):
-    lower: float
-    loc: float
-    scale: float = 1.0
-
-    def forward(self, z: np.ndarray | float) -> np.ndarray:
-        return float(self.lower) + _softplus(z)
-
-    def inverse_loc(self, x: float) -> float:
-        return float(_softplus_inverse(float(x) - float(self.lower)))
-
-    def validate(self, name: str) -> None:
-        self._validate_loc_and_scale(name)
-        lower = _coerce_finite(self.lower, _field_component_name(name, "lower"))
-        if not float(self.loc) > lower:
-            msg = f"xnes schema field '{name}' must satisfy loc > lower for Parameter.above(...)"
-            raise ValueError(msg)
-
-    def __repr__(self) -> str:
-        return f"Parameter.above(lower={self.lower!r}, loc={self.loc!r}, scale={self.scale!r})"
-
-
-@dataclass(frozen=True, repr=False)
-class _BelowParameter(Parameter):
-    upper: float
-    loc: float
-    scale: float = 1.0
-
-    def forward(self, z: np.ndarray | float) -> np.ndarray:
-        return float(self.upper) - _softplus(-np.asarray(z, dtype=float))
-
-    def inverse_loc(self, x: float) -> float:
-        return float(-_softplus_inverse(float(self.upper) - float(x)))
-
-    def validate(self, name: str) -> None:
-        self._validate_loc_and_scale(name)
-        upper = _coerce_finite(self.upper, _field_component_name(name, "upper"))
-        if not float(self.loc) < upper:
-            msg = f"xnes schema field '{name}' must satisfy loc < upper for Parameter.below(...)"
-            raise ValueError(msg)
-
-    def __repr__(self) -> str:
-        return f"Parameter.below(upper={self.upper!r}, loc={self.loc!r}, scale={self.scale!r})"
-
-
-@dataclass(frozen=True, repr=False)
-class _AboveExponentialParameter(Parameter):
-    lower: float
-    loc: float
-    scale: float = 1.0
-
-    def forward(self, z: np.ndarray | float) -> np.ndarray:
-        return float(self.lower) + np.exp(np.asarray(z, dtype=float))
-
-    def inverse_loc(self, x: float) -> float:
-        return float(np.log(float(x) - float(self.lower)))
-
-    def validate(self, name: str) -> None:
-        self._validate_loc_and_scale(name)
-        lower = _coerce_finite(self.lower, _field_component_name(name, "lower"))
-        if not float(self.loc) > lower:
-            msg = f"xnes schema field '{name}' must satisfy loc > lower for Parameter.above_exponential(...)"
-            raise ValueError(msg)
-
-    def __repr__(self) -> str:
-        return f"Parameter.above_exponential(lower={self.lower!r}, loc={self.loc!r}, scale={self.scale!r})"
-
-
-@dataclass(frozen=True, repr=False)
-class _BelowExponentialParameter(Parameter):
-    upper: float
-    loc: float
-    scale: float = 1.0
-
-    def forward(self, z: np.ndarray | float) -> np.ndarray:
-        return float(self.upper) - np.exp(-np.asarray(z, dtype=float))
-
-    def inverse_loc(self, x: float) -> float:
-        return float(-np.log(float(self.upper) - float(x)))
-
-    def validate(self, name: str) -> None:
-        self._validate_loc_and_scale(name)
-        upper = _coerce_finite(self.upper, _field_component_name(name, "upper"))
-        if not float(self.loc) < upper:
-            msg = f"xnes schema field '{name}' must satisfy loc < upper for Parameter.below_exponential(...)"
-            raise ValueError(msg)
-
-    def __repr__(self) -> str:
-        return f"Parameter.below_exponential(upper={self.upper!r}, loc={self.loc!r}, scale={self.scale!r})"
-
-
 @dataclass(frozen=True)
 class SchemaDiff:
-    """Difference between persisted and current schema identities.
+    """Difference between persisted and current schema definitions.
 
     Attributes:
         added: Current schema leaf names absent from the loaded state.
         removed: Loaded schema leaf names absent from the current schema.
-        changed: Shared leaf names whose persisted spec hash differs from the current schema.
-        unchanged: Shared leaf names whose persisted spec hash matches the current schema.
+        changed: Shared leaf names whose persisted parameter definition differs.
+        unchanged: Shared leaf names whose persisted parameter definition matches.
     """
 
     added: list[str]
@@ -288,7 +131,6 @@ class FieldSpec:
     parameter: Parameter
     mu0: float
     sigma0: float
-    spec_hash: str
 
     def decode_scalar(self, z: float) -> float:
         return self.parameter.decode_scalar(z)
@@ -310,11 +152,11 @@ class SchemaSpec(Generic[T]):
     def dim(self) -> int:
         return len(self.fields)
 
-    def state_schema(self) -> dict[str, str]:
-        return {field_spec.name: field_spec.spec_hash for field_spec in self.fields}
+    def state_schema(self) -> dict[str, dict[str, object]]:
+        return {field_spec.name: field_spec.parameter.state_spec() for field_spec in self.fields}
 
-    def diff(self, saved_schema: Mapping[str, str]) -> SchemaDiff:
-        current_schema = self.state_schema()
+    def diff(self, saved_schema: Mapping[str, Parameter]) -> SchemaDiff:
+        current_schema = {field_spec.name: field_spec.parameter for field_spec in self.fields}
         current_names = self.names
         saved_names = sorted(saved_schema)
         added = [name for name in current_names if name not in saved_schema]
@@ -433,7 +275,6 @@ def _normalize_field_spec(name: str, path: Path, parameter: Parameter) -> FieldS
         parameter=parameter,
         mu0=mu0,
         sigma0=sigma0,
-        spec_hash=parameter.state_hash(),
     )
 
 

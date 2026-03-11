@@ -12,8 +12,8 @@ Example:
 
     @dataclass(frozen=True)
     class Params:
-        coeff: Annotated[float, Parameter.above(lower=0.0, loc=1.0, scale=0.5)]
-        ratio: Annotated[float, Parameter.between(lower=0.0, upper=1.0)]
+        coeff: Annotated[float, Parameter(loc=1.0, scale=0.5, min=0.0)]
+        ratio: Annotated[float, Parameter(min=0.0, max=1.0)]
 
     opt = Optimizer(Params)
     opt.pop_size = 32

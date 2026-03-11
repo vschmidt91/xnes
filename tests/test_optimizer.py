@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import make_dataclass
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 
 import numpy as np
 import pytest
@@ -38,13 +38,28 @@ def _initialized_state(schema: type[Any], *, pop_size: int) -> dict[str, object]
     return state
 
 
-def _read_schema(state: object) -> dict[str, str]:
+def _parameter_spec(
+    *,
+    loc: float,
+    scale: float = 1.0,
+    min: float | None = None,
+    max: float | None = None,
+) -> dict[str, object]:
+    return {"loc": loc, "scale": scale, "min": min, "max": max}
+
+
+def _read_schema(state: object) -> dict[str, dict[str, object]]:
     assert isinstance(state, dict)
     schema_json = state["schema"]
     assert isinstance(schema_json, dict)
     assert all(isinstance(name, str) for name in schema_json)
-    assert all(isinstance(spec_hash, str) for spec_hash in schema_json.values())
-    return {str(name): str(spec_hash) for name, spec_hash in schema_json.items()}
+    for spec in schema_json.values():
+        assert isinstance(spec, Mapping)
+        assert list(spec) == ["loc", "scale", "min", "max"]
+    return {
+        str(name): {str(key): value for key, value in cast(Mapping[str, object], spec).items()}
+        for name, spec in schema_json.items()
+    }
 
 
 def _read_schema_names(state: object) -> list[str]:
@@ -179,6 +194,22 @@ def test_state_save_load_roundtrip() -> None:
     assert np.allclose(_read_step_size_path(loaded), _read_step_size_path(state))
 
 
+def test_schema_state_is_human_readable_parameter_specs() -> None:
+    schema = _make_schema(
+        "ReadableState",
+        alpha=Parameter(loc=1.5, scale=0.25, max=3.0),
+        beta=Parameter(loc=2.0, scale=3.0, min=0.0),
+        gamma=Parameter(loc=0.5, scale=1.0, min=0.0, max=1.0),
+    )
+    state = _initialized_state(schema, pop_size=4)
+
+    assert _read_schema(state) == {
+        "alpha": _parameter_spec(loc=1.5, scale=0.25, max=3.0),
+        "beta": _parameter_spec(loc=2.0, scale=3.0, min=0.0),
+        "gamma": _parameter_spec(loc=0.5, scale=1.0, min=0.0, max=1.0),
+    }
+
+
 def test_load_reconciles_added_and_removed_parameters() -> None:
     base_schema = _make_identity_schema("BaseSchema", x=(2.0, 1.5), y=(-1.0, 0.7))
     base = Optimizer(base_schema)
@@ -261,7 +292,7 @@ def test_load_reconciles_added_and_removed_parameters() -> None:
 def test_load_reconciles_same_name_spec_changes_and_selectively_preserves_batch() -> None:
     base_schema = _make_schema(
         "BaseChangedSchema",
-        x=Parameter.above(lower=0.0, loc=3.0, scale=1.0),
+        x=Parameter(loc=3.0, scale=1.0, min=0.0),
         y=Parameter(loc=-1.0, scale=0.7),
     )
     base = Optimizer(base_schema)
@@ -292,7 +323,7 @@ def test_load_reconciles_same_name_spec_changes_and_selectively_preserves_batch(
 
     changed_schema = _make_schema(
         "ChangedSchema",
-        x=Parameter.between(lower=0.0, upper=1.0, loc=0.25, scale=2.0),
+        x=Parameter(loc=0.25, scale=2.0, min=0.0, max=1.0),
         y=Parameter(loc=-1.0, scale=0.7),
     )
     changed = Optimizer(changed_schema)
@@ -354,17 +385,17 @@ def test_loc_and_scale_changes_trigger_schema_changeover() -> None:
 def test_schema_order_is_lexicographic() -> None:
     first_schema = _make_schema(
         "FirstSchema",
-        zeta=Parameter.above(lower=0.0, loc=3.0, scale=1.0),
+        zeta=Parameter(loc=3.0, scale=1.0, min=0.0),
         alpha=Parameter(loc=1.0, scale=2.0),
-        mu=Parameter.between(lower=-1.0, upper=5.0, loc=2.0, scale=3.0),
+        mu=Parameter(loc=2.0, scale=3.0, min=-1.0, max=5.0),
     )
     first = _initialized_optimizer(first_schema, pop_size=18)
     state_first = first.save()
 
     second_schema = _make_schema(
         "SecondSchema",
-        mu=Parameter.between(lower=-1.0, upper=5.0, loc=2.0, scale=3.0),
-        zeta=Parameter.above(lower=0.0, loc=3.0, scale=1.0),
+        mu=Parameter(loc=2.0, scale=3.0, min=-1.0, max=5.0),
+        zeta=Parameter(loc=3.0, scale=1.0, min=0.0),
         alpha=Parameter(loc=1.0, scale=2.0),
     )
     second = _initialized_optimizer(second_schema, pop_size=18)
@@ -380,20 +411,20 @@ def test_nested_schema_flattens_leaf_names_and_rebuilds_dataclasses() -> None:
         "CombatParameters",
         [
             ("retreat_threshold", Annotated[float, Parameter(loc=-1.0, scale=2.0)]),
-            ("attack_threshold", Annotated[float, Parameter.above(lower=0.0, loc=2.0, scale=3.0)]),
+            ("attack_threshold", Annotated[float, Parameter(loc=2.0, scale=3.0, min=0.0)]),
         ],
         frozen=True,
     )
     mining = make_dataclass(
         "MiningParameters",
-        [("gas_priority", Annotated[float, Parameter.between(lower=0.0, upper=1.0, loc=0.5, scale=1.0)])],
+        [("gas_priority", Annotated[float, Parameter(loc=0.5, scale=1.0, min=0.0, max=1.0)])],
         frozen=True,
     )
     schema = make_dataclass(
         "NestedParameters",
         [
             ("mining", mining),
-            ("alpha", Annotated[float, Parameter.below(upper=3.0, loc=1.5, scale=0.25)]),
+            ("alpha", Annotated[float, Parameter(loc=1.5, scale=0.25, max=3.0)]),
             ("combat", combat),
         ],
         frozen=True,
@@ -441,12 +472,10 @@ def test_schema_requires_parameter_annotated_float_fields() -> None:
     ("parameter", "message"),
     [
         (Parameter(loc=0.0, scale=0.0), r"scale must be a positive finite float"),
-        (Parameter.between(lower=1.0, upper=1.0, loc=1.0), r"lower < upper"),
-        (Parameter.between(lower=1.0, upper=2.0, loc=2.0), r"lower < loc < upper"),
-        (Parameter.above(lower=1.0, loc=1.0), r"loc > lower"),
-        (Parameter.below(upper=1.0, loc=1.0), r"loc < upper"),
-        (Parameter.above_exponential(lower=2.0, loc=2.0), r"loc > lower"),
-        (Parameter.below_exponential(upper=2.0, loc=2.0), r"loc < upper"),
+        (Parameter(loc=1.0, min=1.0, max=1.0), r"min < max"),
+        (Parameter(loc=2.0, min=1.0, max=2.0), r"min < loc < max"),
+        (Parameter(loc=1.0, min=1.0), r"loc > min"),
+        (Parameter(loc=1.0, max=1.0), r"loc < max"),
     ],
 )
 def test_schema_rejects_invalid_parameter_domains(parameter: Parameter, message: str) -> None:
@@ -454,6 +483,15 @@ def test_schema_rejects_invalid_parameter_domains(parameter: Parameter, message:
 
     with pytest.raises(ValueError, match=message):
         Optimizer(schema)
+
+
+def test_legacy_parameter_constructors_are_not_exposed() -> None:
+    assert not hasattr(Parameter, "unbounded")
+    assert not hasattr(Parameter, "between")
+    assert not hasattr(Parameter, "above")
+    assert not hasattr(Parameter, "below")
+    assert not hasattr(Parameter, "above_exponential")
+    assert not hasattr(Parameter, "below_exponential")
 
 
 def test_ask_returns_typed_sample() -> None:
@@ -473,8 +511,8 @@ def test_ask_returns_typed_sample() -> None:
 def test_ask_best_returns_current_user_space_locs_without_context() -> None:
     schema = _make_schema(
         "BestParams",
-        b=Parameter.between(lower=0.0, upper=1.0, loc=0.25, scale=1.0),
-        a=Parameter.above(lower=-2.0, loc=1.0, scale=1.0),
+        b=Parameter(loc=0.25, scale=1.0, min=0.0, max=1.0),
+        a=Parameter(loc=1.0, scale=1.0, min=-2.0),
     )
     optimizer = _initialized_optimizer(schema, pop_size=6)
 
@@ -626,17 +664,15 @@ def test_transformed_parameters_use_latent_state_but_emit_user_space_values() ->
     schema = _make_schema(
         "TransformedParams",
         a=Parameter(loc=1.2, scale=3.4),
-        b=Parameter.between(lower=2.3, upper=3.4, loc=2.9, scale=1.0),
-        c=Parameter.above(lower=0.0, loc=3.0, scale=1.0),
-        d=Parameter.below(upper=4.0, loc=3.0, scale=1.0),
-        e=Parameter.above_exponential(lower=0.0, loc=3.0, scale=1.0),
-        f=Parameter.below_exponential(upper=4.0, loc=3.0, scale=1.0),
+        b=Parameter(loc=2.9, scale=1.0, min=2.3, max=3.4),
+        c=Parameter(loc=3.0, scale=1.0, min=0.0),
+        d=Parameter(loc=3.0, scale=1.0, max=4.0),
     )
     optimizer = Optimizer(schema)
     optimizer.pop_size = 6
     load_result = optimizer.load(None)
 
-    assert load_result == SchemaDiff(added=["a", "b", "c", "d", "e", "f"], removed=[], changed=[], unchanged=[])
+    assert load_result == SchemaDiff(added=["a", "b", "c", "d"], removed=[], changed=[], unchanged=[])
 
     state = optimizer.save()
     expected_latent_loc = np.array(
@@ -645,28 +681,22 @@ def test_transformed_parameters_use_latent_state_but_emit_user_space_values() ->
             np.log((2.9 - 2.3) / (3.4 - 2.9)),
             _softplus_inverse(3.0),
             -_softplus_inverse(1.0),
-            np.log(3.0),
-            -np.log(1.0),
         ]
     )
     assert np.allclose(_read_loc(state), expected_latent_loc)
-    assert np.allclose(np.diag(_read_scale(state)), np.array([3.4, 1.0, 1.0, 1.0, 1.0, 1.0]))
+    assert np.allclose(np.diag(_read_scale(state)), np.array([3.4, 1.0, 1.0, 1.0]))
 
     best = optimizer.ask_best()
     assert best.a == pytest.approx(1.2)
     assert best.b == pytest.approx(2.9)
     assert best.c == pytest.approx(3.0)
     assert best.d == pytest.approx(3.0)
-    assert best.e == pytest.approx(3.0)
-    assert best.f == pytest.approx(3.0)
 
     samples = [optimizer.ask() for _ in range(6)]
     for _, params in samples:
         assert 2.3 < params.b < 3.4
         assert params.c > 0.0
         assert params.d < 4.0
-        assert params.e > 0.0
-        assert params.f < 4.0
     for trial, _ in samples:
         optimizer.tell(trial, 0.0)
 
@@ -678,5 +708,3 @@ def test_transformed_parameters_use_latent_state_but_emit_user_space_values() ->
     assert reloaded_best.b == pytest.approx(best.b)
     assert reloaded_best.c == pytest.approx(best.c)
     assert reloaded_best.d == pytest.approx(best.d)
-    assert reloaded_best.e == pytest.approx(best.e)
-    assert reloaded_best.f == pytest.approx(best.f)

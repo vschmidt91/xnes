@@ -15,8 +15,9 @@ The docs are split into two parts:
 - an API reference generated from the source code and docstrings
 
 The public wrapper expects dataclass schemas whose optimized fields are declared
-as `Annotated[float, Parameter(...)]`. State layout is lexicographic by field
-name, so declaration order does not affect persistence. Context matching uses
-explicit string labels, while trials remain runtime-only and are not
-persisted. Mean snapshots from `ask_best()` are returned directly as the
-schema type.
+as `Annotated[float, Parameter(...)]`, with optional `min` and `max` bounds on
+each scalar. State layout is lexicographic by field name, so declaration order
+does not affect persistence, and saved schema definitions remain human-readable.
+Context matching uses explicit string labels, while trials remain runtime-only
+and are not persisted. Mean snapshots from `ask_best()` are returned directly
+as the schema type.
