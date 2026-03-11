@@ -11,7 +11,7 @@ runs are noisy, resumable, and sometimes organized around recurring contexts.
 
 - Canonical xNES core with optional CSA step-size adaptation.
 - Schema-first `Optimizer(Schema)` wrapper returning typed dataclass params.
-- Priors colocated with fields via `Annotated[float, Prior(...)]`.
+- Parameter metadata colocated with fields via `Annotated[float, Parameter(...)]`.
 - JSON-compatible optimizer state through `save()` and `load(...)`.
 - Optional mirrored-sample routing through `ask(context=...)`.
 - Deterministic inference through `ask_best()`.
@@ -51,13 +51,13 @@ from typing import Annotated
 
 import numpy as np
 
-from xnes import Optimizer, Prior
+from xnes import Optimizer, Parameter
 
 
 @dataclass(frozen=True)
 class Params:
-    coeff_1: Annotated[float, Prior(mean=2.0, sigma=3.0)]
-    coeff_2: Annotated[float, Prior()]
+    coeff_1: Annotated[float, Parameter(loc=2.0, scale=3.0)]
+    coeff_2: Annotated[float, Parameter()]
 
 
 state_path = Path("optimizer-state.json")
@@ -68,17 +68,16 @@ opt.pop_size = 32
 load_result = opt.load(state)
 
 for _ in range(500):
-    sample = opt.ask(context="validation:shard-0")
-    params = sample.params
+    trial, params = opt.ask(context="validation:shard-0")
     value = params.coeff_1 + np.exp(params.coeff_2)
-    report = opt.tell(sample, -value**2)  # `tell` maximizes, so minimize via `-f`
+    report = opt.tell(trial, -value**2)  # `tell` maximizes, so minimize via `-f`
     state_path.write_text(json.dumps(opt.save()))
 
     if report.completed_batch:
         pass
 
 best = opt.ask_best()
-print(best.params.coeff_1, best.params.coeff_2)
+print(best.coeff_1, best.coeff_2)
 ```
 
 ## Schema Model
@@ -86,13 +85,13 @@ print(best.params.coeff_1, best.params.coeff_2)
 The public wrapper is schema-first:
 
 1. Define a dataclass schema.
-2. Annotate each optimized field as `Annotated[float, Prior(...)]`.
+2. Annotate each optimized field as `Annotated[float, Parameter(...)]`.
 3. Construct `Optimizer(Schema)`.
 
 Current schema constraints:
 
 - The schema must be a dataclass type.
-- Optimized fields must currently be `Annotated[float, Prior(...)]`.
+- Optimized fields must currently be `Annotated[float, Parameter(...)]`.
 - Fields must be `init=True`.
 - State layout is ordered lexicographically by field name, not by declaration order.
 
@@ -104,9 +103,9 @@ The wrapper is intentionally strict. The expected training loop is:
 2. Construct `Optimizer(Schema)`.
 3. Call `load(None)` for a fresh run or `load(state)` to resume.
 4. Call `ask(context=...)` to reserve one sampled parameter set.
-5. Read runtime values from `sample.params.field`.
+5. Read runtime values from `params.field`.
 6. Evaluate exactly once.
-7. Call `tell(sample, result)`.
+7. Call `tell(trial, result)`.
 8. Persist with `save()`.
 
 For deterministic inference after training:
@@ -114,43 +113,42 @@ For deterministic inference after training:
 1. Construct `Optimizer(Schema)`.
 2. Call `load(state)`.
 3. Call `ask_best()`.
-4. Read mean values from `best.params.field`.
+4. Read mean values from `best.field`.
 
 Important constraints:
 
 - `load()` must be called before `ask()` or `ask_best()`.
 - `load(None)` reports all current schema fields as added.
-- `load(state)` reconciles changed schemas by field name.
-- Shared learned state is preserved for common fields.
-- Added fields start from their priors.
+- `load(state)` reconciles changed schemas by persisted schema hash.
+- Shared learned state is preserved for unchanged fields.
+- Added fields start from their parameter defaults.
 - Removed fields are dropped.
 - Any unfinished batch is reconciled rather than discarded.
-- `ask()` creates runtime-only reservations; claims are not persisted.
-- `ask_best()` is context-free and returns a deterministic snapshot of current means.
-- `ask_best()` returns `Sample[T]` with `sample_id=None`; it cannot be passed to `tell()`.
+- `ask()` creates runtime-only trials; claims are not persisted.
+- `ask_best()` is context-free and returns a deterministic snapshot of current means as `T`.
 - If all samples in a batch are reserved and unresolved, `ask()` raises.
 - If `ask(context=...)` is never used, evaluation proceeds in the default batch order.
 
 ## Core API
 
-- `Prior(mean=0.0, sigma=1.0)`
-  Latent Gaussian prior attached to one schema field.
+- `Parameter(loc=0.0, scale=1.0)`
+  Parameter metadata attached to one schema field.
 - `Optimizer(schema_type)`
   Construct a maximizing optimizer over a dataclass schema.
-- `Optimizer.load(state) -> LoadResult`
-  Initialize from priors with `None`, or restore and reconcile a previous snapshot from `save()`.
-- `Optimizer.ask(context=None) -> Sample[T]`
-  Reserve one sample and return the typed schema instance plus reservation metadata.
-- `Optimizer.ask_best() -> Sample[T]`
-  Return a deterministic snapshot of the current means. This does not reserve a sample.
-- `Optimizer.tell(sample, result) -> TellResult`
-  Submit one scalar or tuple-like objective result for a sampled `Sample` returned by `ask()`.
+- `Optimizer.load(state) -> SchemaDiff`
+  Initialize from schema defaults with `None`, or restore and reconcile a previous snapshot from `save()`.
+- `Optimizer.ask(context=None) -> tuple[Trial, T]`
+  Reserve one sample and return `(trial, params)`.
+- `Optimizer.ask_best() -> T`
+  Return a deterministic snapshot of the current means.
+- `Optimizer.tell(trial, result) -> TellResult`
+  Submit one scalar or tuple-like objective result for a trial returned by `ask()`.
 - `Optimizer.save() -> dict[str, object]`
   Return a JSON-compatible snapshot of optimizer state.
-- `Sample[T]`
-  Wrapper returned by `ask()` and `ask_best()` with typed `params`, `sample_id`, `context`, and `matched_context`.
-- `LoadResult`
-  Reports schema fields added and removed when loading.
+- `Trial`
+  Runtime-only handle returned by `ask()` with `sample_id`, `context`, and `matched_context`.
+- `SchemaDiff`
+  Reports schema fields added, removed, changed, and unchanged when loading.
 - `TellResult`
   Reports whether a batch completed, whether context matching occurred, and whether xNES restarted.
 

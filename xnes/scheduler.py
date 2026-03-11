@@ -7,7 +7,7 @@ import numpy as np
 
 
 @dataclass(frozen=True)
-class BatchReservation:
+class BatchTrial:
     sample_index: int
     context: str | None
     matched_context: bool
@@ -22,47 +22,47 @@ class BatchScheduler:
     """Batch state with optional context matching support."""
 
     def __init__(self) -> None:
-        self.batch_z: np.ndarray = np.zeros((0, 0))
+        self.batch: np.ndarray = np.zeros((0, 0))
         self.results: list[tuple[float, ...] | None] = []
-        self.context_waiting: dict[str, int] = {}
+        self.context_pending: dict[str, int] = {}
         self._reserved_indices: set[int] = set()
 
-    def reset(self, batch_z: np.ndarray) -> None:
-        self.batch_z = batch_z
-        self.results = [None] * self.batch_z.shape[1]
-        self.context_waiting = {}
+    def reset(self, batch: np.ndarray) -> None:
+        self.batch = batch
+        self.results = [None] * self.batch.shape[1]
+        self.context_pending = {}
         self._reserved_indices = set()
 
     def restore(
         self,
-        batch_z: np.ndarray,
+        batch: np.ndarray,
         results: list[tuple[float, ...] | None],
-        context_waiting: dict[str, int],
+        context_pending: dict[str, int],
     ) -> None:
-        self.batch_z = batch_z
-        sample_count = self.batch_z.shape[1]
+        self.batch = batch
+        sample_count = self.batch.shape[1]
         self.results = [None] * sample_count
         for idx, item in enumerate(results[:sample_count]):
             self.results[idx] = item
-        self.context_waiting = {
+        self.context_pending = {
             context: sample_idx
-            for context, sample_idx in context_waiting.items()
+            for context, sample_idx in context_pending.items()
             if 0 <= sample_idx < sample_count
             and self.results[sample_idx] is not None
             and self.results[self._mirror_index(sample_idx)] is None
         }
         self._reserved_indices = set()
 
-    def reserve(self, context: str | None) -> BatchReservation | BatchCompletion | None:
+    def reserve(self, context: str | None) -> BatchTrial | BatchCompletion | None:
         sample_index, matched_context = self._pick_sample(context)
         if sample_index is not None:
-            reservation = BatchReservation(
+            trial = BatchTrial(
                 sample_index=sample_index,
                 context=context,
                 matched_context=matched_context,
             )
             self._reserved_indices.add(sample_index)
-            return reservation
+            return trial
         if self._reserved_indices:
             return None
         if self.is_complete():
@@ -70,13 +70,13 @@ class BatchScheduler:
         msg = "Scheduler has no reservable sample and no completed batch."
         raise RuntimeError(msg)
 
-    def record_result(self, reservation: BatchReservation, result: tuple[float, ...]) -> BatchCompletion | None:
-        sample_index = reservation.sample_index
+    def record_result(self, trial: BatchTrial, result: tuple[float, ...]) -> BatchCompletion | None:
+        sample_index = trial.sample_index
         if not 0 <= sample_index < len(self.results):
             msg = "Sample index out of range."
             raise RuntimeError(msg)
         if sample_index not in self._reserved_indices:
-            msg = "Unknown sample reservation."
+            msg = "Unknown trial."
             raise RuntimeError(msg)
         if self.results[sample_index] is not None:
             msg = "Sample already has a recorded result."
@@ -84,7 +84,7 @@ class BatchScheduler:
 
         self._reserved_indices.remove(sample_index)
         self.results[sample_index] = result
-        self._register_context_match(sample_index, reservation.context)
+        self._update_context_pending(sample_index, trial.context)
         if not self.is_complete():
             return None
         return BatchCompletion(self._ranking())
@@ -99,9 +99,9 @@ class BatchScheduler:
 
     def _pick_sample(self, context: str | None) -> tuple[int | None, bool]:
         if context is not None:
-            waiting_index = self.context_waiting.get(context)
-            if waiting_index is not None:
-                mirror_index = self._mirror_index(waiting_index)
+            pending_index = self.context_pending.get(context)
+            if pending_index is not None:
+                mirror_index = self._mirror_index(pending_index)
                 if self.results[mirror_index] is None and mirror_index not in self._reserved_indices:
                     return mirror_index, True
 
@@ -112,19 +112,19 @@ class BatchScheduler:
         return sample_index, False
 
     def _mirror_index(self, sample_index: int) -> int:
-        half = self.batch_z.shape[1] // 2
+        half = self.batch.shape[1] // 2
         return sample_index + half if sample_index < half else sample_index - half
 
-    def _register_context_match(self, sample_index: int, context: str | None) -> None:
+    def _update_context_pending(self, sample_index: int, context: str | None) -> None:
         if context is None:
             return
 
-        waiting_index = self.context_waiting.get(context)
-        if waiting_index is None:
+        pending_index = self.context_pending.get(context)
+        if pending_index is None:
             mirror_index = self._mirror_index(sample_index)
             if self.results[mirror_index] is None:
-                self.context_waiting[context] = sample_index
+                self.context_pending[context] = sample_index
             return
 
-        if self._mirror_index(waiting_index) == sample_index:
-            del self.context_waiting[context]
+        if self._mirror_index(pending_index) == sample_index:
+            del self.context_pending[context]

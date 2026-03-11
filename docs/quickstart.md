@@ -8,13 +8,13 @@ from typing import Annotated
 
 import numpy as np
 
-from xnes import Optimizer, Prior
+from xnes import Optimizer, Parameter
 
 
 @dataclass(frozen=True)
 class Params:
-    coeff_1: Annotated[float, Prior(mean=2.0, sigma=3.0)]
-    coeff_2: Annotated[float, Prior()]
+    coeff_1: Annotated[float, Parameter(loc=2.0, scale=3.0)]
+    coeff_2: Annotated[float, Parameter()]
 
 
 state_path = Path("optimizer-state.json")
@@ -25,14 +25,13 @@ opt.pop_size = 32
 load_result = opt.load(state)
 
 for _ in range(500):
-    sample = opt.ask(context="validation:shard-0")
-    params = sample.params
+    trial, params = opt.ask(context="validation:shard-0")
     value = params.coeff_1 + np.exp(params.coeff_2)
-    opt.tell(sample, -value**2)
+    opt.tell(trial, -value**2)
     state_path.write_text(json.dumps(opt.save()))
 
 best = opt.ask_best()
-print(best.params.coeff_1, best.params.coeff_2)
+print(best.coeff_1, best.coeff_2)
 ```
 
 `tell` uses maximize semantics. To minimize an objective `f(x)`, pass `-f(x)`.
@@ -40,17 +39,16 @@ print(best.params.coeff_1, best.params.coeff_2)
 Current schema requirements:
 
 - the schema must be a dataclass
-- optimized fields must be `Annotated[float, Prior(...)]`
+- optimized fields must be `Annotated[float, Parameter(...)]`
 - persisted state is ordered lexicographically by field name
 
 If you resume with a changed schema, shared learned state is preserved, new
-fields start from priors, removed fields are dropped, and the current
+fields start from parameter defaults, removed fields are dropped, and the current
 unfinished batch is reconciled rather than discarded. On `load(None)`, all
 current schema fields are reported as added.
 
-Training loop: call `ask`, evaluate `sample.params.field`, then call
-`tell(sample, result)`.
+Training loop: call `ask`, evaluate `params.field`, then call
+`tell(trial, result)`.
 
-For deterministic inference, call `ask_best()` after `load(...)`. It returns a
-context-free snapshot of the current means with `sample_id=None` and cannot be
-passed to `tell()`.
+For deterministic inference, call `ask_best()` after `load(...)`. It returns
+the current mean parameters directly.

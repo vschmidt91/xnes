@@ -8,8 +8,8 @@ from typing import Generic, TypeVar, cast
 
 import numpy as np
 
-from ._scheduler import BatchCompletion, BatchReservation, BatchScheduler
-from .schema import FieldSpec, SchemaSpec, parse_schema
+from .scheduler import BatchCompletion, BatchScheduler, BatchTrial
+from .schema import SchemaDiff, SchemaSpec, parse_schema
 from .xnes import XNES, XNESStatus
 
 T = TypeVar("T")
@@ -33,32 +33,13 @@ class TellResult:
 
 
 @dataclass(frozen=True)
-class LoadResult:
-    """Outcome of one `Optimizer.load` call.
+class Trial:
+    """Trial metadata returned by `ask()` and consumed by `tell()`."""
 
-    Attributes:
-        parameters_added: Current schema leaf names not present in the loaded state.
-        parameters_removed: Loaded schema leaf names not present in the current schema.
-    """
-
-    parameters_added: list[str]
-    parameters_removed: list[str]
-
-
-@dataclass(frozen=True)
-class Sample(Generic[T]):
-    """Typed parameter values and reservation metadata returned by `ask` or `ask_best`.
-
-    `params` is an instance of the root schema dataclass passed to `Optimizer`,
-    including any nested dataclass subtrees. Samples returned by `ask_best()`
-    have `sample_id=None` and cannot be passed to `tell()`.
-    """
-
-    sample_id: int | None
-    params: T
+    sample_id: int
     context: str | None
     matched_context: bool
-    _reservation: BatchReservation | None = field(
+    _trial: BatchTrial | None = field(
         default=None,
         repr=False,
         compare=False,
@@ -70,9 +51,10 @@ class Optimizer(Generic[T]):
 
     The schema must be a dataclass tree whose internal nodes are dataclasses
     and whose optimized leaves are declared as `Annotated[float, Parameter(...)]`.
-    The wrapper exposes typed runtime values via `Sample.params` while keeping
-    optimizer state keyed by stable dotted leaf names. Field ordering is
-    lexicographic by leaf name rather than dataclass declaration order.
+    The wrapper exposes typed runtime values separately from trial handles
+    while keeping optimizer state keyed by stable dotted leaf names
+    plus persisted schema hashes. Field ordering is lexicographic by leaf name
+    rather than dataclass declaration order.
     """
 
     def __init__(self, schema_type: type[T]) -> None:
@@ -84,174 +66,147 @@ class Optimizer(Generic[T]):
 
         self._schema: SchemaSpec[T] = parse_schema(schema_type)
         self._rng = np.random.default_rng()
-        self._field_specs: dict[str, FieldSpec] = {field_spec.name: field_spec for field_spec in self._schema.fields}
         self._loaded = False
 
-        self._xnes: XNES = self._new_xnes(np.zeros(0), np.eye(0), np.zeros(0))
-        self._state_names: list[str] = []
+        loc, scale, step_size_path = self._schema.initial_distribution()
+        self._xnes: XNES = self._new_xnes(loc, scale, step_size_path)
         self._scheduler = BatchScheduler()
 
     def save(self) -> dict[str, object]:
         """Serialize the current optimizer state into a JSON-compatible mapping."""
         return {
-            "names": list(self._state_names),
+            "schema": self._schema.state_schema(),
             "loc": self._xnes.mu.tolist(),
             "scale": self._xnes.scale.tolist(),
             "step_size_path": self._xnes.p_sigma.tolist(),
-            "batch_z": self._scheduler.batch_z.tolist(),
+            "batch": self._scheduler.batch.tolist(),
             "results": [None if item is None else list(item) for item in self._scheduler.results],
-            "context_waiting": dict(self._scheduler.context_waiting),
+            "context_pending": dict(self._scheduler.context_pending),
             "rng_state": dict(self._rng.bit_generator.state),
         }
 
-    def load(self, state: object) -> LoadResult:
+    def load(self, state: object) -> SchemaDiff:
         """Restore optimizer state or initialize a fresh run from schema metadata.
 
         Passing `None` starts a new run from the schema metadata and reports all
         current schema leaf names as added. Loading a previous snapshot
-        reconciles added and removed schema leaves by name while preserving
-        shared learned state and any unfinished batch results.
+        reconciles added, removed, and changed schema leaves by persisted
+        schema hash while preserving shared learned state.
         """
 
-        expected_names = self._ordered_names()
+        expected_names = list(self._schema.names)
         if state is None:
             self._reset_from_schema()
             self._loaded = True
-            return LoadResult(parameters_added=list(expected_names), parameters_removed=[])
+            return SchemaDiff(added=expected_names, removed=[], changed=[], unchanged=[])
 
         state_obj = cast(Mapping[str, object], state)
 
-        names = cast(list[str], state_obj["names"])
+        schema_json = cast(Mapping[str, object], state_obj["schema"])
+        saved_schema = {str(name): str(spec_hash) for name, spec_hash in schema_json.items()}
+        saved_names = sorted(saved_schema)
         loc = np.asarray(state_obj["loc"], dtype=float)
         scale = np.asarray(state_obj["scale"], dtype=float)
         step_size_path_json = state_obj["step_size_path"]
         step_size_path = np.asarray(step_size_path_json, dtype=float)
-        batch_z = np.asarray(state_obj["batch_z"], dtype=float)
+        batch = np.asarray(state_obj["batch"], dtype=float)
+        if batch.ndim == 1 and batch.size == 0:
+            batch = np.zeros((len(saved_names), 0), dtype=float)
         result_rows = cast(Sequence[Sequence[float] | None], state_obj["results"])
         results = [None if row is None else tuple(float(value) for value in row) for row in result_rows]
-        context_waiting = dict(cast(Mapping[str, int], state_obj["context_waiting"]))
+        context_pending = dict(cast(Mapping[str, int], state_obj["context_pending"]))
 
-        parameters_added = [name for name in expected_names if name not in names]
-        parameters_removed = [name for name in names if name not in expected_names]
+        schema_diff = self._schema.diff(saved_schema)
         loc, scale, step_size_path = self._reconcile_distribution_state(
-            names,
-            expected_names,
+            saved_names,
+            schema_diff.unchanged,
             loc,
             scale,
             step_size_path,
         )
-        batch_z = self._reconcile_batch_state(names, expected_names, batch_z)
 
         self._rng.bit_generator.state = dict(cast(Mapping[str, object], state_obj["rng_state"]))
         self._xnes = self._new_xnes(loc, scale, step_size_path)
-        self._state_names = expected_names
-        self._scheduler.restore(batch_z, results, context_waiting)
+        if batch.shape[1] == 0:
+            self._sample_batch()
+        else:
+            batch = self._reconcile_batch_state(saved_names, schema_diff, batch, results)
+            self._scheduler.restore(batch, results, context_pending)
         self._loaded = True
-        return LoadResult(
-            parameters_added=parameters_added,
-            parameters_removed=parameters_removed,
-        )
+        return schema_diff
 
     def _reset_from_schema(self) -> None:
-        names = self._ordered_names()
-        loc, scale = self._build_initial_state(names)
-        self._xnes = self._new_xnes(loc, scale, np.zeros(len(names), dtype=float))
-        self._state_names = names
-        self._reset_batch()
+        loc, scale, step_size_path = self._schema.initial_distribution()
+        self._xnes = self._new_xnes(loc, scale, step_size_path)
+        self._sample_batch()
 
-    def ask(self, context: str | None = None) -> Sample[T]:
+    def ask(self, context: str | None = None) -> tuple[Trial, T]:
         """Reserve one sampled parameter set for an evaluation run.
 
-        The returned `Sample` contains the typed root schema instance on
-        `sample.params`, including any nested dataclass values, plus
-        reservation metadata required by `tell()`.
+        Returns a pair `(trial, params)` where `params` is an instance of
+        the root schema dataclass passed to `Optimizer`, including any nested
+        dataclass subtrees. The `trial` must be passed back to `tell()`
+        exactly once.
         """
         if not self._loaded:
             msg = "Call load() before ask()."
             raise RuntimeError(msg)
 
-        reservation = self._reserve(context)
-        latent_sample = self._xnes.transform(self._scheduler.batch_z[:, [reservation.sample_index]])[:, 0]
-        return Sample(
-            sample_id=reservation.sample_index,
-            params=self._build_params(latent_sample),
-            context=reservation.context,
-            matched_context=reservation.matched_context,
-            _reservation=reservation,
+        batch_trial = self._reserve(context)
+        latent_sample = self._xnes.transform(self._scheduler.batch[:, [batch_trial.sample_index]])[:, 0]
+        return (
+            Trial(
+                sample_id=batch_trial.sample_index,
+                context=batch_trial.context,
+                matched_context=batch_trial.matched_context,
+                _trial=batch_trial,
+            ),
+            self._schema.build_params(latent_sample),
         )
 
-    def ask_best(self) -> Sample[T]:
-        """Return a deterministic, context-free snapshot of the current means.
-
-        This does not reserve a sample and the returned `Sample` is not
-        tellable.
-        """
+    def ask_best(self) -> T:
+        """Return a deterministic, context-free snapshot of the current means."""
         if not self._loaded:
             msg = "Call load() before ask_best()."
             raise RuntimeError(msg)
 
-        return Sample(
-            sample_id=None,
-            params=self._build_params(self._xnes.mu),
-            context=None,
-            matched_context=False,
-        )
+        return self._schema.build_params(self._xnes.mu)
 
-    def tell(self, sample: Sample[T], result: float | Sequence[float] | np.ndarray) -> TellResult:
-        """Submit the objective result for sampled parameters returned by `ask`.
+    def tell(self, trial: Trial, result: float | Sequence[float] | np.ndarray) -> TellResult:
+        """Submit the objective result for one trial returned by `ask()`.
 
         Results use maximize semantics. Scalars are treated as one-element
         tuples, and sequence results are ranked lexicographically.
         """
-        if sample.sample_id is None:
-            msg = "Samples from ask_best() were not sampled and cannot be told."
-            raise RuntimeError(msg)
-        reservation = sample._reservation
-        if reservation is None:
-            msg = "Unknown sample reservation."
+        batch_trial = trial._trial
+        if batch_trial is None:
+            msg = "Unknown trial."
             raise RuntimeError(msg)
 
-        completion = self._scheduler.record_result(reservation, _normalize_result(result))
+        completion = self._scheduler.record_result(batch_trial, _normalize_result(result))
         if completion is not None:
             status, restarted = self._complete_batch(completion)
-            return TellResult(True, reservation.matched_context, status, restarted)
-        return TellResult(False, reservation.matched_context, XNESStatus.OK, False)
-
-    def _ordered_names(self) -> list[str]:
-        return [field_spec.name for field_spec in self._schema.fields]
-
-    def _build_initial_state(self, names: list[str]) -> tuple[np.ndarray, np.ndarray]:
-        loc = np.array([self._field_specs[name].mu0 for name in names], dtype=float)
-        scale_diag = np.array([self._field_specs[name].sigma0 for name in names], dtype=float)
-        return loc, np.diag(scale_diag)
-
-    def _build_params(self, values: np.ndarray) -> T:
-        leaf_values = {
-            field_spec.path: field_spec.parameter.forward_scalar(float(value))
-            for field_spec, value in zip(self._schema.fields, values, strict=True)
-        }
-        return self._schema.instantiate(leaf_values)
+            return TellResult(True, batch_trial.matched_context, status, restarted)
+        return TellResult(False, batch_trial.matched_context, XNESStatus.OK, False)
 
     def _reconcile_distribution_state(
         self,
         saved_names: list[str],
-        current_names: list[str],
+        unchanged_names: list[str],
         loc: np.ndarray,
         scale: np.ndarray,
         step_size_path: np.ndarray,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        reconciled_loc, reconciled_scale = self._build_initial_state(current_names)
-        reconciled_step_size_path = np.zeros(len(current_names), dtype=float)
+        reconciled_loc, reconciled_scale, reconciled_step_size_path = self._schema.initial_distribution()
 
         saved_index = {name: idx for idx, name in enumerate(saved_names)}
-        shared_current_indices: list[int] = []
+        current_index = self._schema.index_by_name()
+        shared_current_indices: list[int] = [current_index[name] for name in unchanged_names]
         shared_saved_indices: list[int] = []
 
-        for current_idx, name in enumerate(current_names):
-            saved_idx = saved_index.get(name)
-            if saved_idx is None:
-                continue
-            shared_current_indices.append(current_idx)
+        for name in unchanged_names:
+            current_idx = current_index[name]
+            saved_idx = saved_index[name]
             shared_saved_indices.append(saved_idx)
             reconciled_loc[current_idx] = float(loc[saved_idx])
             reconciled_step_size_path[current_idx] = float(step_size_path[saved_idx])
@@ -266,20 +221,29 @@ class Optimizer(Generic[T]):
     def _reconcile_batch_state(
         self,
         saved_names: list[str],
-        current_names: list[str],
-        batch_z: np.ndarray,
+        schema_diff: SchemaDiff,
+        batch: np.ndarray,
+        results: list[tuple[float, ...] | None],
     ) -> np.ndarray:
-        sample_count = batch_z.shape[1]
-        reconciled_batch_z = np.zeros((len(current_names), sample_count), dtype=float)
+        sample_count = batch.shape[1]
+        reconciled_batch = np.zeros((self._schema.dim, sample_count), dtype=float)
+        completed_mask = np.zeros(sample_count, dtype=bool)
+        for idx, result in enumerate(results[:sample_count]):
+            completed_mask[idx] = result is not None
+        pending_mask = ~completed_mask
 
         saved_index = {name: idx for idx, name in enumerate(saved_names)}
-        for current_idx, name in enumerate(current_names):
-            saved_idx = saved_index.get(name)
-            if saved_idx is None:
-                continue
-            reconciled_batch_z[current_idx, :] = batch_z[saved_idx, :]
+        current_index = self._schema.index_by_name()
+        for name in schema_diff.unchanged:
+            current_idx = current_index[name]
+            saved_idx = saved_index[name]
+            reconciled_batch[current_idx, :] = batch[saved_idx, :]
+        for name in schema_diff.changed:
+            current_idx = current_index[name]
+            saved_idx = saved_index[name]
+            reconciled_batch[current_idx, pending_mask] = batch[saved_idx, pending_mask]
 
-        return reconciled_batch_z
+        return reconciled_batch
 
     def _new_xnes(self, loc: np.ndarray, scale: np.ndarray, step_size_path: np.ndarray) -> XNES:
         xnes = XNES(
@@ -297,27 +261,25 @@ class Optimizer(Generic[T]):
             xnes.eta_B = self.eta_B
         return xnes
 
-    def _reset_batch(self) -> None:
-        batch_z = self._xnes.ask(self.pop_size, self._rng)
-        self._scheduler.reset(batch_z)
+    def _sample_batch(self) -> None:
+        batch = self._xnes.ask(self.pop_size, self._rng)
+        self._scheduler.reset(batch)
 
     def _restart_distribution(self) -> None:
-        names = self._ordered_names()
-        loc, scale = self._build_initial_state(names)
-        self._xnes = self._new_xnes(loc, scale, np.zeros(len(names), dtype=float))
-        self._state_names = names
-        self._reset_batch()
+        loc, scale, step_size_path = self._schema.initial_distribution()
+        self._xnes = self._new_xnes(loc, scale, step_size_path)
+        self._sample_batch()
 
     def _complete_batch(self, completion: BatchCompletion) -> tuple[XNESStatus, bool]:
-        status = self._xnes.tell(self._scheduler.batch_z, completion.ranking)
+        status = self._xnes.tell(self._scheduler.batch, completion.ranking)
         restarted = status is not XNESStatus.OK
         if restarted:
             self._restart_distribution()
         else:
-            self._reset_batch()
+            self._sample_batch()
         return status, restarted
 
-    def _reserve(self, context: str | None) -> BatchReservation:
+    def _reserve(self, context: str | None) -> BatchTrial:
         result = self._scheduler.reserve(context)
         if result is None:
             msg = "No unclaimed sample available. Pending trials must be told first."
@@ -325,7 +287,7 @@ class Optimizer(Generic[T]):
         if isinstance(result, BatchCompletion):
             self._complete_batch(result)
             result = self._scheduler.reserve(context)
-        if not isinstance(result, BatchReservation):
+        if not isinstance(result, BatchTrial):
             msg = "No sample available."
             raise RuntimeError(msg)
         return result

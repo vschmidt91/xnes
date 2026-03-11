@@ -20,17 +20,17 @@ Example:
     opt.load(None)
 
     for _ in range(100):
-        sample = opt.ask()
-        value = (sample.params.coeff - 3.0) ** 2 + (sample.params.ratio - 0.25) ** 2
-        opt.tell(sample, -value)
+        trial, params = opt.ask()
+        value = (params.coeff - 3.0) ** 2 + (params.ratio - 0.25) ** 2
+        opt.tell(trial, -value)
 
     best = opt.ask_best()
-    print(best.params.coeff, best.params.ratio)
+    print(best.coeff, best.ratio)
     ```
 """
 
-from .optimizer import LoadResult, Optimizer, Sample, TellResult
-from .schema import Parameter
+from .optimizer import Optimizer, TellResult, Trial
+from .schema import Parameter, SchemaDiff
 from .xnes import XNES, XNESStatus
 
-__all__ = ["Optimizer", "Parameter", "Sample", "TellResult", "LoadResult", "XNES", "XNESStatus"]
+__all__ = ["Optimizer", "Parameter", "SchemaDiff", "TellResult", "Trial", "XNES", "XNESStatus"]

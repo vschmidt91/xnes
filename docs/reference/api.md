@@ -2,13 +2,13 @@
 
 ::: xnes.Optimizer
 
-::: xnes.Prior
+::: xnes.Parameter
 
-::: xnes.Sample
+::: xnes.Trial
 
 ::: xnes.TellResult
 
-::: xnes.LoadResult
+::: xnes.SchemaDiff
 
 ::: xnes.XNESStatus
 
