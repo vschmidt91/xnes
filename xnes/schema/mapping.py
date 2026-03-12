@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Any, cast
 
-from .common import build_field_spec, field_name, path_name
+from .common import build_field_spec, build_scalar_builder, field_name, path_name
 from .spec import BuildFn, FieldSpec, Parameter, Path, SchemaSpec
 
 
@@ -38,11 +38,7 @@ def _parse_mapping_entry(key: object, value: object, prefix: Path) -> tuple[str,
     path = prefix + (key,)
     if isinstance(value, Parameter):
         field_spec = build_field_spec(path, value)
-
-        def build_leaf(values: Mapping[Path, float]) -> Any:
-            return float(values[path])
-
-        return key, (field_spec,), build_leaf
+        return key, (field_spec,), build_scalar_builder(path)
 
     if isinstance(value, Mapping):
         child_field_specs, build_node = _parse_mapping_node(cast(Mapping[str, object], value), path)

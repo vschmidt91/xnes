@@ -22,6 +22,52 @@ def _default_eta_B(dim: int) -> float:
     return float(0.6 * (3.0 + np.log(dim)) / (dim * np.sqrt(dim)))
 
 
+def _normalize_scale_matrix(scale: np.ndarray | float, dim: int) -> np.ndarray:
+    scale0 = np.asarray(scale, dtype=float)
+    if scale0.ndim == 0:
+        return np.diag(np.repeat(scale0, dim))
+    if scale0.ndim == 1:
+        return np.diag(scale0)
+    if scale0.shape != (dim, dim):
+        msg = f"Expected scale shape {(dim, dim)}, got {scale0.shape}"
+        raise ValueError(msg)
+    return scale0
+
+
+def _validated_samples(samples: np.ndarray, dim: int) -> np.ndarray:
+    z = np.asarray(samples, dtype=float)
+    if z.ndim != 2:
+        msg = "samples must have shape (dim, n)."
+        raise ValueError(msg)
+    if z.shape[0] != dim:
+        msg = f"Sample shape mismatch, expected {dim} rows, got {z.shape[0]}"
+        raise ValueError(msg)
+    if not np.all(np.isfinite(z)):
+        msg = "samples must be finite."
+        raise ValueError(msg)
+    return z
+
+
+def _default_sample_count(num_samples: int | None, dim: int) -> int:
+    n = int(num_samples) if num_samples is not None else (4 + int(3 * np.log(dim)))
+    if n <= 1:
+        n = 2
+    if n % 2 == 1:
+        n += 1
+    return n
+
+
+def _utility_weights(sample_count: int) -> tuple[np.ndarray, np.ndarray, float]:
+    w_pos = np.maximum(0.0, np.log(sample_count / 2 + 1) - np.log(np.arange(1, sample_count + 1)))
+    w_sum = float(np.sum(w_pos))
+    if w_sum <= 0.0:
+        msg = "Invalid utility weights: positive weight sum must be > 0."
+        raise ValueError(msg)
+    w_pos /= w_sum
+    mu_eff_pos = float(1.0 / np.sum(w_pos**2))
+    return w_pos, w_pos - (1.0 / sample_count), mu_eff_pos
+
+
 class XNESStatus(Enum):
     """Outcome of one `XNES.tell` update step."""
 
@@ -80,14 +126,7 @@ class XNES:
             self.p_sigma = np.zeros(0)
             return
 
-        scale0 = np.asarray(sigma0, dtype=float)
-        if scale0.ndim == 0:
-            scale0 = np.repeat(scale0, self.dim)
-        if scale0.ndim == 1:
-            scale0 = np.diag(scale0)
-        if scale0.shape != (self.dim, self.dim):
-            msg = f"Expected scale shape {(self.dim, self.dim)}, got {scale0.shape}"
-            raise ValueError(msg)
+        scale0 = _normalize_scale_matrix(sigma0, self.dim)
 
         sign, logdet = np.linalg.slogdet(scale0)
         if sign <= 0 or not np.isfinite(logdet):
@@ -120,16 +159,7 @@ class XNES:
     def transform(self, samples: np.ndarray) -> np.ndarray:
         """Map standardized samples `z` into current distribution coordinates."""
 
-        z = np.asarray(samples, dtype=float)
-        if z.ndim != 2:
-            msg = "samples must have shape (dim, n)."
-            raise ValueError(msg)
-        if z.shape[0] != self.dim:
-            msg = f"Sample shape mismatch, expected {self.dim} rows, got {z.shape[0]}"
-            raise ValueError(msg)
-        if not np.all(np.isfinite(z)):
-            msg = "samples must be finite."
-            raise ValueError(msg)
+        z = _validated_samples(samples, self.dim)
         return self.mu[:, None] + self.scale @ z
 
     def ask(
@@ -152,12 +182,7 @@ class XNES:
             n = int(num_samples) if num_samples is not None else 4
             return np.zeros((0, n))
 
-        n = int(num_samples) if num_samples is not None else (4 + int(3 * np.log(self.dim)))
-        if n <= 1:
-            n = 2
-        if n % 2 == 1:
-            n += 1
-
+        n = _default_sample_count(num_samples, self.dim)
         n_half = n // 2
         rng = rng or np.random.default_rng()
 
@@ -191,26 +216,13 @@ class XNES:
         if self.dim == 0:
             return XNESStatus.SCALE_NORM_MIN
 
+        samples = _validated_samples(samples, self.dim)
         n = samples.shape[1]
         d = self.dim
-        if samples.shape[0] != d:
-            msg = f"Sample shape mismatch, expected {d} rows, got {samples.shape[0]}"
-            raise ValueError(msg)
         if len(ranking) != n or sorted(ranking) != list(range(n)):
             msg = "ranking must be a permutation matching sample count."
             raise ValueError(msg)
-        if not np.all(np.isfinite(samples)):
-            msg = "samples must be finite."
-            raise ValueError(msg)
-
-        w_pos = np.maximum(0.0, np.log(n / 2 + 1) - np.log(np.arange(1, n + 1)))
-        w_sum = float(np.sum(w_pos))
-        if w_sum <= 0.0:
-            msg = "Invalid utility weights: positive weight sum must be > 0."
-            raise ValueError(msg)
-        w_pos /= w_sum
-        mu_eff_pos = 1.0 / np.sum(w_pos**2)
-        w_active = w_pos - (1.0 / n)
+        w_pos, w_active, mu_eff_pos = _utility_weights(n)
         z_sorted = samples[:, ranking]
 
         grad_mu = z_sorted @ w_active
@@ -279,11 +291,3 @@ class XNES:
         if cond_scale > max_condition:
             return XNESStatus.SCALE_COND_MAX
         return XNESStatus.OK
-
-
-def _validate_positive_finite(value: float, name: str) -> float:
-    out = float(value)
-    if not np.isfinite(out) or out <= 0.0:
-        msg = f"{name} must be a positive finite float."
-        raise ValueError(msg)
-    return out

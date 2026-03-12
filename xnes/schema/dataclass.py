@@ -6,7 +6,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import fields, is_dataclass
 from typing import Annotated, Any, cast, get_args, get_origin, get_type_hints
 
-from .common import build_field_spec, field_name, path_name
+from .common import build_field_spec, build_scalar_builder, field_name, path_name
 from .spec import BuildFn, FieldSpec, Parameter, Path, SchemaSpec, T
 
 
@@ -77,8 +77,4 @@ def _parse_leaf_field(annotation: Any, path: Path) -> tuple[tuple[FieldSpec, ...
         raise TypeError(msg)
 
     field_spec = build_field_spec(path, parameters[0])
-
-    def instantiate(values: Mapping[Path, float]) -> Any:
-        return float(values[path])
-
-    return (field_spec,), instantiate
+    return (field_spec,), build_scalar_builder(path)
