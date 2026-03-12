@@ -47,14 +47,16 @@ class Trial:
 
 
 class Optimizer(Generic[T]):
-    """Schema-first xNES optimizer over dataclass schemas.
+    """Schema-first xNES optimizer over dataclass or mapping schemas.
 
-    The schema must be a dataclass tree whose internal nodes are dataclasses
-    and whose optimized leaves are declared as `Annotated[float, Parameter(...)]`.
-    The wrapper exposes typed runtime values separately from trial handles
-    while keeping optimizer state keyed by stable dotted leaf names
-    plus persisted parameter definitions. Field ordering is lexicographic by
-    leaf name rather than dataclass declaration order.
+    Dataclass schemas must be dataclass trees whose optimized leaves are
+    declared as `Annotated[float, Parameter(...)]`.
+    Mapping schemas must be nested mappings with string keys and
+    `Parameter(...)` leaves.
+    The wrapper exposes runtime values separately from trial handles while
+    keeping optimizer state keyed by stable dotted leaf names plus persisted
+    parameter definitions. Field ordering is lexicographic by leaf name
+    rather than declaration or insertion order.
 
     Results are ranked for maximization by default. Pass `minimize=True` to
     rank lower results as better instead. This optimization direction is
@@ -63,7 +65,7 @@ class Optimizer(Generic[T]):
 
     def __init__(
         self,
-        schema_type: type[T],
+        schema_type: type[T] | Mapping[str, object],
         pop_size: int | None = None,
         minimize: bool = False,
         csa_enabled: bool = True,
@@ -78,7 +80,7 @@ class Optimizer(Generic[T]):
         self.eta_sigma = eta_sigma
         self.eta_B = eta_B
 
-        self._schema: SchemaSpec[T] = parse_schema(schema_type)
+        self._schema: SchemaSpec[T] = cast(SchemaSpec[T], parse_schema(schema_type))
         self._rng = np.random.default_rng()
         self._scheduler = BatchScheduler()
 
@@ -153,9 +155,9 @@ class Optimizer(Generic[T]):
         """Reserve one sampled parameter set for an evaluation run.
 
         Returns a pair `(trial, params)` where `params` is an instance of
-        the root schema dataclass passed to `Optimizer`, including any nested
-        dataclass subtrees. The `trial` must be passed back to `tell()`
-        exactly once.
+        the root schema dataclass passed to `Optimizer`, or a nested plain
+        dict matching the mapping schema shape. The `trial` must be passed
+        back to `tell()` exactly once.
         """
         batch_trial = self._reserve(context)
         latent_sample = self._xnes.transform(self._scheduler.batch[:, [batch_trial.sample_index]])[:, 0]
@@ -170,7 +172,7 @@ class Optimizer(Generic[T]):
         )
 
     def ask_best(self) -> T:
-        """Return a deterministic, context-free snapshot of the current means."""
+        """Return the current mean parameters in the schema's runtime shape."""
         return self._schema.build_params(self._xnes.mu)
 
     def tell(self, trial: Trial, result: float | Sequence[float] | np.ndarray) -> TellResult:

@@ -1,7 +1,8 @@
 """Public package interface for the schema-first xNES optimizer wrapper.
 
-Schemas may be flat dataclasses or nested dataclass trees whose optimized
-leaves are declared as `Annotated[float, Parameter(...)]`.
+Schemas may be dataclass trees whose optimized leaves are declared as
+`Annotated[float, Parameter(...)]`, or nested mappings whose leaves are
+`Parameter(...)` values.
 
 Example:
     ```python

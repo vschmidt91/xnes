@@ -25,11 +25,26 @@ def _make_identity_schema(schema_name: str, **parameters: tuple[float, float]) -
     )
 
 
-def _initialized_optimizer(schema: type[Any], *, pop_size: int, minimize: bool = False) -> Optimizer[Any]:
+def _make_mapping_schema(**parameters: object) -> dict[str, object]:
+    return dict(parameters)
+
+
+def _make_mapping_identity_schema(**parameters: tuple[float, float]) -> dict[str, object]:
+    return _make_mapping_schema(
+        **{field_name: Parameter(loc=loc, scale=scale) for field_name, (loc, scale) in parameters.items()},
+    )
+
+
+def _initialized_optimizer(
+    schema: type[Any] | Mapping[str, object],
+    *,
+    pop_size: int,
+    minimize: bool = False,
+) -> Optimizer[Any]:
     return Optimizer(schema, pop_size=pop_size, minimize=minimize)
 
 
-def _initialized_state(schema: type[Any], *, pop_size: int) -> dict[str, object]:
+def _initialized_state(schema: type[Any] | Mapping[str, object], *, pop_size: int) -> dict[str, object]:
     state = _initialized_optimizer(schema, pop_size=pop_size).save()
     assert isinstance(state, dict)
     return state
@@ -459,6 +474,112 @@ def test_nested_schema_flattens_leaf_names_and_rebuilds_dataclasses() -> None:
     assert params.combat.attack_threshold > 0.0
     assert 0.0 < params.mining.gas_priority < 1.0
     assert params.alpha < 3.0
+
+
+def test_nested_mapping_schema_flattens_leaf_names_and_rebuilds_plain_dicts() -> None:
+    schema = {
+        "mining": {
+            "gas_priority": Parameter(loc=0.5, scale=1.0, min=0.0, max=1.0),
+        },
+        "alpha": Parameter(loc=1.5, scale=0.25, max=3.0),
+        "combat": {
+            "retreat_threshold": Parameter(loc=-1.0, scale=2.0),
+            "attack_threshold": Parameter(loc=2.0, scale=3.0, min=0.0),
+        },
+    }
+
+    expected_names = ["alpha", "combat.attack_threshold", "combat.retreat_threshold", "mining.gas_priority"]
+    optimizer = _initialized_optimizer(schema, pop_size=6)
+    assert _read_schema_names(optimizer.save()) == expected_names
+
+    best = optimizer.ask_best()
+
+    assert isinstance(best, dict)
+    assert isinstance(best["combat"], dict)
+    assert isinstance(best["mining"], dict)
+    assert best["alpha"] == 1.5
+    assert best["combat"]["attack_threshold"] == 2.0
+    assert best["combat"]["retreat_threshold"] == -1.0
+    assert best["mining"]["gas_priority"] == 0.5
+
+    trial, params = optimizer.ask()
+    assert isinstance(trial, Trial)
+    assert isinstance(params, dict)
+    assert isinstance(params["combat"], dict)
+    assert isinstance(params["mining"], dict)
+    assert isinstance(params["alpha"], float)
+    assert isinstance(params["combat"]["attack_threshold"], float)
+    assert isinstance(params["mining"]["gas_priority"], float)
+    assert params["combat"]["attack_threshold"] > 0.0
+    assert 0.0 < params["mining"]["gas_priority"] < 1.0
+    assert params["alpha"] < 3.0
+
+
+def test_mapping_schema_order_is_lexicographic_and_independent_of_insertion_order() -> None:
+    first_schema = _make_mapping_schema(
+        zeta=Parameter(loc=3.0, scale=1.0, min=0.0),
+        alpha=Parameter(loc=1.0, scale=2.0),
+        branch={
+            "mu": Parameter(loc=2.0, scale=3.0, min=-1.0, max=5.0),
+        },
+    )
+    first = _initialized_optimizer(first_schema, pop_size=18)
+    state_first = first.save()
+
+    second_schema = _make_mapping_schema(
+        branch={
+            "mu": Parameter(loc=2.0, scale=3.0, min=-1.0, max=5.0),
+        },
+        zeta=Parameter(loc=3.0, scale=1.0, min=0.0),
+        alpha=Parameter(loc=1.0, scale=2.0),
+    )
+    second = _initialized_optimizer(second_schema, pop_size=18)
+    state_second = second.save()
+
+    assert _read_schema_names(state_first) == ["alpha", "branch.mu", "zeta"]
+    assert _read_schema_names(state_second) == ["alpha", "branch.mu", "zeta"]
+    assert np.allclose(_read_loc(state_first), _read_loc(state_second))
+
+
+def test_mapping_schema_state_save_load_roundtrip() -> None:
+    schema_a = {
+        "beta": Parameter(loc=-1.0, scale=2.0),
+        "block": {
+            "alpha": Parameter(loc=2.0, scale=1.5),
+        },
+    }
+    opt_a: Optimizer[Any] = Optimizer(schema_a, pop_size=20)
+
+    for _ in range(37):
+        trial, params = opt_a.ask()
+        block = cast(dict[str, object], params["block"])
+        alpha = cast(float, block["alpha"])
+        beta = cast(float, params["beta"])
+        opt_a.tell(trial, -(alpha**2 + beta**2))
+
+    state = opt_a.save()
+    assert isinstance(state, dict)
+
+    schema_b = {
+        "block": {
+            "alpha": Parameter(loc=2.0, scale=1.5),
+        },
+        "beta": Parameter(loc=-1.0, scale=2.0),
+    }
+    opt_b: Optimizer[Any] = Optimizer(schema_b, pop_size=20)
+    load_result = opt_b.load(state)
+    assert load_result == SchemaDiff(added=[], removed=[], changed=[], unchanged=["beta", "block.alpha"])
+    loaded = opt_b.save()
+
+    assert _read_schema(loaded) == _read_schema(state)
+    assert np.allclose(_read_loc(loaded), _read_loc(state))
+    assert np.allclose(_read_scale(loaded), _read_scale(state))
+    assert np.allclose(_read_step_size_path(loaded), _read_step_size_path(state))
+
+
+def test_mapping_schema_rejects_non_parameter_leaf_values() -> None:
+    with pytest.raises(TypeError, match=r"must be Parameter\(\.\.\.\) or a nested mapping"):
+        Optimizer({"x": 1.0})
 
 
 def test_schema_requires_parameter_annotated_float_fields() -> None:

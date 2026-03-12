@@ -1,10 +1,10 @@
-"""Schema parsing for the typed optimizer wrapper."""
+"""Normalized schema model shared across schema input modes."""
 
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import asdict, dataclass, fields, is_dataclass
-from typing import Annotated, Any, Generic, TypeVar, cast, get_args, get_origin, get_type_hints
+from dataclasses import asdict, dataclass
+from typing import Any, Generic, TypeVar, cast
 
 import numpy as np
 from scipy.special import expit, logit
@@ -194,106 +194,6 @@ class SchemaSpec(Generic[T]):
             for field_spec, value in zip(self.fields, values, strict=True)
         }
         return self.instantiate(leaf_values)
-
-
-def parse_schema(model_type: type[T]) -> SchemaSpec[T]:
-    """Parse and validate a dataclass schema tree for schema-mode optimization.
-
-    Internal nodes must be dataclasses and leaf fields must be declared as
-    `Annotated[float, Parameter(...)]`. The resulting leaf specifications are
-    ordered lexicographically by dotted path name so dataclass declaration
-    order does not affect persisted state layout.
-    """
-
-    if not isinstance(model_type, type) or not is_dataclass(model_type):
-        msg = "xnes schema must be a dataclass type."
-        raise TypeError(msg)
-
-    field_specs, instantiate = _parse_dataclass_type(model_type, ())
-    return SchemaSpec(
-        model_type=model_type,
-        fields=tuple(sorted(field_specs, key=_field_name)),
-        instantiate=cast(Callable[[Mapping[Path, float]], T], instantiate),
-    )
-
-
-def _parse_dataclass_type(model_type: type[Any], prefix: Path) -> tuple[tuple[FieldSpec, ...], BuildFn]:
-    dataclass_fields = tuple(fields(model_type))
-    type_hints = get_type_hints(model_type, include_extras=True)
-    parsed_fields = tuple(
-        _parse_dataclass_field(
-            type_hints.get(field.name),
-            prefix + (field.name,),
-            field.init,
-        )
-        for field in dataclass_fields
-    )
-    field_specs = tuple(field_spec for child_specs, _ in parsed_fields for field_spec in child_specs)
-    constructor = cast(Callable[..., Any], model_type)
-    child_builders = tuple(
-        (field.name, build) for field, (_, build) in zip(dataclass_fields, parsed_fields, strict=True)
-    )
-
-    def instantiate(values: Mapping[Path, float]) -> Any:
-        kwargs = {name: build(values) for name, build in child_builders}
-        return constructor(**kwargs)
-
-    return field_specs, instantiate
-
-
-def _parse_dataclass_field(annotation: Any, path: Path, init: bool) -> tuple[tuple[FieldSpec, ...], BuildFn]:
-    name = _path_name(path)
-    if not init:
-        msg = f"xnes schema field '{name}' must be init=True"
-        raise TypeError(msg)
-
-    if get_origin(annotation) is Annotated:
-        return _parse_leaf_field(annotation, path)
-
-    if isinstance(annotation, type) and is_dataclass(annotation):
-        return _parse_dataclass_type(annotation, path)
-
-    msg = f"xnes schema field '{name}' must be annotated as Annotated[float, Parameter(...)] or be a dataclass type"
-    raise TypeError(msg)
-
-
-def _parse_leaf_field(annotation: Any, path: Path) -> tuple[tuple[FieldSpec, ...], BuildFn]:
-    name = _path_name(path)
-    runtime_type, *metadata = get_args(annotation)
-    if runtime_type is not float:
-        msg = f"xnes schema field '{name}' must be annotated as Annotated[float, Parameter(...)]"
-        raise TypeError(msg)
-
-    parameters = [item for item in metadata if isinstance(item, Parameter)]
-    if len(parameters) != 1:
-        msg = f"xnes schema field '{name}' must include exactly one Parameter(...) metadata value"
-        raise TypeError(msg)
-
-    field_spec = _normalize_field_spec(name, path, parameters[0])
-
-    def instantiate(values: Mapping[Path, float]) -> Any:
-        return float(values[path])
-
-    return (field_spec,), instantiate
-
-
-def _normalize_field_spec(name: str, path: Path, parameter: Parameter) -> FieldSpec:
-    mu0, sigma0 = parameter.initial_state(name)
-    return FieldSpec(
-        name=name,
-        path=path,
-        parameter=parameter,
-        mu0=mu0,
-        sigma0=sigma0,
-    )
-
-
-def _field_name(field_spec: FieldSpec) -> str:
-    return field_spec.name
-
-
-def _path_name(path: Path) -> str:
-    return ".".join(path)
 
 
 def _field_component_name(field_name: str, component: str) -> str:
