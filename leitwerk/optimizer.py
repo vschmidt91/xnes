@@ -64,14 +64,14 @@ class Optimizer(Generic[T]):
     def __init__(
         self,
         schema_type: type[T] | Mapping[str, object],
-        pop_size: int | None = None,
+        population_size: int | None = None,
         minimize: bool = False,
         csa_enabled: bool = True,
         eta_mu: float = 1.0,
         eta_sigma: float = 1.0,
         eta_B: float = 1.0,
     ) -> None:
-        self.pop_size = pop_size
+        self.population_size = population_size
         self.minimize = minimize
         self.csa_enabled = csa_enabled
         self.eta_mu = eta_mu
@@ -255,7 +255,7 @@ class Optimizer(Generic[T]):
         return xnes
 
     def _sample_batch(self) -> None:
-        batch = self._xnes.ask(self.pop_size, self._rng)
+        batch = self._xnes.ask(self.population_size, self._rng)
         self._pending_reservation = None
         self._scheduler.reset(batch)
 

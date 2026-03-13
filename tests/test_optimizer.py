@@ -37,14 +37,14 @@ def _make_mapping_identity_schema(**parameters: tuple[float, float]) -> dict[str
 def _initialized_optimizer(
     schema: type[Any] | Mapping[str, object],
     *,
-    pop_size: int,
+    population_size: int,
     minimize: bool = False,
 ) -> Optimizer[Any]:
-    return Optimizer(schema, pop_size=pop_size, minimize=minimize)
+    return Optimizer(schema, population_size=population_size, minimize=minimize)
 
 
-def _initialized_state(schema: type[Any] | Mapping[str, object], *, pop_size: int) -> dict[str, object]:
-    state = _initialized_optimizer(schema, pop_size=pop_size).save()
+def _initialized_state(schema: type[Any] | Mapping[str, object], *, population_size: int) -> dict[str, object]:
+    state = _initialized_optimizer(schema, population_size=population_size).save()
     assert isinstance(state, dict)
     return state
 
@@ -137,7 +137,7 @@ def _run_function_optimization(
     init_loc: float,
     init_scale: float,
     dim: int,
-    pop_size: int,
+    population_size: int,
     evaluations: int,
     minimize: bool = False,
 ) -> tuple[float, float]:
@@ -145,7 +145,7 @@ def _run_function_optimization(
         "SphereParams",
         **{f"x{i}": (init_loc, init_scale) for i in range(dim)},
     )
-    optimizer: Optimizer[Any] = Optimizer(schema, pop_size=pop_size, minimize=minimize)
+    optimizer: Optimizer[Any] = Optimizer(schema, population_size=population_size, minimize=minimize)
 
     initial_loc = _read_loc(optimizer.save())
     initial_value = objective(initial_loc)
@@ -170,7 +170,7 @@ def test_optimizer_improves_sphere() -> None:
         init_loc=3.0,
         init_scale=2.0,
         dim=4,
-        pop_size=28,
+        population_size=28,
         evaluations=1400,
     )
     assert final < 0.15 * initial
@@ -185,7 +185,7 @@ def test_optimizer_improves_sphere_in_minimization_mode() -> None:
         init_loc=3.0,
         init_scale=2.0,
         dim=4,
-        pop_size=28,
+        population_size=28,
         evaluations=1400,
         minimize=True,
     )
@@ -194,7 +194,7 @@ def test_optimizer_improves_sphere_in_minimization_mode() -> None:
 
 def test_state_save_load_roundtrip() -> None:
     schema_a = _make_identity_schema("RoundtripA", alpha=(2.0, 1.5), beta=(-1.0, 2.0))
-    opt_a = Optimizer(schema_a, pop_size=20)
+    opt_a = Optimizer(schema_a, population_size=20)
 
     for _ in range(37):
         params = opt_a.ask()
@@ -206,7 +206,7 @@ def test_state_save_load_roundtrip() -> None:
     assert isinstance(state, dict)
 
     schema_b = _make_identity_schema("RoundtripB", beta=(-1.0, 2.0), alpha=(2.0, 1.5))
-    opt_b = Optimizer(schema_b, pop_size=20)
+    opt_b = Optimizer(schema_b, population_size=20)
     load_result = opt_b.load(state)
     assert load_result == SchemaDiff(added=[], removed=[], changed=[], unchanged=["alpha", "beta"])
     loaded = opt_b.save()
@@ -224,7 +224,7 @@ def test_schema_state_is_human_readable_parameter_specs() -> None:
         beta=Parameter(loc=2.0, scale=3.0, min=0.0),
         gamma=Parameter(scale=1.0, min=0.0, max=1.0),
     )
-    state = _initialized_state(schema, pop_size=4)
+    state = _initialized_state(schema, population_size=4)
 
     assert _read_schema(state) == {
         "alpha": _parameter_spec(loc=1.5, scale=0.25, max=3.0),
@@ -235,7 +235,7 @@ def test_schema_state_is_human_readable_parameter_specs() -> None:
 
 def test_load_reconciles_added_and_removed_parameters() -> None:
     base_schema = _make_identity_schema("BaseSchema", x=(2.0, 1.5), y=(-1.0, 0.7))
-    base = Optimizer(base_schema, pop_size=4)
+    base = Optimizer(base_schema, population_size=4)
 
     for _ in range(5):
         params = base.ask()
@@ -253,7 +253,7 @@ def test_load_reconciles_added_and_removed_parameters() -> None:
     assert any(result is not None for result in base_results)
 
     added_schema = _make_identity_schema("AddedSchema", x=(2.0, 1.5), y=(-1.0, 0.7), z=(3.0, 2.0))
-    added = Optimizer(added_schema, pop_size=4)
+    added = Optimizer(added_schema, population_size=4)
     load_result = added.load(base_state)
     assert load_result == SchemaDiff(added=["z"], removed=[], changed=[], unchanged=["x", "y"])
     added_state = added.save()
@@ -293,7 +293,7 @@ def test_load_reconciles_added_and_removed_parameters() -> None:
     assert any(result is not None for result in added_results)
 
     removed_schema = _make_identity_schema("RemovedSchema", x=(2.0, 1.5), y=(-1.0, 0.7))
-    removed = Optimizer(removed_schema, pop_size=4)
+    removed = Optimizer(removed_schema, population_size=4)
     load_result = removed.load(added_partial_state)
     assert load_result == SchemaDiff(added=[], removed=["z"], changed=[], unchanged=["x", "y"])
     removed_state = removed.save()
@@ -313,7 +313,7 @@ def test_load_reconciles_bounds_changes_and_selectively_preserves_batch() -> Non
         x=Parameter(loc=0.25, scale=1.0, min=0.0),
         y=Parameter(loc=-1.0, scale=0.7),
     )
-    base = Optimizer(base_schema, pop_size=4)
+    base = Optimizer(base_schema, population_size=4)
 
     for _ in range(5):
         params = base.ask()
@@ -342,11 +342,11 @@ def test_load_reconciles_bounds_changes_and_selectively_preserves_batch() -> Non
         x=Parameter(loc=0.25, scale=1.0, min=0.0, max=1.0),
         y=Parameter(loc=-1.0, scale=0.7),
     )
-    changed = Optimizer(changed_schema, pop_size=4)
+    changed = Optimizer(changed_schema, population_size=4)
     load_result = changed.load(base_state)
     assert load_result == SchemaDiff(added=[], removed=[], changed=["x"], unchanged=["y"])
     changed_state = changed.save()
-    fresh_state = _initialized_state(changed_schema, pop_size=4)
+    fresh_state = _initialized_state(changed_schema, population_size=4)
 
     changed_loc = _read_loc(changed_state)
     changed_scale = _read_scale(changed_state)
@@ -377,14 +377,14 @@ def test_load_reconciles_bounds_changes_and_selectively_preserves_batch() -> Non
 
 def test_loc_and_scale_changes_do_not_trigger_schema_changeover() -> None:
     base_schema = _make_identity_schema("StrictBase", x=(2.0, 1.5), y=(-1.0, 0.5))
-    base_state = _initialized_state(base_schema, pop_size=4)
+    base_state = _initialized_state(base_schema, population_size=4)
 
     changed_schema = _make_schema(
         "StrictChanged",
         x=Parameter(loc=4.0, scale=1.5),
         y=Parameter(loc=-1.0, scale=2.0),
     )
-    changed = Optimizer(changed_schema, pop_size=4)
+    changed = Optimizer(changed_schema, population_size=4)
     load_result = changed.load(base_state)
     assert load_result == SchemaDiff(added=[], removed=[], changed=[], unchanged=["x", "y"])
 
@@ -407,7 +407,7 @@ def test_schema_order_is_lexicographic() -> None:
         alpha=Parameter(loc=1.0, scale=2.0),
         mu=Parameter(loc=2.0, scale=3.0, min=-1.0, max=5.0),
     )
-    first = _initialized_optimizer(first_schema, pop_size=18)
+    first = _initialized_optimizer(first_schema, population_size=18)
     state_first = first.save()
 
     second_schema = _make_schema(
@@ -416,7 +416,7 @@ def test_schema_order_is_lexicographic() -> None:
         zeta=Parameter(loc=3.0, scale=1.0, min=0.0),
         alpha=Parameter(loc=1.0, scale=2.0),
     )
-    second = _initialized_optimizer(second_schema, pop_size=18)
+    second = _initialized_optimizer(second_schema, population_size=18)
     state_second = second.save()
 
     assert _read_schema_names(state_first) == ["alpha", "mu", "zeta"]
@@ -449,7 +449,7 @@ def test_nested_schema_flattens_leaf_names_and_rebuilds_dataclasses() -> None:
     )
 
     expected_names = ["alpha", "combat.attack_threshold", "combat.retreat_threshold", "mining.gas_priority"]
-    optimizer: Optimizer[Any] = Optimizer(schema, pop_size=6)
+    optimizer: Optimizer[Any] = Optimizer(schema, population_size=6)
     assert _read_schema_names(optimizer.save()) == expected_names
 
     best = optimizer.ask_best()
@@ -487,7 +487,7 @@ def test_nested_mapping_schema_flattens_leaf_names_and_rebuilds_plain_dicts() ->
     }
 
     expected_names = ["alpha", "combat.attack_threshold", "combat.retreat_threshold", "mining.gas_priority"]
-    optimizer = _initialized_optimizer(schema, pop_size=6)
+    optimizer = _initialized_optimizer(schema, population_size=6)
     assert _read_schema_names(optimizer.save()) == expected_names
 
     best = optimizer.ask_best()
@@ -520,7 +520,7 @@ def test_mapping_schema_order_is_lexicographic_and_independent_of_insertion_orde
             "mu": Parameter(loc=2.0, scale=3.0, min=-1.0, max=5.0),
         },
     )
-    first = _initialized_optimizer(first_schema, pop_size=18)
+    first = _initialized_optimizer(first_schema, population_size=18)
     state_first = first.save()
 
     second_schema = _make_mapping_schema(
@@ -530,7 +530,7 @@ def test_mapping_schema_order_is_lexicographic_and_independent_of_insertion_orde
         zeta=Parameter(loc=3.0, scale=1.0, min=0.0),
         alpha=Parameter(loc=1.0, scale=2.0),
     )
-    second = _initialized_optimizer(second_schema, pop_size=18)
+    second = _initialized_optimizer(second_schema, population_size=18)
     state_second = second.save()
 
     assert _read_schema_names(state_first) == ["alpha", "branch.mu", "zeta"]
@@ -545,7 +545,7 @@ def test_mapping_schema_state_save_load_roundtrip() -> None:
             "alpha": Parameter(loc=2.0, scale=1.5),
         },
     }
-    opt_a: Optimizer[Any] = Optimizer(schema_a, pop_size=20)
+    opt_a: Optimizer[Any] = Optimizer(schema_a, population_size=20)
 
     for _ in range(37):
         params = opt_a.ask()
@@ -563,7 +563,7 @@ def test_mapping_schema_state_save_load_roundtrip() -> None:
         },
         "beta": Parameter(loc=-1.0, scale=2.0),
     }
-    opt_b: Optimizer[Any] = Optimizer(schema_b, pop_size=20)
+    opt_b: Optimizer[Any] = Optimizer(schema_b, population_size=20)
     load_result = opt_b.load(state)
     assert load_result == SchemaDiff(added=[], removed=[], changed=[], unchanged=["beta", "block.alpha"])
     loaded = opt_b.save()
@@ -611,7 +611,7 @@ def test_omitted_loc_uses_canonical_latent_zero_center() -> None:
         upper=Parameter(max=5.0),
         interval=Parameter(min=2.0, max=6.0),
     )
-    optimizer = _initialized_optimizer(schema, pop_size=6)
+    optimizer = _initialized_optimizer(schema, population_size=6)
 
     state = optimizer.save()
     assert _read_schema(state) == {
@@ -640,7 +640,7 @@ def test_legacy_parameter_constructors_are_not_exposed() -> None:
 
 def test_ask_returns_typed_sample() -> None:
     schema = _make_identity_schema("TypedSample", b=(2.0, 1.0), a=(-1.0, 1.0))
-    optimizer = _initialized_optimizer(schema, pop_size=6)
+    optimizer = _initialized_optimizer(schema, population_size=6)
 
     params = optimizer.ask()
 
@@ -655,7 +655,7 @@ def test_ask_best_returns_current_user_space_locs_without_context() -> None:
         b=Parameter(scale=1.0, min=0.0, max=1.0),
         a=Parameter(scale=1.0, min=-2.0),
     )
-    optimizer = _initialized_optimizer(schema, pop_size=6)
+    optimizer = _initialized_optimizer(schema, population_size=6)
 
     best = optimizer.ask_best()
     assert best.__class__ is schema
@@ -665,7 +665,7 @@ def test_ask_best_returns_current_user_space_locs_without_context() -> None:
 
 def test_context_reuses_mirror_on_repeat() -> None:
     schema = _make_identity_schema("ContextParams", x=(0.0, 1.0), y=(0.0, 1.0))
-    optimizer = _initialized_optimizer(schema, pop_size=4)
+    optimizer = _initialized_optimizer(schema, population_size=4)
     context = "arena:zerg"
 
     first_params = optimizer.ask(context=context)
@@ -686,7 +686,7 @@ def test_context_reuses_mirror_on_repeat() -> None:
 
 def test_json_context_reuses_mirror_on_canonical_repeat() -> None:
     schema = _make_identity_schema("JsonContextParams", x=(0.0, 1.0), y=(0.0, 1.0))
-    optimizer = _initialized_optimizer(schema, pop_size=4)
+    optimizer = _initialized_optimizer(schema, population_size=4)
 
     first_params = optimizer.ask(context={"b": 2, "a": 1})
     first = np.array([first_params.x, first_params.y], dtype=float)
@@ -706,7 +706,7 @@ def test_json_context_reuses_mirror_on_canonical_repeat() -> None:
 
 def test_json_context_is_saved_as_canonical_string() -> None:
     schema = _make_identity_schema("SavedJsonContext", x=(0.0, 1.0))
-    optimizer = _initialized_optimizer(schema, pop_size=4)
+    optimizer = _initialized_optimizer(schema, population_size=4)
 
     optimizer.ask(context={"b": 2, "a": 1})
     optimizer.tell(1.0)
@@ -719,7 +719,7 @@ def test_ask_rejects_non_json_context() -> None:
         pass
 
     schema = _make_identity_schema("OpaqueContext", x=(0.0, 1.0))
-    optimizer = _initialized_optimizer(schema, pop_size=4)
+    optimizer = _initialized_optimizer(schema, population_size=4)
     context = cast(Any, Opaque())
 
     with pytest.raises(TypeError, match="JSON-serializable"):
@@ -731,7 +731,7 @@ def test_ask_rejects_non_json_context() -> None:
 
 def test_serial_ask_raises_when_a_sample_is_pending() -> None:
     schema = _make_identity_schema("PendingSerialAsk", x=(0.0, 1.0))
-    optimizer = _initialized_optimizer(schema, pop_size=4)
+    optimizer = _initialized_optimizer(schema, population_size=4)
 
     optimizer.ask()
 
@@ -741,7 +741,7 @@ def test_serial_ask_raises_when_a_sample_is_pending() -> None:
 
 def test_tell_raises_without_pending_ask() -> None:
     schema = _make_identity_schema("NoPendingTell", x=(0.0, 1.0))
-    optimizer = _initialized_optimizer(schema, pop_size=4)
+    optimizer = _initialized_optimizer(schema, population_size=4)
 
     with pytest.raises(RuntimeError, match="No pending ask"):
         optimizer.tell(0.0)
@@ -749,7 +749,7 @@ def test_tell_raises_without_pending_ask() -> None:
 
 def test_load_raises_with_pending_ask() -> None:
     schema = _make_identity_schema("PendingLoad", x=(0.0, 1.0))
-    optimizer = _initialized_optimizer(schema, pop_size=4)
+    optimizer = _initialized_optimizer(schema, population_size=4)
     state = optimizer.save()
 
     optimizer.ask()
@@ -760,7 +760,7 @@ def test_load_raises_with_pending_ask() -> None:
 
 def test_save_raises_with_pending_ask() -> None:
     schema = _make_identity_schema("PendingSave", x=(0.0, 1.0))
-    optimizer = _initialized_optimizer(schema, pop_size=4)
+    optimizer = _initialized_optimizer(schema, population_size=4)
 
     optimizer.ask()
 
@@ -770,7 +770,7 @@ def test_save_raises_with_pending_ask() -> None:
 
 def test_load_discards_unsaved_local_progress_at_idle_boundary() -> None:
     schema = _make_identity_schema("DiscardUnsavedProgress", x=(0.0, 1.0))
-    optimizer = _initialized_optimizer(schema, pop_size=4)
+    optimizer = _initialized_optimizer(schema, population_size=4)
     initial_state = optimizer.save()
 
     params = optimizer.ask()
@@ -789,7 +789,15 @@ def test_load_discards_unsaved_local_progress_at_idle_boundary() -> None:
 
 def test_runtime_config_is_not_persisted_or_loaded() -> None:
     schema = _make_identity_schema("RuntimeConfig", x=(4.0, 2.0))
-    opt_a = Optimizer(schema, pop_size=14, minimize=True, csa_enabled=False, eta_mu=0.9, eta_sigma=0.7, eta_B=0.2)
+    opt_a = Optimizer(
+        schema,
+        population_size=14,
+        minimize=True,
+        csa_enabled=False,
+        eta_mu=0.9,
+        eta_sigma=0.7,
+        eta_B=0.2,
+    )
     for _ in range(20):
         params = opt_a.ask()
         x = params.x
@@ -800,7 +808,7 @@ def test_runtime_config_is_not_persisted_or_loaded() -> None:
     assert "context_pending" in state
     assert "minimize" not in state
 
-    opt_b = Optimizer(schema, pop_size=4)
+    opt_b = Optimizer(schema, population_size=4)
     opt_b.load(state)
     loaded = opt_b.save()
     assert isinstance(loaded, dict)
@@ -814,7 +822,7 @@ def test_runtime_config_is_not_persisted_or_loaded() -> None:
 
 def test_load_allows_switching_optimization_direction_mid_batch() -> None:
     schema = _make_identity_schema("SwitchDirection", x=(0.0, 1.0))
-    base = Optimizer(schema, pop_size=4, minimize=True)
+    base = Optimizer(schema, population_size=4, minimize=True)
 
     first_params = base.ask()
     base.tell(first_params.x)
@@ -824,8 +832,8 @@ def test_load_allows_switching_optimization_direction_mid_batch() -> None:
     assert completed_indices == [0]
     assert saved_results[0] == pytest.approx((first_params.x,))
 
-    minimizing = Optimizer(schema, pop_size=4, minimize=True)
-    maximizing = Optimizer(schema, pop_size=4)
+    minimizing = Optimizer(schema, population_size=4, minimize=True)
+    maximizing = Optimizer(schema, population_size=4)
     minimizing.load(state)
     maximizing.load(state)
 
@@ -840,13 +848,13 @@ def test_load_allows_switching_optimization_direction_mid_batch() -> None:
 
 def test_restart_on_conditioning_failure() -> None:
     schema = _make_identity_schema("RestartSchema", x=(0.0, 1.0), y=(0.0, 1.0))
-    optimizer = _initialized_optimizer(schema, pop_size=10)
+    optimizer = _initialized_optimizer(schema, population_size=10)
 
     state = optimizer.save()
     assert isinstance(state, dict)
     state["scale"] = [[1e-10, 0.0], [0.0, 1e10]]
 
-    restored = Optimizer(schema, pop_size=10)
+    restored = Optimizer(schema, population_size=10)
     restored.load(state)
 
     for _ in range(10):
@@ -865,7 +873,7 @@ def test_successful_termination_restarts_from_final_mu_with_fresh_scale_and_path
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     schema = _make_identity_schema("RestartSuccess", x=(2.0, 1.5), y=(-1.0, 0.7))
-    optimizer = _initialized_optimizer(schema, pop_size=4)
+    optimizer = _initialized_optimizer(schema, population_size=4)
     final_mu = np.array([4.25, -3.5])
 
     def fake_tell(samples: np.ndarray, ranking: list[int]) -> XNESStatus:
@@ -897,7 +905,7 @@ def test_successful_termination_restarts_from_final_mu_with_fresh_scale_and_path
 
 def test_failed_termination_restarts_from_schema_loc_with_fresh_scale_and_path(monkeypatch: pytest.MonkeyPatch) -> None:
     schema = _make_identity_schema("RestartFailure", x=(2.0, 1.5), y=(-1.0, 0.7))
-    optimizer = _initialized_optimizer(schema, pop_size=4)
+    optimizer = _initialized_optimizer(schema, population_size=4)
 
     def fake_tell(samples: np.ndarray, ranking: list[int]) -> XNESStatus:
         optimizer._xnes.mu = np.array([4.25, -3.5])
@@ -928,7 +936,7 @@ def test_failed_termination_restarts_from_schema_loc_with_fresh_scale_and_path(m
 
 def test_save_load_preserves_optimizer_state() -> None:
     schema = _make_identity_schema("PreserveState", x=(2.0, 1.5), y=(-1.0, 0.7))
-    direct = _initialized_optimizer(schema, pop_size=12)
+    direct = _initialized_optimizer(schema, population_size=12)
 
     recreated_state = direct.save()
     for _ in range(40):
@@ -938,7 +946,7 @@ def test_save_load_preserves_optimizer_state() -> None:
         direct_result = -(direct_x**2 + 0.5 * direct_y**2)
         direct.tell(direct_result)
 
-        recreated = Optimizer(schema, pop_size=12)
+        recreated = Optimizer(schema, population_size=12)
         recreated.load(recreated_state)
         recreated_params = recreated.ask()
         recreated_x = recreated_params.x
@@ -962,7 +970,7 @@ def test_transformed_parameters_use_latent_state_but_emit_user_space_values() ->
         c=Parameter(loc=3.0, scale=1.0, min=0.0),
         d=Parameter(loc=3.0, scale=1.0, max=4.0),
     )
-    optimizer = Optimizer(schema, pop_size=6)
+    optimizer = Optimizer(schema, population_size=6)
 
     state = optimizer.save()
     expected_latent_loc = np.array(
@@ -989,10 +997,11 @@ def test_transformed_parameters_use_latent_state_but_emit_user_space_values() ->
         assert params.d < 4.0
         optimizer.tell(0.0)
 
-    reloaded = Optimizer(schema, pop_size=6)
+    reloaded = Optimizer(schema, population_size=6)
     reloaded.load(state)
     reloaded_best = reloaded.ask_best()
     assert reloaded_best.a == pytest.approx(best.a)
     assert reloaded_best.b == pytest.approx(best.b)
     assert reloaded_best.c == pytest.approx(best.c)
     assert reloaded_best.d == pytest.approx(best.d)
+

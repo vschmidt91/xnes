@@ -40,18 +40,18 @@ class MyParams:
 ```
 
 Samples will be provided with the proper type for IntelliSense and type checking.
-Alternatively, you can use plain dictionaries, see the [example below](#example-1-function-minimization)
+Alternatively, you can use plain dictionaries, see the [example below](#example-1-function-minimization).
 
 > [!TIP]
 > Use nested schemas to group the parameters into sensible blocks.
-> `leitwerk` handles full tree structures.
+> `leitwerk` handles full tree structures and flattens them internally.
 
 ### Step 2 - Set up the Loop
 
-On Startup, create the optimizer and restore state if there is one:
+On Startup, create the optimizer and restore state (if available):
 
 ```py
-opt = Optimizer(Params, pop_size=10)
+opt = Optimizer(Params, population_size=10)
 
 # optional:
 with open("params.json") as f:
@@ -65,8 +65,8 @@ Run any number of training cycles:
 ```py
 for _ in range(32):
     params = opt.ask()
-    result = ...
-    opt.tell(result)
+    score = ...
+    result = opt.tell(score)
 ```
 
 Batching and result aggregation happen under the hood.
@@ -74,7 +74,8 @@ Batching and result aggregation happen under the hood.
 Persist state:
 
 ```py
-state = opt.save()
+with open("params.json", "w") as f:
+    json.dump(opt.save(), f)
 ```
 
 > [!WARNING]
@@ -229,8 +230,8 @@ If context is provided, `leitwerk` uses it for mirror sampling: [^3]
 > Rule of thumb: the population should be large enough to hold two of each unique context.
 >
 > For AIArena authors:
-> - `context=self.enemy_race` : `pop_size >= 8`
-> - `context=self.opponent_id` : `pop_size >= 2 * division_size`
+> - `context=self.enemy_race` : `population_size >= 8`
+> - `context=self.opponent_id` : `population_size >= 2 * division_size`
 
 ## Optimizer Details (advanced)
 
@@ -259,3 +260,4 @@ This project is licensed under the terms of the MIT license.
 [^2]: https://github.com/CMA-ES/pycma
 [^3]: https://www.researchgate.net/publication/266087889_Mirrored_Orthogonal_Sampling_with_Pairwise_Selection_in_Evolution_Strategies
 [^4]: https://numbbo.github.io/coco/testsuites/bbob
+

@@ -18,7 +18,7 @@ class Params:
 
 
 state_path = Path("optimizer-state.json")
-opt = Optimizer(Params, pop_size=32)
+opt = Optimizer(Params, population_size=32)
 if state_path.exists():
     state = json.loads(state_path.read_text())
     load_result = opt.load(state)
@@ -56,3 +56,4 @@ from earlier `tell()` calls.
 
 For deterministic inference, call `ask_best()`. If you want the means from a
 saved run rather than a fresh optimizer, call `load(...)` first.
+
