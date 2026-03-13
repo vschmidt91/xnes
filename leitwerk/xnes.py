@@ -191,7 +191,7 @@ class XNES:
             end = min(start + self.dim, n_half)
             k = end - start
             raw = rng.standard_normal((self.dim, k))
-            lengths = np.sqrt(rng.chisquare(self.dim, k))
+            lengths = np.linalg.norm(raw, axis=0)
             basis, _ = qr(raw, mode="economic")
             z_half[:, start:end] = basis * lengths
 
