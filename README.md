@@ -2,84 +2,74 @@
 
 <h1 align="center">Leitwerk</h1>
 <p align="center">
-  <em>Tune your magic numbers with the power of evolution</em>
+  <em>Tune your magic numbers with mathematics</em>
 </p>
 
 ---
 
-`leitwerk` is a covariance adaptation optimizer with schema reconciliation.
-Define the parameters, set up a training loop and let it learn.
-
-It is aimed at noisy, expensive black-box settings:
-
-- Bots
-- Game AIs
-- Simulations
-- Any parameterized system with outputs to be optimized
+`leitwerk` is an evolutionary strategy with file persistence and schema reconciliation.
+Define the parameters, set up a loop in the training environment and let it learn.
+It is aimed at noisy, expensive black-box settings like simulators, bots and game AI with a few handcrafted parameters.
 
 ## Features
 
-- **Easy**: Start from existing values without much setup
-- **Dynamic**: Keep developing without losing progress
-- **Serializable**: Optimizer state lives in human-readable JSON
-- **Efficient** Custom implementation of xNES [^1], on par with CMA-ES [^2] on the BBOB [^4]
+- **Easy** : Start from existing values without much setup
+- **Persistent** : State lives in human-readable JSON
+- **Dynamic** : Keep developing without losing progress
+- **Efficient** : Canonical xNES [^1] implementation on par with `cma` [^2] on BBOB [^4]
 
-## Usage
+## Installation
 
-There are two ways to define parameters in `leitwerk`.
-This is mainly syntax, the optimization behaves exactly the same.
+Requires Python 3.11+
 
-### Option 1 - `dict[str, Parameter]`
-
-```py
-PARAMS = {
-  "param1": Parameter(1.2, scale=3.4),
-  "param2": Parameter(min=0, max=1)
-}
+```sh
+poetry install --all-extras
 ```
 
-Easy setup and string-based access.
+## Quickstart
 
-### Option 2 - Annotated `dataclass`
+### Step 1 - Define the parameters
+
+`leitwerk` uses annotated dataclasses to define the initial starting point:
 
 ```py
 @dataclass
-class Params:
-    param1: Annotated[float, Parameter(1.2, scale=3.4)]
-    param2: Annotated[float, Parameter(min=0, max=1)]
+class MyParams:
+    param1: Annotated[float, Parameter(loc=1.2, scale=3.4)] # loc: center guess, scale: spread/uncertainty
+    army_priority: Annotated[float, Parameter(loc=1, min=0)]   # optional lower bounds
 ```
 
-Samples will be typed as `Params`. Good for IntelliSense and type checking.
-
-
-> [!TIP]
-> Use nested schemas to group the parameters logically.
-> `leitwerk` handles full tree structures - just don't mix dictionaries and dataclasses.
+Samples will be provided with the proper type for IntelliSense and type checking.
+Alternatively, you can use plain dictionaries, see the [example below](#example-1-function-minimization)
 
 > [!TIP]
-> Schemas change are reconciled in `Optimizer.load(state)`.
-> It reports a `SchemaDiff` and leaves unchanged parameters intact.
+> Use nested schemas to group the parameters into sensible blocks.
+> `leitwerk` handles full tree structures.
 
-### Evolutionary Cycle
+### Step 2 - Set up the Loop
 
-Initialize the Optimizer and (optionally) restore state:
+On Startup, create the optimizer and restore state if there is one:
 
 ```py
 opt = Optimizer(Params, pop_size=10)
-# schema_diff = opt.load(state)
+
+# optional:
+with open("params.json") as f:
+    schema_diff = opt.load(json.load(f))
 ```
 
-Run one or more training cycles:
+`schema_diff` reports about parameters that were added/removed/changed compared to the old state.
+
+Run any number of training cycles:
 
 ```py
-for _ in range(10):
+for _ in range(32):
     params = opt.ask()
     result = ...
     opt.tell(result)
 ```
 
-If you need overlapping or out-of-order evaluations, use
-`trial = opt.ask_trial()`, read `trial.params`, and call `opt.tell_trial(trial, result)`.
+Batching and result aggregation happen under the hood.
 
 Persist state:
 
@@ -87,29 +77,35 @@ Persist state:
 state = opt.save()
 ```
 
+> [!WARNING]
+> `ask`/`tell` cycles are only supported inside a `load`/`save` block.
+> Don't restore the optimizer and tell it about old samples!
+
 ---
 
 ## Example 1 - Function Minimization
 
+If persistence is not required, `leitwerk` can be used as a standard `ask`/`tell` function optimizer:
+
 ```py
 from leitwerk import Optimizer, Parameter
 
-def f(x, y):
-    return (x - 1)**2 + (y - 1)**2  # minimum is at (1, 1)
+def f(x1, x2):
+    return (x1 - 1)**2 + (x2 - 1)**2  # minimum is at (1, 1)
 
-opt = Optimizer({"x": Parameter(), "y": Parameter()}, minimize=True)
+opt = Optimizer({"x1": Parameter(), "x2": Parameter()}, minimize=True)
 
 for _ in range(100):
-    params = opt.ask()
-    opt.tell(f(**params))
+    x = opt.ask()
+    opt.tell(f(**x))
 
 print(opt.ask_best())
-# {'x': 1.007115753775713, 'y': 0.9922700335131514}
+# {'x1': 1.007115753775713, 'x2': 0.9922700335131514}
 ```
 
 ## Example 2 - Starcraft II Bot
 
-This example is a worker rush bot with very simple combat logic and two parameters.
+This example is a worker rush bot with very simple attack/retreat logic and two parameters.
 It tunes itself to beat the hardest built-in AI in about a hundred games.
 
 Manual changes could do this much easier - this is just a proof of concept.
@@ -214,22 +210,23 @@ Examples:
 - `opt.ask(context=self.opponent_id)`
 - `opt.ask(context=self.game_info.map_name)`
 
-If context is provided, `leitwerk` uses context-matched mirror sampling: [^3]
+If context is provided, `leitwerk` uses it for mirror sampling: [^3]
 
 - Samples are generated in pairs: for every search direction `d`, also try `-d`
 - Ideally, pairs are evaluated in the same context
 - This helps to keept the gradient estimate centered/unbiased
 
-The number of unique contexts is linked to the ideal population size.
 
 > [!NOTE]
 > This still evolves a single set of parameters.
-> For actual per-matchup evolution, create multiple Optimizers.
+> For actual per-matchup evolution, use multiple Optimizers.
 
 > [!TIP]
+> Rule of thumb: the population should be large enough to hold two of each unique context.
+>
 > For AIArena authors:
-> - Random bots: consider including `self.race.name` as well
-> - if matching on opponent ID: use `pop_size = 2 * division_size`
+> - `context=self.enemy_race` : `pop_size >= 8`
+> - `context=self.opponent_id` : `pop_size >= 2 * division_size`
 
 ## Optimizer Details (advanced)
 
@@ -255,6 +252,6 @@ The number of unique contexts is linked to the ideal population size.
 This project is licensed under the terms of the MIT license.
 
 [^1]: https://people.idsia.ch/~tom/publications/xnes.pdf
-[^2]: https://en.wikipedia.org/wiki/CMA-ES
+[^2]: https://github.com/CMA-ES/pycma
 [^3]: https://www.researchgate.net/publication/266087889_Mirrored_Orthogonal_Sampling_with_Pairwise_Selection_in_Evolution_Strategies
 [^4]: https://numbbo.github.io/coco/testsuites/bbob
