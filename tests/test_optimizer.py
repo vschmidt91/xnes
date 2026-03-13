@@ -7,7 +7,6 @@ from typing import Annotated, Any, cast
 import numpy as np
 import pytest
 from leitwerk import Optimizer, Parameter, SchemaDiff, TellResult, XNESStatus
-from leitwerk.optimizer import Trial
 
 
 def _make_schema(schema_name: str, **parameters: Parameter) -> type[Any]:
@@ -624,22 +623,6 @@ def test_ask_returns_typed_sample() -> None:
     assert isinstance(params.b, float)
 
 
-def test_ask_trial_returns_trial_and_sample() -> None:
-    schema = _make_identity_schema("TypedTrialSample", b=(2.0, 1.0), a=(-1.0, 1.0))
-    optimizer = _initialized_optimizer(schema, pop_size=6)
-
-    trial = optimizer.ask_trial()
-    params = trial.params
-
-    assert isinstance(trial, Trial)
-    assert trial.reservation.sample_id >= 0
-    assert trial.reservation.context is None
-    assert trial.reservation.matched_context is False
-    assert params.__class__ is schema
-    assert isinstance(params.a, float)
-    assert isinstance(params.b, float)
-
-
 def test_ask_best_returns_current_user_space_locs_without_context() -> None:
     schema = _make_schema(
         "BestParams",
@@ -675,19 +658,6 @@ def test_context_reuses_mirror_on_repeat() -> None:
     assert third_report == TellResult(False, True, XNESStatus.OK, False)
 
 
-def test_ask_trial_allows_out_of_order_tells() -> None:
-    schema = _make_identity_schema("OutOfOrder", x=(0.0, 1.0))
-    optimizer = _initialized_optimizer(schema, pop_size=4)
-
-    first = optimizer.ask_trial()
-    second = optimizer.ask_trial()
-
-    r2 = optimizer.tell_trial(second, 0.0)
-    r1 = optimizer.tell_trial(first, 1.0)
-    assert r2.completed_batch is False
-    assert r1.completed_batch is False
-
-
 def test_serial_ask_raises_when_a_sample_is_pending() -> None:
     schema = _make_identity_schema("PendingSerialAsk", x=(0.0, 1.0))
     optimizer = _initialized_optimizer(schema, pop_size=4)
@@ -698,55 +668,52 @@ def test_serial_ask_raises_when_a_sample_is_pending() -> None:
         optimizer.ask()
 
 
-def test_ask_trial_raises_when_batch_is_fully_claimed() -> None:
-    schema = _make_identity_schema("ClaimedBatch", x=(0.0, 1.0))
+def test_tell_raises_without_pending_ask() -> None:
+    schema = _make_identity_schema("NoPendingTell", x=(0.0, 1.0))
     optimizer = _initialized_optimizer(schema, pop_size=4)
 
-    samples = [optimizer.ask_trial() for _ in range(4)]
-    assert len(samples) == 4
-    with pytest.raises(RuntimeError, match="Pending"):
-        optimizer.ask_trial()
+    with pytest.raises(RuntimeError, match="No pending ask"):
+        optimizer.tell(0.0)
 
 
-def test_stale_tell_trial_is_rejected() -> None:
-    schema = _make_identity_schema("StaleTell", x=(0.0, 1.0))
+def test_load_raises_with_pending_ask() -> None:
+    schema = _make_identity_schema("PendingLoad", x=(0.0, 1.0))
     optimizer = _initialized_optimizer(schema, pop_size=4)
-
-    trial = optimizer.ask_trial()
-    optimizer.tell_trial(trial, 1.0)
-
-    with pytest.raises(RuntimeError, match="Unknown"):
-        optimizer.tell_trial(trial, 1.0)
-
-
-def test_ask_trial_is_rejected_during_pending_serial_ask() -> None:
-    schema = _make_identity_schema("MixedAskModes", x=(0.0, 1.0))
-    optimizer = _initialized_optimizer(schema, pop_size=4)
+    state = optimizer.save()
 
     optimizer.ask()
 
-    with pytest.raises(RuntimeError, match="serial"):
-        optimizer.ask_trial()
+    with pytest.raises(RuntimeError, match="Pending ask"):
+        optimizer.load(state)
 
 
-def test_ask_is_rejected_during_pending_trials() -> None:
-    schema = _make_identity_schema("MixedTrialModes", x=(0.0, 1.0))
-    optimizer = _initialized_optimizer(schema, pop_size=4)
-
-    optimizer.ask_trial()
-
-    with pytest.raises(RuntimeError, match="Pending"):
-        optimizer.ask()
-
-
-def test_save_warns_with_outstanding_asks() -> None:
+def test_save_raises_with_pending_ask() -> None:
     schema = _make_identity_schema("PendingSave", x=(0.0, 1.0))
     optimizer = _initialized_optimizer(schema, pop_size=4)
 
     optimizer.ask()
 
-    with pytest.warns(RuntimeWarning, match="Outstanding asks"):
+    with pytest.raises(RuntimeError, match="Pending ask"):
         optimizer.save()
+
+
+def test_load_discards_unsaved_local_progress_at_idle_boundary() -> None:
+    schema = _make_identity_schema("DiscardUnsavedProgress", x=(0.0, 1.0))
+    optimizer = _initialized_optimizer(schema, pop_size=4)
+    initial_state = optimizer.save()
+
+    params = optimizer.ask()
+    optimizer.tell(params.x)
+    progressed_state = optimizer.save()
+    assert sum(result is not None for result in _read_results(progressed_state)) == 1
+
+    optimizer.load(initial_state)
+    restored_state = optimizer.save()
+    assert _read_results(restored_state) == _read_results(initial_state)
+    assert np.allclose(_read_loc(restored_state), _read_loc(initial_state))
+    assert np.allclose(_read_scale(restored_state), _read_scale(initial_state))
+    assert np.allclose(_read_step_size_path(restored_state), _read_step_size_path(initial_state))
+    assert np.allclose(_read_batch(restored_state), _read_batch(initial_state))
 
 
 def test_runtime_config_is_not_persisted_or_loaded() -> None:
@@ -778,12 +745,13 @@ def test_load_allows_switching_optimization_direction_mid_batch() -> None:
     schema = _make_identity_schema("SwitchDirection", x=(0.0, 1.0))
     base = Optimizer(schema, pop_size=4, minimize=True)
 
-    first_trial = base.ask_trial()
-    first_params = first_trial.params
-    base.tell_trial(first_trial, first_params.x)
+    first_params = base.ask()
+    base.tell(first_params.x)
     state = base.save()
     saved_results = _read_results(state)
-    assert saved_results[first_trial.reservation.sample_id] == pytest.approx((first_params.x,))
+    completed_indices = [idx for idx, result in enumerate(saved_results) if result is not None]
+    assert completed_indices == [0]
+    assert saved_results[0] == pytest.approx((first_params.x,))
 
     minimizing = Optimizer(schema, pop_size=4, minimize=True)
     maximizing = Optimizer(schema, pop_size=4)

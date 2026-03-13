@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import warnings
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Generic, TypeVar, cast
@@ -25,16 +24,8 @@ _SUCCESSFUL_TERMINATION_STATUSES = frozenset(
 
 
 @dataclass(frozen=True)
-class Trial(Generic[T]):
-    """Trial metadata returned by `ask_trial()` and consumed by `tell_trial()`."""
-
-    reservation: Reservation
-    params: T
-
-
-@dataclass(frozen=True)
 class TellResult:
-    """Outcome of one `Optimizer.tell` or `Optimizer.tell_trial` call.
+    """Outcome of one `Optimizer.tell` call.
 
     Attributes:
         completed_batch: Whether this result completed the current batch.
@@ -56,12 +47,12 @@ class Optimizer(Generic[T]):
     declared as `Annotated[float, Parameter(...)]`.
     Mapping schemas must be nested mappings with string keys and
     `Parameter(...)` leaves.
-    The default `ask()` / `tell()` interface is serial and keeps the pending
-    reservation inside the optimizer. Use `ask_trial()` / `tell_trial()` when
-    you need overlapping or out-of-order evaluations. Optimizer state is keyed
-    by stable dotted leaf names plus persisted parameter definitions. Field
-    ordering is lexicographic by leaf name rather than declaration or
-    insertion order.
+    The `ask()` / `tell()` interface is strictly sequential and keeps the
+    pending reservation inside the optimizer. `load()` and `save()` are only
+    allowed at idle boundaries, i.e. when no `ask()` is pending. Optimizer
+    state is keyed by stable dotted leaf names plus persisted parameter
+    definitions. Field ordering is lexicographic by leaf name rather than
+    declaration or insertion order.
 
     Results are ranked for maximization by default. Pass `minimize=True` to
     rank lower results as better instead. This optimization direction is
@@ -88,18 +79,13 @@ class Optimizer(Generic[T]):
         self._schema: SchemaSpec[T] = cast(SchemaSpec[T], parse_schema(schema_type))
         self._rng = np.random.default_rng()
         self._scheduler = BatchScheduler()
-        self._serial_reservation: Reservation | None = None
+        self._pending_reservation: Reservation | None = None
         self._xnes: XNES
         self._reset_distribution()
 
     def save(self) -> dict[str, object]:
         """Serialize the current optimizer state into a JSON-compatible mapping."""
-        if self._scheduler.has_reserved_trials():
-            warnings.warn(
-                "Outstanding asks are runtime-only and are not persisted by save().",
-                RuntimeWarning,
-                stacklevel=2,
-            )
+        self._require_idle("save")
         return {
             "schema": self._schema.state_schema(),
             "loc": self._xnes.mu.tolist(),
@@ -118,6 +104,7 @@ class Optimizer(Generic[T]):
         schema leaves by persisted transform compatibility while preserving
         shared learned state.
         """
+        self._require_idle("load")
         if state is None:
             msg = "state must be a saved optimizer snapshot, not None."
             raise TypeError(msg)
@@ -145,7 +132,7 @@ class Optimizer(Generic[T]):
 
         self._rng.bit_generator.state = dict(cast(Mapping[str, object], state_obj["rng_state"]))
         self._xnes = self._new_xnes(loc, scale, step_size_path)
-        self._serial_reservation = None
+        self._pending_reservation = None
         if batch.shape[1] == 0:
             self._sample_batch()
         else:
@@ -161,39 +148,21 @@ class Optimizer(Generic[T]):
         self._sample_batch()
 
     def ask(self, context: str | None = None) -> T:
-        """Reserve one sampled parameter set for a serial evaluation run."""
-        if self._scheduler.has_reserved_trials():
-            msg = "Pending trial must be told before calling ask()."
-            raise RuntimeError(msg)
-        self._serial_reservation = self._reserve(context)
-        return self._params_for(self._serial_reservation)
-
-    def ask_trial(self, context: str | None = None) -> Trial[T]:
-        """Reserve one sampled parameter set for an overlapping evaluation run."""
-        if self._serial_reservation is not None:
-            msg = "Pending serial ask must be told before calling ask_trial()."
-            raise RuntimeError(msg)
-        return self._materialize_trial(self._reserve(context))
+        """Reserve one sampled parameter set for one evaluation."""
+        self._require_idle("ask")
+        self._pending_reservation = self._reserve(context)
+        return self._params_for(self._pending_reservation)
 
     def ask_best(self) -> T:
         """Return the current mean parameters in the schema's runtime shape."""
         return self._schema.build_params(self._xnes.mu)
 
     def tell(self, result: float | Sequence[float] | np.ndarray) -> TellResult:
-        """Submit the objective result for the pending serial sample."""
-        if self._serial_reservation is None:
-            msg = "No pending serial ask."
-            raise RuntimeError(msg)
-        tell_result = self._tell_reservation(self._serial_reservation, result)
-        self._serial_reservation = None
+        """Submit the objective result for the pending sample."""
+        reservation = self._require_pending()
+        tell_result = self._tell_reservation(reservation, result)
+        self._pending_reservation = None
         return tell_result
-
-    def tell_trial(self, trial: Trial[T], result: float | Sequence[float] | np.ndarray) -> TellResult:
-        """Submit the objective result for one trial returned by `ask_trial()`."""
-        if self._serial_reservation is not None:
-            msg = "Pending serial ask must be told before calling tell_trial()."
-            raise RuntimeError(msg)
-        return self._tell_reservation(trial.reservation, result)
 
     def _tell_reservation(
         self,
@@ -209,12 +178,6 @@ class Optimizer(Generic[T]):
     def _params_for(self, reservation: Reservation) -> T:
         latent_sample = self._xnes.transform(self._scheduler.batch[:, [reservation.sample_id]])[:, 0]
         return self._schema.build_params(latent_sample)
-
-    def _materialize_trial(self, reservation: Reservation) -> Trial[T]:
-        return Trial(
-            reservation=reservation,
-            params=self._params_for(reservation),
-        )
 
     def _reconcile_distribution_state(
         self,
@@ -287,7 +250,7 @@ class Optimizer(Generic[T]):
 
     def _sample_batch(self) -> None:
         batch = self._xnes.ask(self.pop_size, self._rng)
-        self._serial_reservation = None
+        self._pending_reservation = None
         self._scheduler.reset(batch)
 
     def _complete_batch(self) -> tuple[XNESStatus, bool]:
@@ -304,7 +267,7 @@ class Optimizer(Generic[T]):
         result = self._scheduler.reserve(context)
         if result is None:
             if not self._scheduler.is_complete():
-                msg = "No unclaimed sample available. Pending trials must be told first."
+                msg = "No sample available."
                 raise RuntimeError(msg)
             self._complete_batch()
             result = self._scheduler.reserve(context)
@@ -317,6 +280,17 @@ class Optimizer(Generic[T]):
         assert self._scheduler.is_complete()
         results = [cast(tuple[float, ...], item) for item in self._scheduler.results]
         return sorted(range(len(results)), key=lambda idx: results[idx], reverse=not self.minimize)
+
+    def _require_idle(self, action: str) -> None:
+        if self._pending_reservation is not None:
+            msg = f"Pending ask must be told before calling {action}()."
+            raise RuntimeError(msg)
+
+    def _require_pending(self) -> Reservation:
+        if self._pending_reservation is None:
+            msg = "No pending ask."
+            raise RuntimeError(msg)
+        return self._pending_reservation
 
 
 def _normalize_result(result: float | Sequence[float] | np.ndarray) -> tuple[float, ...]:
