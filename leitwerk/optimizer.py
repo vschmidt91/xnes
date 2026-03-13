@@ -9,12 +9,20 @@ from typing import Generic, TypeVar, cast
 
 import numpy as np
 
-from .scheduler import BatchScheduler, Trial
+from .scheduler import BatchScheduler, Reservation
 from .schema import Parameter, SchemaDiff, SchemaSpec, parse_schema
 from .xnes import XNES, XNESStatus
 
 T = TypeVar("T")
 _ResultRecord = tuple[float, ...] | None
+
+
+@dataclass(frozen=True)
+class Trial(Generic[T]):
+    """Trial metadata returned by `ask_trial()` and consumed by `tell_trial()`."""
+
+    reservation: Reservation
+    params: T
 
 
 @dataclass(frozen=True)
@@ -73,7 +81,7 @@ class Optimizer(Generic[T]):
         self._schema: SchemaSpec[T] = cast(SchemaSpec[T], parse_schema(schema_type))
         self._rng = np.random.default_rng()
         self._scheduler = BatchScheduler()
-        self._serial_trial: Trial[T] | None = None
+        self._serial_reservation: Reservation | None = None
         self._xnes: XNES
         self._reset_distribution()
 
@@ -130,7 +138,7 @@ class Optimizer(Generic[T]):
 
         self._rng.bit_generator.state = dict(cast(Mapping[str, object], state_obj["rng_state"]))
         self._xnes = self._new_xnes(loc, scale, step_size_path)
-        self._serial_trial = None
+        self._serial_reservation = None
         if batch.shape[1] == 0:
             self._sample_batch()
         else:
@@ -148,12 +156,12 @@ class Optimizer(Generic[T]):
         if self._scheduler.has_reserved_trials():
             msg = "Pending trial must be told before calling ask()."
             raise RuntimeError(msg)
-        self._serial_trial = self._materialize_trial(self._reserve(context))
-        return self._serial_trial.params
+        self._serial_reservation = self._reserve(context)
+        return self._params_for(self._serial_reservation)
 
     def ask_trial(self, context: str | None = None) -> Trial[T]:
         """Reserve one sampled parameter set for an overlapping evaluation run."""
-        if self._serial_trial is not None:
+        if self._serial_reservation is not None:
             msg = "Pending serial ask must be told before calling ask_trial()."
             raise RuntimeError(msg)
         return self._materialize_trial(self._reserve(context))
@@ -164,37 +172,39 @@ class Optimizer(Generic[T]):
 
     def tell(self, result: float | Sequence[float] | np.ndarray) -> TellResult:
         """Submit the objective result for the pending serial sample."""
-        if self._serial_trial is None:
+        if self._serial_reservation is None:
             msg = "No pending serial ask."
             raise RuntimeError(msg)
-        tell_result = self._tell_trial(self._serial_trial, result)
-        self._serial_trial = None
+        tell_result = self._tell_reservation(self._serial_reservation, result)
+        self._serial_reservation = None
         return tell_result
 
     def tell_trial(self, trial: Trial[T], result: float | Sequence[float] | np.ndarray) -> TellResult:
         """Submit the objective result for one trial returned by `ask_trial()`."""
-        if self._serial_trial is not None:
+        if self._serial_reservation is not None:
             msg = "Pending serial ask must be told before calling tell_trial()."
             raise RuntimeError(msg)
-        return self._tell_trial(trial, result)
+        return self._tell_reservation(trial.reservation, result)
 
-    def _tell_trial(self, trial: Trial[object], result: float | Sequence[float] | np.ndarray) -> TellResult:
-        completed_batch = self._scheduler.record_result(trial, _normalize_result(result))
+    def _tell_reservation(
+        self,
+        reservation: Reservation,
+        result: float | Sequence[float] | np.ndarray,
+    ) -> TellResult:
+        completed_batch = self._scheduler.record_result(reservation, _normalize_result(result))
         if completed_batch:
             status, restarted = self._complete_batch()
-            return TellResult(True, trial.matched_context, status, restarted)
-        return TellResult(False, trial.matched_context, XNESStatus.OK, False)
+            return TellResult(True, reservation.matched_context, status, restarted)
+        return TellResult(False, reservation.matched_context, XNESStatus.OK, False)
 
-    def _params_for(self, sample_id: int) -> T:
-        latent_sample = self._xnes.transform(self._scheduler.batch[:, [sample_id]])[:, 0]
+    def _params_for(self, reservation: Reservation) -> T:
+        latent_sample = self._xnes.transform(self._scheduler.batch[:, [reservation.sample_id]])[:, 0]
         return self._schema.build_params(latent_sample)
 
-    def _materialize_trial(self, trial: Trial[None]) -> Trial[T]:
+    def _materialize_trial(self, reservation: Reservation) -> Trial[T]:
         return Trial(
-            sample_id=trial.sample_id,
-            context=trial.context,
-            matched_context=trial.matched_context,
-            params=self._params_for(trial.sample_id),
+            reservation=reservation,
+            params=self._params_for(reservation),
         )
 
     def _reconcile_distribution_state(
@@ -268,7 +278,7 @@ class Optimizer(Generic[T]):
 
     def _sample_batch(self) -> None:
         batch = self._xnes.ask(self.pop_size, self._rng)
-        self._serial_trial = None
+        self._serial_reservation = None
         self._scheduler.reset(batch)
 
     def _complete_batch(self) -> tuple[XNESStatus, bool]:
@@ -280,7 +290,7 @@ class Optimizer(Generic[T]):
             self._sample_batch()
         return status, restarted
 
-    def _reserve(self, context: str | None) -> Trial[None]:
+    def _reserve(self, context: str | None) -> Reservation:
         result = self._scheduler.reserve(context)
         if result is None:
             if not self._scheduler.is_complete():

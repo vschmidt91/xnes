@@ -6,7 +6,8 @@ from typing import Annotated, Any, cast
 
 import numpy as np
 import pytest
-from leitwerk import Optimizer, Parameter, SchemaDiff, TellResult, Trial, XNESStatus
+from leitwerk import Optimizer, Parameter, SchemaDiff, TellResult, XNESStatus
+from leitwerk.optimizer import Trial
 
 
 def _make_schema(schema_name: str, **parameters: Parameter) -> type[Any]:
@@ -631,9 +632,9 @@ def test_ask_trial_returns_trial_and_sample() -> None:
     params = trial.params
 
     assert isinstance(trial, Trial)
-    assert trial.sample_id >= 0
-    assert trial.context is None
-    assert trial.matched_context is False
+    assert trial.reservation.sample_id >= 0
+    assert trial.reservation.context is None
+    assert trial.reservation.matched_context is False
     assert params.__class__ is schema
     assert isinstance(params.a, float)
     assert isinstance(params.b, float)
@@ -782,7 +783,7 @@ def test_load_allows_switching_optimization_direction_mid_batch() -> None:
     base.tell_trial(first_trial, first_params.x)
     state = base.save()
     saved_results = _read_results(state)
-    assert saved_results[first_trial.sample_id] == pytest.approx((first_params.x,))
+    assert saved_results[first_trial.reservation.sample_id] == pytest.approx((first_params.x,))
 
     minimizing = Optimizer(schema, pop_size=4, minimize=True)
     maximizing = Optimizer(schema, pop_size=4)
