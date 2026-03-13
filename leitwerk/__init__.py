@@ -9,7 +9,7 @@ Example:
     from dataclasses import dataclass
     from typing import Annotated
 
-    from xnes import Optimizer, Parameter
+    from leitwerk import Optimizer, Parameter
 
     @dataclass(frozen=True)
     class Params:

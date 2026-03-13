@@ -76,19 +76,19 @@ class Parameter:
 
         if min_value is not None and max_value is not None:
             if not min_value < max_value:
-                msg = f"xnes schema field '{name}' must satisfy min < max for Parameter(...)"
+                msg = f"leitwerk schema field '{name}' must satisfy min < max for Parameter(...)"
                 raise ValueError(msg)
             if not min_value < self.loc < max_value:
-                msg = f"xnes schema field '{name}' must satisfy min < loc < max for Parameter(...)"
+                msg = f"leitwerk schema field '{name}' must satisfy min < loc < max for Parameter(...)"
                 raise ValueError(msg)
             return
 
         if min_value is not None and not self.loc > min_value:
-            msg = f"xnes schema field '{name}' must satisfy loc > min for Parameter(...)"
+            msg = f"leitwerk schema field '{name}' must satisfy loc > min for Parameter(...)"
             raise ValueError(msg)
 
         if max_value is not None and not self.loc < max_value:
-            msg = f"xnes schema field '{name}' must satisfy loc < max for Parameter(...)"
+            msg = f"leitwerk schema field '{name}' must satisfy loc < max for Parameter(...)"
             raise ValueError(msg)
 
     def state_spec(self) -> dict[str, object]:
@@ -197,7 +197,7 @@ class SchemaSpec(Generic[T]):
 
 
 def _field_component_name(field_name: str, component: str) -> str:
-    return f"xnes schema field '{field_name}' {component}"
+    return f"leitwerk schema field '{field_name}' {component}"
 
 
 def _coerce_finite(value: float, name: str) -> float:

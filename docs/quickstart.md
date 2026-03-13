@@ -8,7 +8,7 @@ from typing import Annotated
 
 import numpy as np
 
-from xnes import Optimizer, Parameter
+from leitwerk import Optimizer, Parameter
 
 
 @dataclass(frozen=True)

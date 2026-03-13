@@ -1,15 +1,15 @@
 # API Reference
 
-::: xnes.Optimizer
+::: leitwerk.Optimizer
 
-::: xnes.Parameter
+::: leitwerk.Parameter
 
-::: xnes.Trial
+::: leitwerk.Trial
 
-::: xnes.TellResult
+::: leitwerk.TellResult
 
-::: xnes.SchemaDiff
+::: leitwerk.SchemaDiff
 
-::: xnes.XNESStatus
+::: leitwerk.XNESStatus
 
-::: xnes.XNES
+::: leitwerk.XNES

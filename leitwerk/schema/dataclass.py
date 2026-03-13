@@ -13,7 +13,7 @@ from .spec import BuildFn, FieldSpec, Parameter, Path, SchemaSpec, T
 def parse_dataclass_schema(model_type: type[T]) -> SchemaSpec[T]:
     """Parse and validate a dataclass schema tree."""
     if not isinstance(model_type, type) or not is_dataclass(model_type):
-        msg = "xnes schema must be a dataclass type."
+        msg = "leitwerk schema must be a dataclass type."
         raise TypeError(msg)
 
     field_specs, instantiate = _parse_dataclass_type(model_type, ())
@@ -51,7 +51,7 @@ def _parse_dataclass_type(model_type: type[Any], prefix: Path) -> tuple[tuple[Fi
 def _parse_dataclass_field(annotation: Any, path: Path, init: bool) -> tuple[tuple[FieldSpec, ...], BuildFn]:
     name = path_name(path)
     if not init:
-        msg = f"xnes schema field '{name}' must be init=True"
+        msg = f"leitwerk schema field '{name}' must be init=True"
         raise TypeError(msg)
 
     if get_origin(annotation) is Annotated:
@@ -60,7 +60,7 @@ def _parse_dataclass_field(annotation: Any, path: Path, init: bool) -> tuple[tup
     if isinstance(annotation, type) and is_dataclass(annotation):
         return _parse_dataclass_type(annotation, path)
 
-    msg = f"xnes schema field '{name}' must be annotated as Annotated[float, Parameter(...)] or be a dataclass type"
+    msg = f"leitwerk schema field '{name}' must be annotated as Annotated[float, Parameter(...)] or be a dataclass type"
     raise TypeError(msg)
 
 
@@ -68,12 +68,12 @@ def _parse_leaf_field(annotation: Any, path: Path) -> tuple[tuple[FieldSpec, ...
     name = path_name(path)
     runtime_type, *metadata = get_args(annotation)
     if runtime_type is not float:
-        msg = f"xnes schema field '{name}' must be annotated as Annotated[float, Parameter(...)]"
+        msg = f"leitwerk schema field '{name}' must be annotated as Annotated[float, Parameter(...)]"
         raise TypeError(msg)
 
     parameters = [item for item in metadata if isinstance(item, Parameter)]
     if len(parameters) != 1:
-        msg = f"xnes schema field '{name}' must include exactly one Parameter(...) metadata value"
+        msg = f"leitwerk schema field '{name}' must include exactly one Parameter(...) metadata value"
         raise TypeError(msg)
 
     field_spec = build_field_spec(path, parameters[0])

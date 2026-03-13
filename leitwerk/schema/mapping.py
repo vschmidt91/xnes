@@ -32,7 +32,7 @@ def _parse_mapping_node(model: Mapping[str, object], prefix: Path) -> tuple[tupl
 
 def _parse_mapping_entry(key: object, value: object, prefix: Path) -> tuple[str, tuple[FieldSpec, ...], BuildFn]:
     if not isinstance(key, str):
-        msg = "xnes schema mapping keys must be strings."
+        msg = "leitwerk schema mapping keys must be strings."
         raise TypeError(msg)
 
     path = prefix + (key,)
@@ -45,5 +45,5 @@ def _parse_mapping_entry(key: object, value: object, prefix: Path) -> tuple[str,
         return key, child_field_specs, build_node
 
     name = path_name(path)
-    msg = f"xnes schema field '{name}' must be Parameter(...) or a nested mapping"
+    msg = f"leitwerk schema field '{name}' must be Parameter(...) or a nested mapping"
     raise TypeError(msg)

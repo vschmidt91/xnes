@@ -1,188 +1,258 @@
-# xnes
+![Leitwerk](docs/logo.png)
 
-Small Python library for black-box optimization with a canonical xNES core,
-strict checkpointing, and a typed schema-first wrapper.
+<h1 align="center">Leitwerk</h1>
+<p align="center">
+  <em>Tune your magic numbers with the power of evolution</em>
+</p>
 
-It is aimed at expensive, stateful evaluation loops: tuning heuristic weights
-in simulators, control systems, game agents, or other black-box programs where
-runs are noisy, resumable, and sometimes organized around recurring contexts.
+---
 
-## Highlights
+`leitwerk` is a covariance adaptation optimizer with schema reconciliation.
+Define the parameters, set up a training loop and let it learn.
 
-- Canonical xNES core with optional CSA step-size adaptation.
-- Schema-first `Optimizer(Schema)` wrapper returning typed dataclass params.
-- Parameter metadata colocated with fields via `Annotated[float, Parameter(...)]`.
-- JSON-compatible optimizer state with human-readable parameter schema definitions through `save()` and `load(...)`.
-- Optional mirrored-sample routing through `ask(context=...)`.
-- Deterministic inference through `ask_best()`.
+It is aimed at noisy, expensive black-box settings:
 
-## Requirements
+- Bots
+- Game AIs
+- Simulations
+- Any parameterized system with outputs to be optimized
 
-- Python `>=3.11,<3.14`
-- Runtime dependencies: NumPy and SciPy
+## Features
 
-## Installation
+- **Easy**: Start from existing values without much setup
+- **Dynamic**: Keep developing without losing progress
+- **Serializable**: Optimizer state lives in human-readable JSON
+- **Efficient** Custom implementation of xNES [^1], on par with CMA-ES [^2] on the BBOB [^4]
 
-Install the package locally:
+## Usage
 
-```bash
-python -m pip install -e .
+There are two ways to define parameters in `leitwerk`.
+This is mainly syntax, the optimization behaves exactly the same.
+
+### Option 1 - `dict[str, Parameter]`
+
+```py
+PARAMS = {
+  "param1": Parameter(1.2, scale=3.4),
+  "param2": Parameter(min=0, max=1)
+}
 ```
 
-Install development tools with Poetry:
+Easy setup and string-based access.
 
-```bash
-poetry install --with dev
+### Option 2 - Annotated `dataclass`
+
+```py
+@dataclass
+class Params:
+    param1: Annotated[float, Parameter(1.2, scale=3.4)]
+    param2: Annotated[float, Parameter(min=0, max=1)]
 ```
 
-Install development tools and documentation dependencies:
+Samples will be typed as `Params`. Good for IntelliSense and type checking.
 
-```bash
-poetry install --with dev,docs
+
+> [!TIP]
+> Use nested schemas to group the parameters logically.
+> `leitwerk` handles full tree structures - just don't mix dictionaries and dataclasses.
+
+> [!TIP]
+> Schemas change are reconciled in `Optimizer.load(state)`.
+> It reports a `SchemaDiff` and leaves unchanged parameters intact.
+
+### Evolutionary Cycle
+
+Initialize the Optimizer and (optionally) restore state:
+
+```py
+opt = Optimizer(Params, pop_size=10)
+# schema_diff = opt.load(state)
 ```
 
-## Quickstart
+Run one or more training cycles:
 
-```python
+```py
+for _ in range(10):
+    trial, params = opt.ask()
+    result = ...
+    opt.tell(trial, result)
+```
+
+Persist state:
+
+```py
+state = opt.save()
+```
+
+---
+
+## Example 1 - Function Minimization
+
+```py
+from leitwerk import Optimizer, Parameter
+
+def f(x, y):
+    return (x - 1)**2 + (y - 1)**2  # minimum is at (1, 1)
+
+opt = Optimizer({"x": Parameter(), "y": Parameter()}, minimize=True)
+
+for _ in range(100):
+    trial, params = opt.ask()
+    opt.tell(trial, f(**params))
+
+print(opt.ask_best())
+# {'x': 1.007115753775713, 'y': 0.9922700335131514}
+```
+
+## Example 2 - Starcraft II Bot
+
+This example is a worker rush bot with very simple combat logic and two parameters.
+It tunes itself to beat the hardest built-in AI in about a hundred games.
+
+Manual changes could do this much easier - this is just a proof of concept.
+
+```py
 import json
+
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated
 
-import numpy as np
+from loguru import logger
+from sc2 import maps
+from sc2.main import run_game
+from sc2.player import Bot, Computer
 
-from xnes import Optimizer, Parameter
+from leitwerk import Optimizer, Parameter
+from sc2.bot_ai import BotAI
+from sc2.data import Result, Race, Difficulty
 
 
-@dataclass(frozen=True)
-class Params:
-    coeff_1: Annotated[float, Parameter(loc=2.0, scale=3.0, min=0.0)]
-    coeff_2: Annotated[float, Parameter()]
+DATA_PATH = Path("./data")
+PARAMS_FILE = DATA_PATH / "params.json"
 
 
-state_path = Path("optimizer-state.json")
-opt = Optimizer(Params, pop_size=32)
-if state_path.exists():
-    state = json.loads(state_path.read_text())
-    load_result = opt.load(state)
+@dataclass
+class BotParams:
+    attack_threshold: Annotated[float, Parameter(.5, min=0, max=1)]
+    retreat_threshold: Annotated[float, Parameter(.5, min=0, max=1)]
 
-for _ in range(500):
-    trial, params = opt.ask(context="validation:shard-0")
-    value = params.coeff_1 + np.exp(params.coeff_2)
-    report = opt.tell(trial, -value**2)  # `tell` maximizes, so minimize via `-f`
-    state_path.write_text(json.dumps(opt.save()))
 
-    if report.completed_batch:
-        pass
+class LearningBot(BotAI):
 
-best = opt.ask_best()
-print(best.coeff_1, best.coeff_2)
+    async def on_start(self):
+        # restore state from disk
+        self.optimizer = Optimizer(BotParams)
+        DATA_PATH.mkdir(exist_ok=True)
+        if PARAMS_FILE.exists():
+            with PARAMS_FILE.open() as f:
+                state = json.load(f)
+            diff = self.optimizer.load(state)
+            logger.info(diff)
+        context = self.enemy_race.name  # optional: matchup-based mirror sampling
+        self.trial, self.params = self.optimizer.ask(context)
+        logger.info(self.trial)
+        logger.info(self.params)
+
+    async def on_step(self, iteration):
+        mineral_patch = self.mineral_field.closest_to(self.start_location)
+        for worker in self.workers:
+            if worker.shield_percentage > self.params.attack_threshold:
+                if self.enemy_structures:
+                    worker.attack(self.enemy_structures.random.position)
+                else:
+                    worker.attack(self.enemy_start_locations[0])
+            elif worker.shield_health_percentage < self.params.retreat_threshold:
+                worker.gather(mineral_patch)
+        if self.supply_used == 0:
+            await self.client.debug_kill_unit(self.structures)
+
+    async def on_end(self, game_result: Result) -> None:
+        # primary objective: win
+        win_loss = {
+            Result.Victory: +1,
+            Result.Tie: 0,
+            Result.Defeat: -1,
+        }[game_result]
+        # secondary objective: be cost-effective
+        efficiency = self.state.score.total_damage_dealt_life / max(1, self.state.score.total_damage_taken_life)
+        score = (win_loss, efficiency)
+        logger.info(score)
+        tell_result = self.optimizer.tell(self.trial, score)
+        logger.info(tell_result)
+        state = self.optimizer.save()
+        with PARAMS_FILE.open("w") as f:
+            json.dump(state, f, indent=2)
+
+
+def main():
+    while True:
+        run_game(
+            maps.get("TorchesAIE_v4"),
+            [Bot(Race.Protoss, LearningBot()), Computer(Race.Protoss, Difficulty.CheatInsane)],
+            realtime=False,
+        )
+
+
+if __name__ == "__main__":
+    main()
 ```
 
-## Schema Model
+---
 
-The public wrapper is schema-first:
+## Context Matching (optional)
 
-1. Define a dataclass schema.
-2. Annotate each optimized field as `Annotated[float, Parameter(...)]`.
-3. Construct `Optimizer(Schema)`.
+You can help `leitwerk` to make the sampling a bit more efficient by sorting the trial runs into categories.
+These are arbitrary strings that depend on the problem you are solving.
+Only context equality matters - the actual content is not parsed.
 
-Current schema constraints:
+Examples:
 
-- The schema must be a dataclass type.
-- Optimized fields must currently be `Annotated[float, Parameter(...)]`.
-- Fields must be `init=True`.
-- State layout is ordered lexicographically by field name, not by declaration order.
+- `opt.ask(context=self.enemy_race.name)`
+- `opt.ask(context=self.opponent_id)`
+- `opt.ask(context=self.game_info.map_name)`
 
-## Workflow
+If context is provided, `leitwerk` uses context-matched mirror sampling: [^3]
 
-The wrapper is intentionally strict. The expected training loop is:
+- Samples are generated in pairs: for every search direction `d`, also try `-d`
+- Ideally, pairs are evaluated in the same context
+- This helps to keept the gradient estimate centered/unbiased
 
-1. Define a schema dataclass.
-2. Construct `Optimizer(Schema)`.
-3. Optionally call `load(state)` to resume from a previous snapshot.
-4. Call `ask(context=...)` to reserve one sampled parameter set.
-5. Read runtime values from `params.field`.
-6. Evaluate exactly once.
-7. Call `tell(trial, result)`.
-8. Persist with `save()`.
+The number of unique contexts is linked to the ideal population size.
 
-For deterministic inference after training:
+> [!NOTE]
+> This still evolves a single set of parameters.
+> For actual per-matchup evolution, create multiple Optimizers.
 
-1. Construct `Optimizer(Schema)`.
-2. Call `load(state)`.
-3. Call `ask_best()`.
-4. Read mean values from `best.field`.
+> [!TIP]
+> For AIArena authors:
+> - Random bots: consider including `self.race.name` as well
+> - if matching on opponent ID: use `pop_size = 2 * division_size`
 
-Important constraints:
+## Optimizer Details (advanced)
 
-- `load(state)` reconciles changed schemas by persisted parameter definition.
-- Shared learned state is preserved for unchanged fields.
-- Added fields start from their parameter defaults.
-- Removed fields are dropped.
-- Any unfinished batch is reconciled rather than discarded.
-- `ask()` creates runtime-only trials; claims are not persisted.
-- `ask_best()` is context-free and returns a deterministic snapshot of current means as `T`.
-- If all samples in a batch are reserved and unresolved, `ask()` raises.
-- If `ask(context=...)` is never used, evaluation proceeds in the default batch order.
+- Population is modelled as unbounded multivariate gaussian distribution
+- Bounded parameters are implemented via smooth bijective mappings:
+  1. `min=None`, `max=None`: identity
+  2. `min=a`, `max=None`: scale + soft-plus + offset
+  3. `min=None`, `max=b`: scale + soft-plus + mirror + offset
+  4. `min=a`, `max=b`: scale/offset + sigmoid + scale/offset
+- Only ranking of results matters, not numerical values
+  - fitness shaping is used internally
+  - makes optimization invariant under monotonic objective transformations
+- Objective values can be sequences/tuples
+  - ranking is lexicographic
+  - this implements simple tie-breaking, not pareto/multi-objective optimization
+- Learning rates use the canonical decomposition [^1] and can be adapted:
+  - `eta_mu=1.0`
+  - `eta_sigma=1.0`
+  - `eta_B=1.0` (will be combined with dimensionality factor)
 
-## Core API
+## License
 
-- `Parameter(loc=0.0, scale=1.0, min=None, max=None)`
-  Parameter metadata attached to one schema field. Add `min` and/or `max` for one-sided softplus or two-sided sigmoid bounds.
-- `Optimizer(schema_type, pop_size=None, csa_enabled=True, eta_mu=1.0, eta_sigma=1.0, eta_B=1.0)`
-  Construct a maximizing optimizer over a dataclass schema.
-- `Optimizer.load(state) -> SchemaDiff`
-  Restore and reconcile a previous snapshot from `save()`.
-- `Optimizer.ask(context=None) -> tuple[Trial, T]`
-  Reserve one sample and return `(trial, params)`.
-- `Optimizer.ask_best() -> T`
-  Return a deterministic snapshot of the current means.
-- `Optimizer.tell(trial, result) -> TellResult`
-  Submit one scalar or tuple-like objective result for a trial returned by `ask()`.
-- `Optimizer.save() -> dict[str, object]`
-  Return a JSON-compatible snapshot of optimizer state, including readable per-field parameter definitions.
-- `Trial`
-  Runtime-only handle returned by `ask()` with `sample_id`, `context`, and `matched_context`.
-- `SchemaDiff`
-  Reports schema fields added, removed, changed, and unchanged when loading.
-- `TellResult`
-  Reports whether a batch completed, whether context matching occurred, and whether xNES restarted.
+This project is licensed under the terms of the MIT license.
 
-## Configuration
-
-`Optimizer(Schema, ...)` takes runtime tuning in the constructor:
-
-```python
-opt = Optimizer(
-    Params,
-    pop_size=32,
-    csa_enabled=False,
-    eta_mu=0.9,
-    eta_sigma=0.7,
-    eta_B=0.2,
-)
-```
-
-Behavior:
-
-- Leaving `pop_size` as `None` keeps the xNES default batch size.
-- Odd `pop_size` values are rounded up to the next even value when a new batch is created.
-- The default runtime settings are `csa_enabled = True`, `eta_mu = 1.0`, `eta_sigma = 1.0`, and `eta_B = 1.0`.
-- `eta_B` scales the built-in dimension-dependent shape learning rate multiplicatively.
-
-## Objective Semantics
-
-- `tell()` uses maximize semantics.
-- Scalar results are treated as one-element tuples.
-- Sequence results are ranked lexicographically.
-- Higher tuples are better.
-- This is not a Pareto or multiobjective optimizer.
-
-## Development
-
-- `make fix`: apply Ruff fixes and format the codebase.
-- `make check`: run Ruff, Ruff format checks, mypy, and pytest.
-- `make docs`: build the MkDocs site.
-- `make docs-serve`: serve the MkDocs site locally.
-- `make fix check`: common local pass to auto-fix, lint, type-check, and test.
+[^1]: https://people.idsia.ch/~tom/publications/xnes.pdf
+[^2]: https://en.wikipedia.org/wiki/CMA-ES
+[^3]: https://www.researchgate.net/publication/266087889_Mirrored_Orthogonal_Sampling_with_Pairwise_Selection_in_Evolution_Strategies
+[^4]: https://numbbo.github.io/coco/testsuites/bbob

@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import numpy as np
+from leitwerk import XNES, XNESStatus
+from leitwerk.xnes import _default_eta_B
 from scipy.linalg import expm
-from xnes.xnes import _default_eta_B
-
-from xnes import XNES, XNESStatus
 
 
 def _ranking(scores: np.ndarray) -> list[int]:

@@ -1,6 +1,6 @@
-# xnes
+# leitwerk
 
-`xnes` is a small black-box optimization library built around a canonical xNES
+`leitwerk` is a small black-box optimization library built around a canonical xNES
 update rule and a strict schema-first wrapper.
 
 It is designed for expensive, stateful evaluation loops where you want to tune

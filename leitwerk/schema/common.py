@@ -29,7 +29,7 @@ def parse_schema(model: object) -> SchemaSpec[Any]:
 
         return parse_mapping_schema(model)
 
-    msg = "xnes schema must be a dataclass type or mapping."
+    msg = "leitwerk schema must be a dataclass type or mapping."
     raise TypeError(msg)
 
 

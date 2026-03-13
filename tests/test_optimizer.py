@@ -6,8 +6,7 @@ from typing import Annotated, Any, cast
 
 import numpy as np
 import pytest
-
-from xnes import Optimizer, Parameter, SchemaDiff, TellResult, Trial, XNESStatus
+from leitwerk import Optimizer, Parameter, SchemaDiff, TellResult, Trial, XNESStatus
 
 
 def _make_schema(schema_name: str, **parameters: Parameter) -> type[Any]:
