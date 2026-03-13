@@ -24,9 +24,9 @@ if state_path.exists():
     load_result = opt.load(state)
 
 for _ in range(500):
-    trial, params = opt.ask(context="validation:shard-0")
+    params = opt.ask(context="validation:shard-0")
     value = params.coeff_1 + np.exp(params.coeff_2)
-    opt.tell(trial, -value**2)
+    opt.tell(-value**2)
     state_path.write_text(json.dumps(opt.save()))
 
 best = opt.ask_best()
@@ -45,8 +45,10 @@ If you resume with a changed schema, shared learned state is preserved, new
 fields start from parameter defaults, removed fields are dropped, and the current
 unfinished batch is reconciled rather than discarded.
 
-Training loop: call `ask`, evaluate `params.field`, then call
-`tell(trial, result)`.
+Training loop: call `ask`, evaluate `params.field`, then call `tell(result)`.
+
+If you need overlapping or out-of-order evaluations, use
+`trial = ask_trial(...)`, read `trial.params`, and call `tell_trial(trial, result)`.
 
 For deterministic inference, call `ask_best()`. If you want the means from a
 saved run rather than a fresh optimizer, call `load(...)` first.

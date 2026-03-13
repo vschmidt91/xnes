@@ -19,9 +19,9 @@ Example:
     opt = Optimizer(Params, pop_size=32, minimize=True)
 
     for _ in range(100):
-        trial, params = opt.ask()
+        params = opt.ask()
         value = (params.coeff - 3.0) ** 2 + (params.ratio - 0.25) ** 2
-        opt.tell(trial, value)
+        opt.tell(value)
 
     best = opt.ask_best()
     print(best.coeff, best.ratio)

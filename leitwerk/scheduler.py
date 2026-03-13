@@ -1,15 +1,21 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Generic, TypeVar
 
 import numpy as np
 
+T_co = TypeVar("T_co", covariant=True)
+
 
 @dataclass(frozen=True)
-class BatchTrial:
-    sample_index: int
+class Trial(Generic[T_co]):
+    """Trial metadata returned by `ask_trial()` and consumed by `tell_trial()`."""
+
+    sample_id: int
     context: str | None
     matched_context: bool
+    params: T_co
 
 
 class BatchScheduler:
@@ -47,13 +53,14 @@ class BatchScheduler:
         }
         self._reserved_indices = set()
 
-    def reserve(self, context: str | None) -> BatchTrial | None:
+    def reserve(self, context: str | None) -> Trial[None] | None:
         sample_index, matched_context = self._pick_sample(context)
         if sample_index is not None:
-            trial = BatchTrial(
-                sample_index=sample_index,
+            trial = Trial(
+                sample_id=sample_index,
                 context=context,
                 matched_context=matched_context,
+                params=None,
             )
             self._reserved_indices.add(sample_index)
             return trial
@@ -62,8 +69,8 @@ class BatchScheduler:
         msg = "Scheduler has no reservable sample and no completed batch."
         raise RuntimeError(msg)
 
-    def record_result(self, trial: BatchTrial, result: tuple[float, ...]) -> bool:
-        sample_index = trial.sample_index
+    def record_result(self, trial: Trial[object], result: tuple[float, ...]) -> bool:
+        sample_index = trial.sample_id
         if not 0 <= sample_index < len(self.results):
             msg = "Sample index out of range."
             raise RuntimeError(msg)
@@ -78,6 +85,9 @@ class BatchScheduler:
         self.results[sample_index] = result
         self._update_context_pending(sample_index, trial.context)
         return self.is_complete()
+
+    def has_reserved_trials(self) -> bool:
+        return bool(self._reserved_indices)
 
     def is_complete(self) -> bool:
         return all(item is not None for item in self.results)

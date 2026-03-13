@@ -36,8 +36,7 @@ class LearningBot(BotAI):
             diff = self.optimizer.load(state)
             logger.info(diff)
         context = self.enemy_race.name  # optional: matchup-based mirror sampling
-        self.trial, self.params = self.optimizer.ask(context)
-        logger.info(self.trial)
+        self.params = self.optimizer.ask(context)
         logger.info(self.params)
 
     async def on_step(self, iteration):
@@ -64,7 +63,7 @@ class LearningBot(BotAI):
         efficiency = self.state.score.total_damage_dealt_life / max(1, self.state.score.total_damage_taken_life)
         score = (win_loss, efficiency)
         logger.info(score)
-        tell_result = self.optimizer.tell(self.trial, score)
+        tell_result = self.optimizer.tell(score)
         logger.info(tell_result)
         state = self.optimizer.save()
         with PARAMS_FILE.open("w") as f:

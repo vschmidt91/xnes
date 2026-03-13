@@ -73,10 +73,13 @@ Run one or more training cycles:
 
 ```py
 for _ in range(10):
-    trial, params = opt.ask()
+    params = opt.ask()
     result = ...
-    opt.tell(trial, result)
+    opt.tell(result)
 ```
+
+If you need overlapping or out-of-order evaluations, use
+`trial = opt.ask_trial()`, read `trial.params`, and call `opt.tell_trial(trial, result)`.
 
 Persist state:
 
@@ -97,8 +100,8 @@ def f(x, y):
 opt = Optimizer({"x": Parameter(), "y": Parameter()}, minimize=True)
 
 for _ in range(100):
-    trial, params = opt.ask()
-    opt.tell(trial, f(**params))
+    params = opt.ask()
+    opt.tell(f(**params))
 
 print(opt.ask_best())
 # {'x': 1.007115753775713, 'y': 0.9922700335131514}
@@ -150,8 +153,7 @@ class LearningBot(BotAI):
             diff = self.optimizer.load(state)
             logger.info(diff)
         context = self.enemy_race.name  # optional: matchup-based mirror sampling
-        self.trial, self.params = self.optimizer.ask(context)
-        logger.info(self.trial)
+        self.params = self.optimizer.ask(context)
         logger.info(self.params)
 
     async def on_step(self, iteration):
@@ -178,7 +180,7 @@ class LearningBot(BotAI):
         efficiency = self.state.score.total_damage_dealt_life / max(1, self.state.score.total_damage_taken_life)
         score = (win_loss, efficiency)
         logger.info(score)
-        tell_result = self.optimizer.tell(self.trial, score)
+        tell_result = self.optimizer.tell(score)
         logger.info(tell_result)
         state = self.optimizer.save()
         with PARAMS_FILE.open("w") as f:
