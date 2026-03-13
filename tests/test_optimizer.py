@@ -822,7 +822,9 @@ def test_restart_on_conditioning_failure() -> None:
     assert cond < 1e14
 
 
-def test_successful_termination_restarts_from_final_mu_with_fresh_scale_and_path(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_successful_termination_restarts_from_final_mu_with_fresh_scale_and_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     schema = _make_identity_schema("RestartSuccess", x=(2.0, 1.5), y=(-1.0, 0.7))
     optimizer = _initialized_optimizer(schema, pop_size=4)
     final_mu = np.array([4.25, -3.5])
