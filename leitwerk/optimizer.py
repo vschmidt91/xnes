@@ -14,7 +14,7 @@ from .schema import Parameter, SchemaDiff, SchemaSpec, parse_schema
 from .xnes import XNES, XNESStatus
 
 T = TypeVar("T")
-JSON: TypeAlias = None | bool | int | float | str | Sequence["JSON"] | Mapping[str, "JSON"]
+JSON: TypeAlias = Mapping[str, "JSON"] | Sequence["JSON"] | str | int | float | bool | None
 _ResultRecord = tuple[float, ...] | None
 _SUCCESSFUL_TERMINATION_STATUSES = frozenset(
     {

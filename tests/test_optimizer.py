@@ -694,9 +694,10 @@ def test_ask_rejects_non_json_context() -> None:
 
     schema = _make_identity_schema("OpaqueContext", x=(0.0, 1.0))
     optimizer = _initialized_optimizer(schema, pop_size=4)
+    context = cast(Any, Opaque())
 
     with pytest.raises(TypeError, match="JSON-serializable"):
-        optimizer.ask(context=Opaque())
+        optimizer.ask(context=context)
 
     with pytest.raises(RuntimeError, match="No pending ask"):
         optimizer.tell(0.0)
