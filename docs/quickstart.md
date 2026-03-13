@@ -47,8 +47,12 @@ unfinished batch is reconciled rather than discarded.
 
 Training loop: call `ask`, evaluate `params.field`, then call `tell(result)`.
 
-If you need overlapping or out-of-order evaluations, use
-`trial = ask_trial(...)`, read `trial.params`, and call `tell_trial(trial, result)`.
+`ask()` / `tell()` is strictly sequential. After `ask()` returns, the next
+mutating call must be `tell()`. `save()` and `load()` are only supported at
+idle boundaries, i.e. when no `ask()` is pending.
+
+`load()` at an idle boundary may intentionally discard unsaved local progress
+from earlier `tell()` calls.
 
 For deterministic inference, call `ask_best()`. If you want the means from a
 saved run rather than a fresh optimizer, call `load(...)` first.

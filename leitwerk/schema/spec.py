@@ -23,13 +23,13 @@ class Parameter:
     bounds applied through monotone coordinate transforms.
     """
 
-    loc: float = 0.0
+    loc: float | None = None
     scale: float = 1.0
     min: float | None = None
     max: float | None = None
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "loc", float(self.loc))
+        object.__setattr__(self, "loc", None if self.loc is None else float(self.loc))
         object.__setattr__(self, "scale", float(self.scale))
         object.__setattr__(self, "min", None if self.min is None else float(self.min))
         object.__setattr__(self, "max", None if self.max is None else float(self.max))
@@ -38,7 +38,7 @@ class Parameter:
     def from_state(cls, state: object) -> Parameter:
         state_obj = cast(Mapping[str, object], state)
         return cls(
-            loc=float(cast(Any, state_obj["loc"])),
+            loc=None if state_obj["loc"] is None else float(cast(Any, state_obj["loc"])),
             scale=float(cast(Any, state_obj["scale"])),
             min=None if state_obj["min"] is None else float(cast(Any, state_obj["min"])),
             max=None if state_obj["max"] is None else float(cast(Any, state_obj["max"])),
@@ -68,6 +68,18 @@ class Parameter:
             return float(_softplus_inverse(float(x) - float(self.min)))
         return float(logit((float(x) - float(self.min)) / (float(self.max) - float(self.min))))
 
+    def resolved_loc(self) -> float:
+        """Return the effective user-space center value for this parameter."""
+        if self.loc is not None:
+            return float(self.loc)
+        if self.min is None:
+            if self.max is None:
+                return 0.0
+            return float(self.max) - float(_softplus(0.0))
+        if self.max is None:
+            return float(self.min) + float(_softplus(0.0))
+        return float(self.min) + (float(self.max) - float(self.min)) * 0.5
+
     def validate(self, name: str) -> None:
         """Validate the parameter specification for one schema field."""
         self._validate_loc_and_scale(name)
@@ -78,16 +90,21 @@ class Parameter:
             if not min_value < max_value:
                 msg = f"leitwerk schema field '{name}' must satisfy min < max for Parameter(...)"
                 raise ValueError(msg)
-            if not min_value < self.loc < max_value:
+            if self.loc is None:
+                return
+            if not min_value < float(self.loc) < max_value:
                 msg = f"leitwerk schema field '{name}' must satisfy min < loc < max for Parameter(...)"
                 raise ValueError(msg)
             return
 
-        if min_value is not None and not self.loc > min_value:
+        if self.loc is None:
+            return
+
+        if min_value is not None and not float(self.loc) > min_value:
             msg = f"leitwerk schema field '{name}' must satisfy loc > min for Parameter(...)"
             raise ValueError(msg)
 
-        if max_value is not None and not self.loc < max_value:
+        if max_value is not None and not float(self.loc) < max_value:
             msg = f"leitwerk schema field '{name}' must satisfy loc < max for Parameter(...)"
             raise ValueError(msg)
 
@@ -100,12 +117,20 @@ class Parameter:
 
     def initial_state(self, name: str) -> tuple[float, float]:
         self.validate(name)
-        mu0 = _coerce_finite(self.inverse_loc(self.loc), _field_component_name(name, "latent loc"))
+        mu0 = (
+            0.0
+            if self.loc is None
+            else _coerce_finite(
+                self.inverse_loc(float(self.loc)),
+                _field_component_name(name, "latent loc"),
+            )
+        )
         sigma0 = _coerce_positive(self.scale, _field_component_name(name, "scale"))
         return mu0, sigma0
 
     def _validate_loc_and_scale(self, name: str) -> None:
-        _coerce_finite(self.loc, _field_component_name(name, "loc"))
+        if self.loc is not None:
+            _coerce_finite(self.loc, _field_component_name(name, "loc"))
         _coerce_positive(self.scale, _field_component_name(name, "scale"))
 
 

@@ -51,7 +51,7 @@ def _initialized_state(schema: type[Any] | Mapping[str, object], *, pop_size: in
 
 def _parameter_spec(
     *,
-    loc: float,
+    loc: float | None,
     scale: float = 1.0,
     min: float | None = None,
     max: float | None = None,
@@ -222,14 +222,14 @@ def test_schema_state_is_human_readable_parameter_specs() -> None:
         "ReadableState",
         alpha=Parameter(loc=1.5, scale=0.25, max=3.0),
         beta=Parameter(loc=2.0, scale=3.0, min=0.0),
-        gamma=Parameter(loc=0.5, scale=1.0, min=0.0, max=1.0),
+        gamma=Parameter(scale=1.0, min=0.0, max=1.0),
     )
     state = _initialized_state(schema, pop_size=4)
 
     assert _read_schema(state) == {
         "alpha": _parameter_spec(loc=1.5, scale=0.25, max=3.0),
         "beta": _parameter_spec(loc=2.0, scale=3.0, min=0.0),
-        "gamma": _parameter_spec(loc=0.5, scale=1.0, min=0.0, max=1.0),
+        "gamma": _parameter_spec(loc=None, scale=1.0, min=0.0, max=1.0),
     }
 
 
@@ -603,6 +603,32 @@ def test_schema_rejects_invalid_parameter_domains(parameter: Parameter, message:
         Optimizer(schema)
 
 
+def test_omitted_loc_uses_canonical_latent_zero_center() -> None:
+    schema = _make_schema(
+        "CanonicalLocs",
+        unbounded=Parameter(),
+        lower=Parameter(min=2.0),
+        upper=Parameter(max=5.0),
+        interval=Parameter(min=2.0, max=6.0),
+    )
+    optimizer = _initialized_optimizer(schema, pop_size=6)
+
+    state = optimizer.save()
+    assert _read_schema(state) == {
+        "interval": _parameter_spec(loc=None, scale=1.0, min=2.0, max=6.0),
+        "lower": _parameter_spec(loc=None, scale=1.0, min=2.0),
+        "unbounded": _parameter_spec(loc=None, scale=1.0),
+        "upper": _parameter_spec(loc=None, scale=1.0, max=5.0),
+    }
+    assert np.allclose(_read_loc(state), np.zeros(4))
+
+    best = optimizer.ask_best()
+    assert best.interval == pytest.approx(4.0)
+    assert best.lower == pytest.approx(2.0 + np.log(2.0))
+    assert best.unbounded == pytest.approx(0.0)
+    assert best.upper == pytest.approx(5.0 - np.log(2.0))
+
+
 def test_legacy_parameter_constructors_are_not_exposed() -> None:
     assert not hasattr(Parameter, "unbounded")
     assert not hasattr(Parameter, "between")
@@ -626,15 +652,15 @@ def test_ask_returns_typed_sample() -> None:
 def test_ask_best_returns_current_user_space_locs_without_context() -> None:
     schema = _make_schema(
         "BestParams",
-        b=Parameter(loc=0.25, scale=1.0, min=0.0, max=1.0),
-        a=Parameter(loc=1.0, scale=1.0, min=-2.0),
+        b=Parameter(scale=1.0, min=0.0, max=1.0),
+        a=Parameter(scale=1.0, min=-2.0),
     )
     optimizer = _initialized_optimizer(schema, pop_size=6)
 
     best = optimizer.ask_best()
     assert best.__class__ is schema
-    assert best.a == 1.0
-    assert best.b == 0.25
+    assert best.a == pytest.approx(-2.0 + np.log(2.0))
+    assert best.b == pytest.approx(0.5)
 
 
 def test_context_reuses_mirror_on_repeat() -> None:

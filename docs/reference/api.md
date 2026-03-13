@@ -4,8 +4,6 @@
 
 ::: leitwerk.Parameter
 
-::: leitwerk.Trial
-
 ::: leitwerk.TellResult
 
 ::: leitwerk.SchemaDiff

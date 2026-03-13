@@ -78,8 +78,10 @@ state = opt.save()
 ```
 
 > [!WARNING]
-> `ask`/`tell` cycles are only supported inside a `load`/`save` block.
-> Don't restore the optimizer and tell it about old samples!
+> `ask()` / `tell()` is strictly sequential.
+> After `ask()`, the next mutating call must be `tell()`.
+> `save()` and `load()` are only supported at idle boundaries, i.e. when no `ask()` is pending.
+> `load()` at an idle boundary may intentionally discard unsaved local progress.
 
 ---
 
@@ -200,9 +202,11 @@ if __name__ == "__main__":
 
 ## Context Matching (optional)
 
-You can help `leitwerk` to make the sampling a bit more efficient by sorting the trial runs into categories.
-These are arbitrary strings that depend on the problem you are solving.
-Only context equality matters - the actual content is not parsed.
+You can help `leitwerk` to make the sampling a bit more efficient by sorting
+evaluation runs into categories. Context values may be strings or any
+JSON-compatible value.
+Only context equality after canonical JSON normalization matters - the actual
+content is not parsed.
 
 Examples:
 
