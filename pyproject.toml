@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "leitwerk"
-version = "0.6.1"
+version = "0.6.2"
 description = "Serializable evolutionary algorithm with state reconsiliation."
 readme = "README.md"
 requires-python = ">=3.11,<3.14"

@@ -822,6 +822,69 @@ def test_restart_on_conditioning_failure() -> None:
     assert cond < 1e14
 
 
+def test_successful_termination_restarts_from_final_mu_with_fresh_scale_and_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    schema = _make_identity_schema("RestartSuccess", x=(2.0, 1.5), y=(-1.0, 0.7))
+    optimizer = _initialized_optimizer(schema, pop_size=4)
+    final_mu = np.array([4.25, -3.5])
+
+    def fake_tell(samples: np.ndarray, ranking: list[int]) -> XNESStatus:
+        optimizer._xnes.mu = final_mu.copy()
+        optimizer._xnes.sigma = 6.0
+        optimizer._xnes.B = np.array([[1.5, 0.2], [0.0, 0.5]])
+        optimizer._xnes.p_sigma = np.array([9.0, -8.0])
+        return XNESStatus.LOC_STEP_MIN
+
+    monkeypatch.setattr(optimizer._xnes, "tell", fake_tell)
+
+    for _ in range(3):
+        optimizer.ask()
+        report = optimizer.tell(0.0)
+        assert report.completed_batch is False
+
+    optimizer.ask()
+    report = optimizer.tell(0.0)
+
+    assert report.completed_batch is True
+    assert report.status is XNESStatus.LOC_STEP_MIN
+    assert report.restarted is True
+
+    state = optimizer.save()
+    assert np.allclose(_read_loc(state), final_mu)
+    assert np.allclose(_read_scale(state), np.diag([1.5, 0.7]))
+    assert np.allclose(_read_step_size_path(state), np.zeros(2))
+
+
+def test_failed_termination_restarts_from_schema_loc_with_fresh_scale_and_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    schema = _make_identity_schema("RestartFailure", x=(2.0, 1.5), y=(-1.0, 0.7))
+    optimizer = _initialized_optimizer(schema, pop_size=4)
+
+    def fake_tell(samples: np.ndarray, ranking: list[int]) -> XNESStatus:
+        optimizer._xnes.mu = np.array([4.25, -3.5])
+        optimizer._xnes.sigma = 6.0
+        optimizer._xnes.B = np.array([[1.5, 0.2], [0.0, 0.5]])
+        optimizer._xnes.p_sigma = np.array([9.0, -8.0])
+        return XNESStatus.SCALE_COND_MAX
+
+    monkeypatch.setattr(optimizer._xnes, "tell", fake_tell)
+
+    for _ in range(3):
+        optimizer.ask()
+        report = optimizer.tell(0.0)
+        assert report.completed_batch is False
+
+    optimizer.ask()
+    report = optimizer.tell(0.0)
+
+    assert report.completed_batch is True
+    assert report.status is XNESStatus.SCALE_COND_MAX
+    assert report.restarted is True
+
+    state = optimizer.save()
+    assert np.allclose(_read_loc(state), np.array([2.0, -1.0]))
+    assert np.allclose(_read_scale(state), np.diag([1.5, 0.7]))
+    assert np.allclose(_read_step_size_path(state), np.zeros(2))
+
+
 def test_save_load_preserves_optimizer_state() -> None:
     schema = _make_identity_schema("PreserveState", x=(2.0, 1.5), y=(-1.0, 0.7))
     direct = _initialized_optimizer(schema, pop_size=12)

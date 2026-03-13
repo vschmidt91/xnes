@@ -15,6 +15,13 @@ from .xnes import XNES, XNESStatus
 
 T = TypeVar("T")
 _ResultRecord = tuple[float, ...] | None
+_SUCCESSFUL_TERMINATION_STATUSES = frozenset(
+    {
+        XNESStatus.SIGMA_MIN,
+        XNESStatus.LOC_STEP_MIN,
+        XNESStatus.SCALE_NORM_MIN,
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -33,7 +40,7 @@ class TellResult:
         completed_batch: Whether this result completed the current batch.
         matched_context: Whether sample selection used a mirrored context match.
         status: xNES status returned after the batch update.
-        restarted: Whether the wrapper restarted from schema metadata after the update.
+        restarted: Whether the wrapper restarted with a fresh distribution after the update.
     """
 
     completed_batch: bool
@@ -146,9 +153,11 @@ class Optimizer(Generic[T]):
             self._scheduler.restore(batch, results, context_pending)
         return schema_diff
 
-    def _reset_distribution(self) -> None:
-        loc, scale, step_size_path = self._schema.initial_distribution()
-        self._xnes = self._new_xnes(loc, scale, step_size_path)
+    def _reset_distribution(self, loc: np.ndarray | None = None) -> None:
+        reset_loc, scale, step_size_path = self._schema.initial_distribution()
+        if loc is not None:
+            reset_loc = np.array(loc, dtype=float, copy=True)
+        self._xnes = self._new_xnes(reset_loc, scale, step_size_path)
         self._sample_batch()
 
     def ask(self, context: str | None = None) -> T:
@@ -285,7 +294,8 @@ class Optimizer(Generic[T]):
         status = self._xnes.tell(self._scheduler.batch, self._ranking())
         restarted = status is not XNESStatus.OK
         if restarted:
-            self._reset_distribution()
+            restart_loc = self._xnes.mu if status in _SUCCESSFUL_TERMINATION_STATUSES else None
+            self._reset_distribution(restart_loc)
         else:
             self._sample_batch()
         return status, restarted
