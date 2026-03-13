@@ -658,6 +658,50 @@ def test_context_reuses_mirror_on_repeat() -> None:
     assert third_report == TellResult(False, True, XNESStatus.OK, False)
 
 
+def test_json_context_reuses_mirror_on_canonical_repeat() -> None:
+    schema = _make_identity_schema("JsonContextParams", x=(0.0, 1.0), y=(0.0, 1.0))
+    optimizer = _initialized_optimizer(schema, pop_size=4)
+
+    first_params = optimizer.ask(context={"b": 2, "a": 1})
+    first = np.array([first_params.x, first_params.y], dtype=float)
+    first_report = optimizer.tell(1.0)
+    assert first_report == TellResult(False, False, XNESStatus.OK, False)
+
+    optimizer.ask()
+    second_report = optimizer.tell(0.0)
+    assert second_report == TellResult(False, False, XNESStatus.OK, False)
+
+    mirror_params = optimizer.ask(context={"a": 1, "b": 2})
+    mirror = np.array([mirror_params.x, mirror_params.y], dtype=float)
+    assert np.allclose(mirror, -first)
+    third_report = optimizer.tell(-1.0)
+    assert third_report == TellResult(False, True, XNESStatus.OK, False)
+
+
+def test_json_context_is_saved_as_canonical_string() -> None:
+    schema = _make_identity_schema("SavedJsonContext", x=(0.0, 1.0))
+    optimizer = _initialized_optimizer(schema, pop_size=4)
+
+    optimizer.ask(context={"b": 2, "a": 1})
+    optimizer.tell(1.0)
+
+    assert _read_context_pending(optimizer.save()) == {'{"a":1,"b":2}': 0}
+
+
+def test_ask_rejects_non_json_context() -> None:
+    class Opaque:
+        pass
+
+    schema = _make_identity_schema("OpaqueContext", x=(0.0, 1.0))
+    optimizer = _initialized_optimizer(schema, pop_size=4)
+
+    with pytest.raises(TypeError, match="JSON-serializable"):
+        optimizer.ask(context=Opaque())
+
+    with pytest.raises(RuntimeError, match="No pending ask"):
+        optimizer.tell(0.0)
+
+
 def test_serial_ask_raises_when_a_sample_is_pending() -> None:
     schema = _make_identity_schema("PendingSerialAsk", x=(0.0, 1.0))
     optimizer = _initialized_optimizer(schema, pop_size=4)

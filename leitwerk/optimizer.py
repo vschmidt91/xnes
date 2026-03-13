@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Generic, TypeVar, cast
+from typing import Generic, TypeAlias, TypeVar, cast
 
 import numpy as np
 
@@ -13,6 +14,7 @@ from .schema import Parameter, SchemaDiff, SchemaSpec, parse_schema
 from .xnes import XNES, XNESStatus
 
 T = TypeVar("T")
+JSON: TypeAlias = None | bool | int | float | str | Sequence["JSON"] | Mapping[str, "JSON"]
 _ResultRecord = tuple[float, ...] | None
 _SUCCESSFUL_TERMINATION_STATUSES = frozenset(
     {
@@ -147,10 +149,14 @@ class Optimizer(Generic[T]):
         self._xnes = self._new_xnes(reset_loc, scale, step_size_path)
         self._sample_batch()
 
-    def ask(self, context: str | None = None) -> T:
-        """Reserve one sampled parameter set for one evaluation."""
+    def ask(self, context: JSON = None) -> T:
+        """Reserve one sampled parameter set for one evaluation.
+
+        Context matching uses exact string equality. Non-string contexts are
+        normalized into canonical JSON text before matching and persistence.
+        """
         self._require_idle("ask")
-        self._pending_reservation = self._reserve(context)
+        self._pending_reservation = self._reserve(_normalize_context(context))
         return self._params_for(self._pending_reservation)
 
     def ask_best(self) -> T:
@@ -310,6 +316,16 @@ def _normalize_result(result: float | Sequence[float] | np.ndarray) -> tuple[flo
         return values
     msg = f"Unsupported result type: {type(result)!r}"
     raise TypeError(msg)
+
+
+def _normalize_context(context: JSON) -> str | None:
+    if context is None or isinstance(context, str):
+        return context
+    try:
+        return json.dumps(context, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    except (TypeError, ValueError) as exc:
+        msg = "context must be a string or JSON-serializable value."
+        raise TypeError(msg) from exc
 
 
 def _deserialize_schema(schema_json: Mapping[str, object]) -> dict[str, Parameter]:
