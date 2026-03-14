@@ -7,98 +7,88 @@
 
 ---
 
-`leitwerk` is an evolutionary optimizer you can strap onto your Bot, Simulation or Game AI.
-Handcraft some parameters, set up the loop and let it fly.
+`leitwerk` is an evolutionary optimizer with typed paramers and persistence.
+Wire up the control knobs, strap it to your machinery and let it fly.
 
-## Features
-
-- **Easy** : Start from existing values without much setup
-- **Persistent** : Optimizer lives in a JSON file
+- **Simple** : Start from existing values without much setup
+- **Persistent** : The optimizer lives inside a JSON file
 - **Dynamic** : Keep developing without losing progress
-- **Efficient** : Canonical xNES [^1] implementation, benchmarked against `cma` [^2] on BBOB [^4]
 
 ## Installation
 
-Requires Python 3.11+
+Requires: Python 3.11+
+
+For a minimal setup, run:
 
 ```sh
-poetry install --all-extras
+$ pip install .
+```
+
+or for a full dev setup that can run the StarCraft example:
+
+```sh
+$ pip install -e .[dev,docs,benchmark]
 ```
 
 ## Example 1
 
-On a base level, `leitwerk` is a function optimizer with an `ask`/`tell` interface:
+At base level, `leitwerk` is an ask-and-tell blackbox optimizer.
 
 ```py
 from leitwerk import Optimizer, Parameter
 
-def f(x1, x2):
-    return (x1 - 1)**2 + (x2 - 1)**2  # minimum at (1, 1)
-
-opt = Optimizer({"x1": Parameter(), "x2": Parameter()}, minimize=True)
-
-for _ in range(100):
+opt = Optimizer({"a": Parameter(), "b": Parameter()}, minimize=True)
+for _ in range(500):
     x = opt.ask()
-    opt.tell(f(**x))
-
+    opt.tell((x["a"] - 1) ** 2 + (x["b"] - 2) ** 2)
+    
 print(opt.mean)
-# {'x1': 0.9943998488500848, 'x2': 1.0003564039700967}
+# {'a': 1.0000000001945673, 'b': 2.0000000008038628}
 ```
 
-## Example 2 - Worker Rush Bot
+## Example 2 - Starcraft II Bot
 
-To see persistence in action, run:
+For a full example with typed schemas and persistence, run:
 
 ```sh
-poetry run python examples/train_sc2_bot.py
+$ python examples/train_sc2_bot.py
 ```
 
-This trains a simple probe rush bot with two parameters against the hardest built-in AI.
-Optimizer state is persisted in `./data/params.json`.
-It is somewhat human-readable, so have a look.
-
-## API Summary
-
-```py
-class Parameter:
-    def __init__(self, loc=None, scale=1.0, min=None, max=None):
-      
-class Optimizer[T]:
-    def __init__(self, Schema, ...):
-    def load(self, state: JSON) -> SchemaDiff:
-    def ask(self, context: JSON = None) -> T:
-    def tell(self, result: float | Sequence[float]) -> TellResult:
-    @property
-    def mean(self) -> T:
-    @property
-    def expectation(self) -> T:
-    def save(self) -> JSON:
-```
+This trains a simple probe rush with two parameters against the hardest built-in AI.
+The optimizer state is stored in `./data/params.json` and is somewhat human-readable, so have a look.
 
 ## Integration Guide
+
+To use `leitwerk` in an existing setup, you usually have to split up the loop and use `load()` / `save()` for persistence (if necessary).
 
 ### 1. Preflight Check
 
 Define your parameter schema as an annotated dataclass:
 
 ```py
+import json
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Annotated
+from leitwerk import Optimizer, Parameter
+
 @dataclass
 class Params:
     attack_threshold: Annotated[float, Parameter()]                     # standard normal N(0, 1)
-    army_priority: Annotated[float, Parameter(loc=3.0, scale=0.5)]      # or mean + std
+    army_priority: Annotated[float, Parameter(loc=3.0, scale=0.5)]      # or mean +/- std
     skirmish_range: Annotated[float, Parameter(min=5, max=10)]          # or lower/upper bounds
     worker_target: Annotated[float, Parameter(loc=50, scale=10, min=1)] # or a mix
 ```
 
-This tells the optimizer how to seed the population:
+This tells the optimizer how to seed the initial population:
 
 - `loc` : initial best guess (prior median in user-space)
 - `scale` : initial spread/uncertainty  (prior standard deviation in latent space)
-- `min` and `max` : asymptotic bounds (enforced as soft-plus/sigmoid transformations)
+- `min` and `max` : hard bounds (enforced with soft-plus/sigmoid transformations)
 - most combinations work, see [Optimizer details](#optimization-details)
 
-Samples are typed, so IntelliSense and type-checking work.
-Alternatively, you can use plain dictionaries, see the [example below](#example-1-function-minimization)
+Samples are typed, so IntelliSense and type-checking should work.
+Dictionaries are also supported, see the [example above](#example-1)
 
 > [!TIP]
 > Use nested schemas to group the parameters into blocks, `leitwerk` understands tree structures.
@@ -109,54 +99,66 @@ Create the optimizer with your schema and old state (if present):
 
 ```py
 opt = Optimizer(Params)
+
 params_file = Path("params.json")
 if params_file.exists():
     with params_file.open() as f:
-        schema_diff = opt.load(json.load(f))  # load restores learned state, not constructor options
+        schema_diff = opt.load(json.load(f))
+        
 params = opt.ask()
 ```
 
-Optional optimizer arguments:
+`Optimizer()` takes a few optional arguments:
 
-- `population_size` : number of samples per optimizer step
-- `minimize` : switches to minimization mode
-- `eta_mu`, `eta_sigma`, `eta_B` : tunable learning rates [^1]
+- `minimize` : switch to minimization mode (default: `False`)
+- `population_size` : number of samples per batch (default: `4 + int(3 * log(num_params))`)
+- `eta_mu`, `eta_sigma`, `eta_B` : xNES learning rates [^1] (default: `1.0`)
 
 > [!NOTE]
-> When the schema changes, state is reconciled per parameter.
-> - Parameters are identified by their flattened name
-> - `schema_diff` is a report of added/removed/changed/unchanged parameters
-> - Changes to `min`/`max` trigger a reset
+> These are runtime settings, so your code is the single source of truth for config.
+> The persisted state is strictly for optimization progress.
+
+ When `Optimizer.load()` detects a schema change, state is reconciled per parameter:
+ - Parameters are identified by flattened name
+ - Changes to `min`/`max` trigger a reset
+ - Changes to `loc`/`scale` do not, but will be used for future resets
+ - `load()` returns a `schema_diff` which reports parameters that were added/removed/changed/unchanged.
 
 > [!TIP]
 > When the _meaning_ of a parameter changes, the optimizer cannot know.
-> It will adapt eventually - alternatively, rename the parameter to trigger a selective reset.
+> It might take a long time to adapt if the new optimum is far away.
+> Consider renaming the parameter and providing a fresh `loc`/ `scale`.
 
 ### 3. Landing
 
 When you see the result, encode it as one or more numbers:
 
 ```py
-prio1 = +1 if win else 0
-prio2 = calc_heuristic()
-report = opt.tell((prio1, prio2))
+result = +1 if win else 0
+opt.tell(result)
+
+# better:
+# opt.tell([result, calc_heuristic()])
+
 with params_file.open("w") as f:
     json.dump(opt.save(), f)
 ```
 
-> [!NOTE]
-> - Result tuples are compared lexicographically with higher=better
-> - Only ranking matters, not objective magnitudes
-> - `Optimizer(..., minimize=True)` switches to minimization mode
-
-> [!IMPORTANT]
+- Results are normalized to `tuple[float, ...]` and ranked lexicographically
+- This is simple tie-breaking, not actual multi-objective optimization (TBD)
+- Only ranking matters, not numerical objective values
 
 
-The objective function shapes the problem landscape:
-- Binary Win/Loss is fine, but slow
-- Unit Counts? Army Value? Income?
-- When the objective changes drastically, consider a reset
-- You might want to set up multiple optimizers with different objectives
+> [!WARNING]
+> Make sure the sign of the results and `Optimizer.minimize` match up!
+
+
+> [!TIP]
+> The right objective function is key.
+> - Binary win/loss makes sense to start with, but is not very informative on its own
+> - Smooth gradients help: army value, income, cost-effectiveness, ...
+> - Changing the objective later on can work, but at your own discretion
+> - Consider multiple optimizers/objectives for different parameters
 
 ---
 

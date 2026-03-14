@@ -15,10 +15,12 @@ from sc2.data import Difficulty, Race, Result
 from sc2.main import run_game
 from sc2.player import Bot, Computer
 
-DATA_PATH = Path("./data")
+ROOT = Path(__file__).resolve().parents[1]
+DATA_PATH = ROOT / "data"
 PARAMS_FILE = DATA_PATH / "params.json"
 HISTORY_FILE = DATA_PATH / "history.json"
 PLOT_FILE = DATA_PATH / "plot.png"
+MAP_FILE = ROOT / "resources" / "PylonAIE_v4.SC2Map"
 MOVING_AVERAGE_WINDOW = 10
 
 
@@ -26,6 +28,57 @@ MOVING_AVERAGE_WINDOW = 10
 class BotParams:
     attack_threshold: Annotated[float, Parameter(min=0, max=1)]
     retreat_threshold: Annotated[float, Parameter(min=0, max=1)]
+
+
+class LearningBot(BotAI):
+
+    optimizer = Optimizer(BotParams)
+    params: BotParams
+
+    async def on_start(self):
+        self.townhalls[0].train(UnitTypeId.PROBE)
+        DATA_PATH.mkdir(exist_ok=True)
+        if PARAMS_FILE.exists():
+            with PARAMS_FILE.open() as f:
+                state = json.load(f)
+            diff = self.optimizer.load(state)
+            logger.info(diff)
+        context = self.enemy_race.name  # optional: matchup-based mirror sampling
+        self.params = self.optimizer.ask(context)
+        logger.info(self.params)
+
+    async def on_step(self, iteration):
+        mineral_patch = self.mineral_field.closest_to(self.start_location)
+        for worker in self.workers:
+            if worker.shield_percentage > self.params.attack_threshold:
+                if self.enemy_structures:
+                    worker.attack(self.enemy_structures.random.position)
+                else:
+                    worker.attack(self.enemy_start_locations[0])
+            elif worker.shield_health_percentage < self.params.retreat_threshold:
+                worker.gather(mineral_patch)
+        if self.supply_used == 0:
+            await self.client.debug_kill_unit(self.structures)
+
+    async def on_end(self, game_result: Result) -> None:
+        outcome = {
+            Result.Victory: 1.0,
+            Result.Tie: 0.5,
+            Result.Defeat: 0.0,
+        }[game_result]
+
+        efficiency = np.log1p(self.state.score.killed_value_units) - np.log1p(self.state.score.lost_minerals_economy)
+        score = (outcome, efficiency)
+        logger.info(score)
+        tell_result = self.optimizer.tell(score)
+        logger.info(tell_result)
+        history = load_history()
+        history.append({"outcome": outcome, "efficiency": efficiency, **flatten_numeric_fields(self.params)})
+        save_history(history)
+        save_plot(history)
+        state = self.optimizer.save()
+        with PARAMS_FILE.open("w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2)
 
 
 def load_history() -> list[dict[str, float]]:
@@ -108,62 +161,10 @@ def save_plot(history: list[dict[str, float]]) -> None:
     fig.savefig(PLOT_FILE)
     plt.close(fig)
 
-
-class LearningBot(BotAI):
-
-    optimizer = Optimizer(BotParams)
-    params: BotParams
-
-    async def on_start(self):
-        self.townhalls[0].train(UnitTypeId.PROBE)
-        DATA_PATH.mkdir(exist_ok=True)
-        if PARAMS_FILE.exists():
-            with PARAMS_FILE.open() as f:
-                state = json.load(f)
-            diff = self.optimizer.load(state)
-            logger.info(diff)
-        context = self.enemy_race.name  # optional: matchup-based mirror sampling
-        self.params = self.optimizer.ask(context)
-        logger.info(self.params)
-
-    async def on_step(self, iteration):
-        mineral_patch = self.mineral_field.closest_to(self.start_location)
-        for worker in self.workers:
-            if worker.shield_percentage > self.params.attack_threshold:
-                if self.enemy_structures:
-                    worker.attack(self.enemy_structures.random.position)
-                else:
-                    worker.attack(self.enemy_start_locations[0])
-            elif worker.shield_health_percentage < self.params.retreat_threshold:
-                worker.gather(mineral_patch)
-        if self.supply_used == 0:
-            await self.client.debug_kill_unit(self.structures)
-
-    async def on_end(self, game_result: Result) -> None:
-        outcome = {
-            Result.Victory: 1.0,
-            Result.Tie: 0.5,
-            Result.Defeat: 0.0,
-        }[game_result]
-
-        efficiency = np.log1p(self.state.score.killed_value_units) - np.log1p(self.state.score.lost_minerals_economy)
-        score = (outcome, efficiency)
-        logger.info(score)
-        tell_result = self.optimizer.tell(score)
-        logger.info(tell_result)
-        history = load_history()
-        history.append({"outcome": outcome, "efficiency": efficiency, **flatten_numeric_fields(self.params)})
-        save_history(history)
-        save_plot(history)
-        state = self.optimizer.save()
-        with PARAMS_FILE.open("w", encoding="utf-8") as f:
-            json.dump(state, f, indent=2)
-
-
 def main():
     while True:
         run_game(
-            maps.get("TorchesAIE_v4"),
+            maps.Map(MAP_FILE),
             [Bot(Race.Protoss, LearningBot()), Computer(Race.Protoss, Difficulty.CheatInsane)],
             realtime=False,
         )

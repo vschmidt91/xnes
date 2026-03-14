@@ -1,12 +1,9 @@
 from leitwerk import Optimizer, Parameter
 
-def f(x1, x2):
-    return (x1 - 1)**2 + (x2 - 1)**2  # minimum at (1, 1)
+opt = Optimizer({"a": Parameter(), "b": Parameter()}, minimize=True)
 
-opt = Optimizer({"x1": Parameter(), "x2": Parameter()}, minimize=True)
-
-for _ in range(100):
+for _ in range(500):
     x = opt.ask()
-    opt.tell(f(**x))
+    opt.tell((x["a"] - 1) ** 2 + (x["b"] - 2) ** 2)
 
 print(opt.mean)
