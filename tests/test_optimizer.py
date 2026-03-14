@@ -121,7 +121,7 @@ def _read_context_pending(state: object) -> dict[str, int]:
     return {str(context): int(sample_idx) for context, sample_idx in context_pending_json.items()}
 
 
-def _read_status(state: object) -> dict[str, int | float]:
+def _read_status(state: object) -> dict[str, int | float | bool | None]:
     assert isinstance(state, dict)
     status_json = state["status"]
     assert isinstance(status_json, Mapping)
@@ -133,6 +133,11 @@ def _read_status(state: object) -> dict[str, int | float]:
         "axis_ratio",
         "step_size",
         "batch_progress",
+        "population_size",
+        "minimize",
+        "eta_mu",
+        "eta_sigma",
+        "eta_B",
     ]
     return {
         "total_samples": int(status_json["total_samples"]),
@@ -142,13 +147,21 @@ def _read_status(state: object) -> dict[str, int | float]:
         "axis_ratio": float(status_json["axis_ratio"]),
         "step_size": float(status_json["step_size"]),
         "batch_progress": float(status_json["batch_progress"]),
+        "population_size": None if status_json["population_size"] is None else int(status_json["population_size"]),
+        "minimize": bool(status_json["minimize"]),
+        "eta_mu": float(status_json["eta_mu"]),
+        "eta_sigma": float(status_json["eta_sigma"]),
+        "eta_B": float(status_json["eta_B"]),
     }
 
 
-def _assert_same_status(actual: dict[str, int | float], expected: dict[str, int | float]) -> None:
-    for key in ("total_samples", "num_batches", "num_restarts", "num_parameters"):
+def _assert_same_status(
+    actual: dict[str, int | float | bool | None],
+    expected: dict[str, int | float | bool | None],
+) -> None:
+    for key in ("total_samples", "num_batches", "num_restarts", "num_parameters", "population_size", "minimize"):
         assert actual[key] == expected[key]
-    for key in ("axis_ratio", "step_size", "batch_progress"):
+    for key in ("axis_ratio", "step_size", "batch_progress", "eta_mu", "eta_sigma", "eta_B"):
         assert actual[key] == pytest.approx(expected[key])
 
 
@@ -255,7 +268,12 @@ def test_status_block_exposes_basic_diagnostics_and_roundtrips() -> None:
         "num_parameters": 2,
         "axis_ratio": 1.0,
         "step_size": 1.5,
-        "batch_progress": 0.0,
+        "batch_progress": 0,
+        "population_size": 4,
+        "minimize": False,
+        "eta_mu": 1.0,
+        "eta_sigma": 1.0,
+        "eta_B": 1.0,
     }
 
     params = optimizer.ask()
@@ -269,6 +287,11 @@ def test_status_block_exposes_basic_diagnostics_and_roundtrips() -> None:
     assert progressed_status["axis_ratio"] == pytest.approx(1.0)
     assert progressed_status["step_size"] == pytest.approx(1.5)
     assert progressed_status["batch_progress"] == 1
+    assert progressed_status["population_size"] == 4
+    assert progressed_status["minimize"] is False
+    assert progressed_status["eta_mu"] == pytest.approx(1.0)
+    assert progressed_status["eta_sigma"] == pytest.approx(1.0)
+    assert progressed_status["eta_B"] == pytest.approx(1.0)
 
     restored = _initialized_optimizer(schema, population_size=4)
     restored.load(progressed_state)
@@ -829,7 +852,7 @@ def test_load_discards_unsaved_local_progress_at_idle_boundary() -> None:
     assert np.allclose(_read_batch(restored_state), _read_batch(initial_state))
 
 
-def test_runtime_config_is_not_persisted_or_loaded() -> None:
+def test_runtime_config_is_reported_in_status_but_not_loaded() -> None:
     schema = _make_identity_schema("RuntimeConfig", x=(4.0, 2.0))
     opt_a = Optimizer(
         schema,
@@ -850,6 +873,11 @@ def test_runtime_config_is_not_persisted_or_loaded() -> None:
     assert "status" in state
     assert "minimize" not in state
     assert "step_size_path" not in state
+    assert _read_status(state)["population_size"] == 14
+    assert _read_status(state)["minimize"] is True
+    assert _read_status(state)["eta_mu"] == pytest.approx(0.9)
+    assert _read_status(state)["eta_sigma"] == pytest.approx(0.7)
+    assert _read_status(state)["eta_B"] == pytest.approx(0.2)
 
     opt_b = Optimizer(schema, population_size=4)
     opt_b.load(state)
@@ -861,6 +889,11 @@ def test_runtime_config_is_not_persisted_or_loaded() -> None:
     assert opt_b.eta_mu == 1.0
     assert opt_b.eta_sigma == 1.0
     assert opt_b.eta_B == 1.0
+    assert _read_status(loaded)["population_size"] == 4
+    assert _read_status(loaded)["minimize"] is False
+    assert _read_status(loaded)["eta_mu"] == pytest.approx(1.0)
+    assert _read_status(loaded)["eta_sigma"] == pytest.approx(1.0)
+    assert _read_status(loaded)["eta_B"] == pytest.approx(1.0)
 
 
 def test_load_allows_switching_optimization_direction_mid_batch() -> None:

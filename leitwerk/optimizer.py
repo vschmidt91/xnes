@@ -16,7 +16,6 @@ from .xnes import XNES, XNESStatus
 T = TypeVar("T")
 JSONObject: TypeAlias = dict[str, "JSON"]
 JSON: TypeAlias = JSONObject | list["JSON"] | str | int | float | bool | None
-_ResultRecord = tuple[float, ...] | None
 _SUCCESSFUL_TERMINATION_STATUSES = frozenset(
     {
         XNESStatus.SIGMA_MIN,
@@ -58,8 +57,9 @@ class Optimizer(Generic[T]):
     declaration or insertion order.
 
     Results are ranked for maximization by default. Pass `minimize=True` to
-    rank lower results as better instead. This optimization direction is
-    runtime configuration and is not persisted by `save()`.
+    rank lower results as better instead. Runtime configuration stays local to
+    the current instance and is only included in `save()` as informational
+    diagnostics.
     """
 
     def __init__(
@@ -117,7 +117,7 @@ class Optimizer(Generic[T]):
         batch = _as_batch_matrix(state["batch"], len(saved_names))
         results = _deserialize_results(state["results"])
         context_pending = dict(cast(Mapping[str, int], state["context_pending"]))
-        status = cast(Mapping[str, int | float], state["status"])
+        status = cast(Mapping[str, JSON], state["status"])
 
         schema_diff = self._schema.diff(saved_schema)
         loc, scale = self._reconcile_distribution_state(
@@ -261,10 +261,10 @@ class Optimizer(Generic[T]):
             self._sample_batch()
         return status, restarted
 
-    def _restore_status(self, status: Mapping[str, int | float]) -> None:
-        self._total_samples = int(status["total_samples"])
-        self._num_batches = int(status["num_batches"])
-        self._num_restarts = int(status["num_restarts"])
+    def _restore_status(self, status: Mapping[str, JSON]) -> None:
+        self._total_samples = int(cast(int | float, status["total_samples"]))
+        self._num_batches = int(cast(int | float, status["num_batches"]))
+        self._num_restarts = int(cast(int | float, status["num_restarts"]))
 
     def _status(self) -> JSONObject:
         completed = sum(result is not None for result in self._scheduler.results)
@@ -276,6 +276,11 @@ class Optimizer(Generic[T]):
             "axis_ratio": self._xnes.axis_ratio,
             "step_size": self._xnes.step_size,
             "batch_progress": completed,
+            "population_size": self.population_size,
+            "minimize": self.minimize,
+            "eta_mu": self.eta_mu,
+            "eta_sigma": self.eta_sigma,
+            "eta_B": self.eta_B,
         }
 
     def _reserve(self, context: str | None) -> Reservation:
@@ -341,11 +346,11 @@ def _deserialize_schema(schema_json: Mapping[str, object]) -> dict[str, Paramete
     return {str(name): Parameter.from_state(spec) for name, spec in schema_json.items()}
 
 
-def _serialize_results(results: Sequence[_ResultRecord]) -> list[list[float] | None]:
+def _serialize_results(results: Sequence[tuple[float, ...] | None]) -> list[list[float] | None]:
     return [None if row is None else list(row) for row in results]
 
 
-def _deserialize_results(result_rows: object) -> list[_ResultRecord]:
+def _deserialize_results(result_rows: object) -> list[tuple[float, ...] | None]:
     rows = cast(Sequence[Sequence[float] | None], result_rows)
     return [None if row is None else tuple(float(value) for value in row) for row in rows]
 
