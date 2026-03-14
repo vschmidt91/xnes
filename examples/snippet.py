@@ -9,4 +9,4 @@ for _ in range(100):
     x = opt.ask()
     opt.tell(f(**x))
 
-print(opt.ask_best())
+print(opt.mean)

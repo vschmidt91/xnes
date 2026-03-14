@@ -29,8 +29,8 @@ for _ in range(500):
     opt.tell(-value**2)
     state_path.write_text(json.dumps(opt.save()))
 
-best = opt.ask_best()
-print(best.coeff_1, best.coeff_2)
+mean = opt.mean
+print(mean.coeff_1, mean.coeff_2)
 ```
 
 `tell` uses maximize semantics. To minimize an objective `f(x)`, pass `-f(x)`.
@@ -54,6 +54,6 @@ idle boundaries, i.e. when no `ask()` is pending.
 `load()` at an idle boundary may intentionally discard unsaved local progress
 from earlier `tell()` calls.
 
-For deterministic inference, call `ask_best()`. If you want the means from a
+For deterministic inference, read `mean` or its alias `expectation`. If you want the means from a
 saved run rather than a fresh optimizer, call `load(...)` first.
 

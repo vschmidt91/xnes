@@ -41,7 +41,7 @@ for _ in range(100):
     x = opt.ask()
     opt.tell(f(**x))
 
-print(opt.ask_best())
+print(opt.mean)
 # {'x1': 0.9943998488500848, 'x2': 1.0003564039700967}
 ```
 
@@ -68,6 +68,10 @@ class Optimizer[T]:
     def load(self, state: JSON) -> SchemaDiff:
     def ask(self, context: JSON = None) -> T:
     def tell(self, result: float | Sequence[float]) -> TellResult:
+    @property
+    def mean(self) -> T:
+    @property
+    def expectation(self) -> T:
     def save(self) -> JSON:
 ```
 

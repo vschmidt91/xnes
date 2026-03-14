@@ -23,8 +23,8 @@ Example:
         value = (params.coeff - 3.0) ** 2 + (params.ratio - 0.25) ** 2
         opt.tell(value)
 
-    best = opt.ask_best()
-    print(best.coeff, best.ratio)
+    mean = opt.mean
+    print(mean.coeff, mean.ratio)
     ```
 """
 

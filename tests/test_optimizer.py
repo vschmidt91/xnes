@@ -520,15 +520,15 @@ def test_nested_schema_flattens_leaf_names_and_rebuilds_dataclasses() -> None:
     optimizer: Optimizer[Any] = Optimizer(schema, population_size=6)
     assert _read_schema_names(optimizer.save()) == expected_names
 
-    best = optimizer.ask_best()
+    mean = optimizer.mean
 
-    assert best.__class__ is schema
-    assert best.combat.__class__ is combat
-    assert best.mining.__class__ is mining
-    assert best.alpha == 1.5
-    assert best.combat.attack_threshold == 2.0
-    assert best.combat.retreat_threshold == -1.0
-    assert best.mining.gas_priority == 0.5
+    assert mean.__class__ is schema
+    assert mean.combat.__class__ is combat
+    assert mean.mining.__class__ is mining
+    assert mean.alpha == 1.5
+    assert mean.combat.attack_threshold == 2.0
+    assert mean.combat.retreat_threshold == -1.0
+    assert mean.mining.gas_priority == 0.5
 
     params = optimizer.ask()
     assert params.__class__ is schema
@@ -558,15 +558,15 @@ def test_nested_mapping_schema_flattens_leaf_names_and_rebuilds_plain_dicts() ->
     optimizer = _initialized_optimizer(schema, population_size=6)
     assert _read_schema_names(optimizer.save()) == expected_names
 
-    best = optimizer.ask_best()
+    mean = optimizer.mean
 
-    assert isinstance(best, dict)
-    assert isinstance(best["combat"], dict)
-    assert isinstance(best["mining"], dict)
-    assert best["alpha"] == 1.5
-    assert best["combat"]["attack_threshold"] == 2.0
-    assert best["combat"]["retreat_threshold"] == -1.0
-    assert best["mining"]["gas_priority"] == 0.5
+    assert isinstance(mean, dict)
+    assert isinstance(mean["combat"], dict)
+    assert isinstance(mean["mining"], dict)
+    assert mean["alpha"] == 1.5
+    assert mean["combat"]["attack_threshold"] == 2.0
+    assert mean["combat"]["retreat_threshold"] == -1.0
+    assert mean["mining"]["gas_priority"] == 0.5
 
     params = optimizer.ask()
     assert isinstance(params, dict)
@@ -689,11 +689,11 @@ def test_omitted_loc_uses_canonical_latent_zero_center() -> None:
     }
     assert np.allclose(_read_loc(state), np.zeros(4))
 
-    best = optimizer.ask_best()
-    assert best.interval == pytest.approx(4.0)
-    assert best.lower == pytest.approx(2.0 + np.log(2.0))
-    assert best.unbounded == pytest.approx(0.0)
-    assert best.upper == pytest.approx(5.0 - np.log(2.0))
+    mean = optimizer.mean
+    assert mean.interval == pytest.approx(4.0)
+    assert mean.lower == pytest.approx(2.0 + np.log(2.0))
+    assert mean.unbounded == pytest.approx(0.0)
+    assert mean.upper == pytest.approx(5.0 - np.log(2.0))
 
 
 def test_legacy_parameter_constructors_are_not_exposed() -> None:
@@ -716,7 +716,7 @@ def test_ask_returns_typed_sample() -> None:
     assert isinstance(params.b, float)
 
 
-def test_ask_best_returns_current_user_space_locs_without_context() -> None:
+def test_mean_returns_current_user_space_locs_without_context() -> None:
     schema = _make_schema(
         "BestParams",
         b=Parameter(scale=1.0, min=0.0, max=1.0),
@@ -724,10 +724,22 @@ def test_ask_best_returns_current_user_space_locs_without_context() -> None:
     )
     optimizer = _initialized_optimizer(schema, population_size=6)
 
-    best = optimizer.ask_best()
-    assert best.__class__ is schema
-    assert best.a == pytest.approx(-2.0 + np.log(2.0))
-    assert best.b == pytest.approx(0.5)
+    mean = optimizer.mean
+    assert mean.__class__ is schema
+    assert mean.a == pytest.approx(-2.0 + np.log(2.0))
+    assert mean.b == pytest.approx(0.5)
+
+
+def test_expectation_aliases_mean() -> None:
+    schema = _make_schema(
+        "ExpectationParams",
+        x=Parameter(loc=1.25, scale=0.75),
+        y=Parameter(scale=1.0, min=0.0, max=1.0),
+    )
+    optimizer = _initialized_optimizer(schema, population_size=6)
+
+    mean = optimizer.mean
+    assert mean.__class__ is schema
 
 
 def test_context_reuses_mirror_on_repeat() -> None:
@@ -919,8 +931,8 @@ def test_load_allows_switching_optimization_direction_mid_batch() -> None:
             params = optimizer.ask()
             optimizer.tell(params.x)
 
-    assert minimizing.ask_best().x < 0.0
-    assert maximizing.ask_best().x > 0.0
+    assert minimizing.mean.x < 0.0
+    assert maximizing.mean.x > 0.0
 
 
 def test_restart_on_conditioning_failure() -> None:
@@ -1064,11 +1076,11 @@ def test_transformed_parameters_use_latent_state_but_emit_user_space_values() ->
     assert np.allclose(_read_loc(state), expected_latent_loc)
     assert np.allclose(np.diag(_read_scale(state)), np.array([3.4, 1.0, 1.0, 1.0]))
 
-    best = optimizer.ask_best()
-    assert best.a == pytest.approx(1.2)
-    assert best.b == pytest.approx(2.9)
-    assert best.c == pytest.approx(3.0)
-    assert best.d == pytest.approx(3.0)
+    mean = optimizer.mean
+    assert mean.a == pytest.approx(1.2)
+    assert mean.b == pytest.approx(2.9)
+    assert mean.c == pytest.approx(3.0)
+    assert mean.d == pytest.approx(3.0)
 
     for _ in range(6):
         params = optimizer.ask()
@@ -1079,8 +1091,8 @@ def test_transformed_parameters_use_latent_state_but_emit_user_space_values() ->
 
     reloaded = Optimizer(schema, population_size=6)
     reloaded.load(state)
-    reloaded_best = reloaded.ask_best()
-    assert reloaded_best.a == pytest.approx(best.a)
-    assert reloaded_best.b == pytest.approx(best.b)
-    assert reloaded_best.c == pytest.approx(best.c)
-    assert reloaded_best.d == pytest.approx(best.d)
+    reloaded_mean = reloaded.mean
+    assert reloaded_mean.a == pytest.approx(mean.a)
+    assert reloaded_mean.b == pytest.approx(mean.b)
+    assert reloaded_mean.c == pytest.approx(mean.c)
+    assert reloaded_mean.d == pytest.approx(mean.d)

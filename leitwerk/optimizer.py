@@ -155,8 +155,9 @@ class Optimizer(Generic[T]):
         self._pending_reservation = self._reserve(_normalize_context(context))
         return self._params_for(self._pending_reservation)
 
-    def ask_best(self) -> T:
-        """Return the current mean parameters in the schema's runtime shape."""
+    @property
+    def mean(self) -> T:
+        """Current mean parameters in the schema's runtime shape."""
         return self._schema.build_params(self._xnes.mu)
 
     def tell(self, result: float | Sequence[float] | np.ndarray) -> TellResult:

@@ -5,6 +5,8 @@ from typing import Annotated
 
 import matplotlib.pyplot as plt
 import numpy as np
+from sc2.ids.unit_typeid import UnitTypeId
+
 from leitwerk import Optimizer, Parameter
 from loguru import logger
 from sc2 import maps
@@ -113,7 +115,7 @@ class LearningBot(BotAI):
     params: BotParams
 
     async def on_start(self):
-        # restore state from disk
+        self.townhalls[0].train(UnitTypeId.PROBE)
         DATA_PATH.mkdir(exist_ok=True)
         if PARAMS_FILE.exists():
             with PARAMS_FILE.open() as f:
@@ -144,7 +146,7 @@ class LearningBot(BotAI):
             Result.Defeat: 0.0,
         }[game_result]
 
-        efficiency = self.state.score.killed_value_units / max(1, self.state.score.lost_minerals_economy)
+        efficiency = np.log1p(self.state.score.killed_value_units) - np.log1p(self.state.score.lost_minerals_economy)
         score = (outcome, efficiency)
         logger.info(score)
         tell_result = self.optimizer.tell(score)
