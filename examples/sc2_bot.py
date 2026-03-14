@@ -20,8 +20,8 @@ PARAMS_FILE = DATA_PATH / "params.json"
 
 @dataclass
 class BotParams:
-    attack_threshold: Annotated[float, Parameter(.5, min=0, max=1)]
-    retreat_threshold: Annotated[float, Parameter(.5, min=0, max=1)]
+    attack_threshold: Annotated[float, Parameter(min=0, max=1)]
+    retreat_threshold: Annotated[float, Parameter(min=0, max=1)]
 
 
 class LearningBot(BotAI):
@@ -60,7 +60,7 @@ class LearningBot(BotAI):
             Result.Defeat: -1,
         }[game_result]
         # secondary objective: be cost-effective
-        efficiency = self.state.score.total_damage_dealt_life / max(1, self.state.score.total_damage_taken_life)
+        efficiency = self.state.score.killed_value_units / max(1, self.state.score.lost_minerals_economy)
         score = (win_loss, efficiency)
         logger.info(score)
         tell_result = self.optimizer.tell(score)

@@ -7,6 +7,7 @@ from typing import Annotated, Any, cast
 import numpy as np
 import pytest
 from leitwerk import Optimizer, Parameter, SchemaDiff, TellResult, XNESStatus
+from leitwerk.optimizer import JSONObject
 
 
 def _make_schema(schema_name: str, **parameters: Parameter) -> type[Any]:
@@ -43,7 +44,7 @@ def _initialized_optimizer(
     return Optimizer(schema, population_size=population_size, minimize=minimize)
 
 
-def _initialized_state(schema: type[Any] | Mapping[str, object], *, population_size: int) -> dict[str, object]:
+def _initialized_state(schema: type[Any] | Mapping[str, object], *, population_size: int) -> JSONObject:
     state = _initialized_optimizer(schema, population_size=population_size).save()
     assert isinstance(state, dict)
     return state
@@ -89,13 +90,6 @@ def _read_scale(state: object) -> np.ndarray:
     scale_json = state["scale"]
     assert isinstance(scale_json, list)
     return np.asarray(scale_json, dtype=float)
-
-
-def _read_step_size_path(state: object) -> np.ndarray:
-    assert isinstance(state, dict)
-    step_size_path_json = state["step_size_path"]
-    assert isinstance(step_size_path_json, list)
-    return np.asarray(step_size_path_json, dtype=float)
 
 
 def _read_batch(state: object) -> np.ndarray:
@@ -204,6 +198,7 @@ def test_state_save_load_roundtrip() -> None:
 
     state = opt_a.save()
     assert isinstance(state, dict)
+    assert "step_size_path" not in state
 
     schema_b = _make_identity_schema("RoundtripB", beta=(-1.0, 2.0), alpha=(2.0, 1.5))
     opt_b = Optimizer(schema_b, population_size=20)
@@ -214,7 +209,6 @@ def test_state_save_load_roundtrip() -> None:
     assert _read_schema(loaded) == _read_schema(state)
     assert np.allclose(_read_loc(loaded), _read_loc(state))
     assert np.allclose(_read_scale(loaded), _read_scale(state))
-    assert np.allclose(_read_step_size_path(loaded), _read_step_size_path(state))
 
 
 def test_schema_state_is_human_readable_parameter_specs() -> None:
@@ -246,7 +240,6 @@ def test_load_reconciles_added_and_removed_parameters() -> None:
     base_state = base.save()
     base_loc = _read_loc(base_state)
     base_scale = _read_scale(base_state)
-    base_step_size_path = _read_step_size_path(base_state)
     base_batch = _read_batch(base_state)
     base_batch_latent_points = _read_batch_latent_points(base_state)
     base_results = _read_results(base_state)
@@ -270,10 +263,6 @@ def test_load_reconciles_added_and_removed_parameters() -> None:
             ]
         ),
     )
-    assert np.allclose(
-        _read_step_size_path(added_state),
-        np.array([base_step_size_path[0], base_step_size_path[1], 0.0]),
-    )
     assert np.allclose(_read_batch(added_state), np.vstack([base_batch, np.zeros((1, base_batch.shape[1]))]))
     assert np.allclose(
         _read_batch_latent_points(added_state),
@@ -286,7 +275,6 @@ def test_load_reconciles_added_and_removed_parameters() -> None:
     added_partial_state = added.save()
     added_loc = _read_loc(added_partial_state)
     added_scale = _read_scale(added_partial_state)
-    added_step_size_path = _read_step_size_path(added_partial_state)
     added_batch = _read_batch(added_partial_state)
     added_batch_latent_points = _read_batch_latent_points(added_partial_state)
     added_results = _read_results(added_partial_state)
@@ -301,7 +289,6 @@ def test_load_reconciles_added_and_removed_parameters() -> None:
     assert _read_schema_names(removed_state) == ["x", "y"]
     assert np.allclose(_read_loc(removed_state), added_loc[:2])
     assert np.allclose(_read_scale(removed_state), added_scale[:2, :2])
-    assert np.allclose(_read_step_size_path(removed_state), added_step_size_path[:2])
     assert np.allclose(_read_batch(removed_state), added_batch[:2, :])
     assert np.allclose(_read_batch_latent_points(removed_state), added_batch_latent_points[:2, :])
     assert _read_results(removed_state) == added_results
@@ -324,7 +311,6 @@ def test_load_reconciles_bounds_changes_and_selectively_preserves_batch() -> Non
     base_state = base.save()
     base_loc = _read_loc(base_state)
     base_scale = _read_scale(base_state)
-    base_step_size_path = _read_step_size_path(base_state)
     base_batch = _read_batch(base_state)
     base_results = _read_results(base_state)
     completed_mask = np.array([result is not None for result in base_results], dtype=bool)
@@ -350,7 +336,6 @@ def test_load_reconciles_bounds_changes_and_selectively_preserves_batch() -> Non
 
     changed_loc = _read_loc(changed_state)
     changed_scale = _read_scale(changed_state)
-    changed_step_size_path = _read_step_size_path(changed_state)
     changed_batch = _read_batch(changed_state)
 
     assert np.allclose(changed_loc, np.array([_read_loc(fresh_state)[0], base_loc[1]]))
@@ -362,10 +347,6 @@ def test_load_reconciles_bounds_changes_and_selectively_preserves_batch() -> Non
                 [0.0, base_scale[1, 1]],
             ]
         ),
-    )
-    assert np.allclose(
-        changed_step_size_path,
-        np.array([_read_step_size_path(fresh_state)[0], base_step_size_path[1]]),
     )
     assert np.allclose(changed_batch[1, :], base_batch[1, :])
     assert np.allclose(changed_batch[0, completed_mask], 0.0)
@@ -395,7 +376,6 @@ def test_loc_and_scale_changes_do_not_trigger_schema_changeover() -> None:
     }
     assert np.allclose(_read_loc(changed_state), _read_loc(base_state))
     assert np.allclose(_read_scale(changed_state), _read_scale(base_state))
-    assert np.allclose(_read_step_size_path(changed_state), _read_step_size_path(base_state))
     assert np.allclose(_read_batch(changed_state), _read_batch(base_state))
     assert _read_results(changed_state) == _read_results(base_state)
 
@@ -571,7 +551,6 @@ def test_mapping_schema_state_save_load_roundtrip() -> None:
     assert _read_schema(loaded) == _read_schema(state)
     assert np.allclose(_read_loc(loaded), _read_loc(state))
     assert np.allclose(_read_scale(loaded), _read_scale(state))
-    assert np.allclose(_read_step_size_path(loaded), _read_step_size_path(state))
 
 
 def test_mapping_schema_rejects_non_parameter_leaf_values() -> None:
@@ -783,7 +762,6 @@ def test_load_discards_unsaved_local_progress_at_idle_boundary() -> None:
     assert _read_results(restored_state) == _read_results(initial_state)
     assert np.allclose(_read_loc(restored_state), _read_loc(initial_state))
     assert np.allclose(_read_scale(restored_state), _read_scale(initial_state))
-    assert np.allclose(_read_step_size_path(restored_state), _read_step_size_path(initial_state))
     assert np.allclose(_read_batch(restored_state), _read_batch(initial_state))
 
 
@@ -793,7 +771,6 @@ def test_runtime_config_is_not_persisted_or_loaded() -> None:
         schema,
         population_size=14,
         minimize=True,
-        csa_enabled=False,
         eta_mu=0.9,
         eta_sigma=0.7,
         eta_B=0.2,
@@ -807,6 +784,7 @@ def test_runtime_config_is_not_persisted_or_loaded() -> None:
     assert isinstance(state, dict)
     assert "context_pending" in state
     assert "minimize" not in state
+    assert "step_size_path" not in state
 
     opt_b = Optimizer(schema, population_size=4)
     opt_b.load(state)
@@ -814,7 +792,6 @@ def test_runtime_config_is_not_persisted_or_loaded() -> None:
     assert isinstance(loaded, dict)
     assert "context_pending" in loaded
     assert opt_b.minimize is False
-    assert opt_b.csa_enabled is True
     assert opt_b.eta_mu == 1.0
     assert opt_b.eta_sigma == 1.0
     assert opt_b.eta_B == 1.0
@@ -869,7 +846,7 @@ def test_restart_on_conditioning_failure() -> None:
     assert cond < 1e14
 
 
-def test_successful_termination_restarts_from_final_mu_with_fresh_scale_and_path(
+def test_successful_termination_restarts_from_final_mu_with_fresh_scale(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     schema = _make_identity_schema("RestartSuccess", x=(2.0, 1.5), y=(-1.0, 0.7))
@@ -880,7 +857,6 @@ def test_successful_termination_restarts_from_final_mu_with_fresh_scale_and_path
         optimizer._xnes.mu = final_mu.copy()
         optimizer._xnes.sigma = 6.0
         optimizer._xnes.B = np.array([[1.5, 0.2], [0.0, 0.5]])
-        optimizer._xnes.p_sigma = np.array([9.0, -8.0])
         return XNESStatus.LOC_STEP_MIN
 
     monkeypatch.setattr(optimizer._xnes, "tell", fake_tell)
@@ -900,10 +876,9 @@ def test_successful_termination_restarts_from_final_mu_with_fresh_scale_and_path
     state = optimizer.save()
     assert np.allclose(_read_loc(state), final_mu)
     assert np.allclose(_read_scale(state), np.diag([1.5, 0.7]))
-    assert np.allclose(_read_step_size_path(state), np.zeros(2))
 
 
-def test_failed_termination_restarts_from_schema_loc_with_fresh_scale_and_path(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_failed_termination_restarts_from_schema_loc_with_fresh_scale(monkeypatch: pytest.MonkeyPatch) -> None:
     schema = _make_identity_schema("RestartFailure", x=(2.0, 1.5), y=(-1.0, 0.7))
     optimizer = _initialized_optimizer(schema, population_size=4)
 
@@ -911,7 +886,6 @@ def test_failed_termination_restarts_from_schema_loc_with_fresh_scale_and_path(m
         optimizer._xnes.mu = np.array([4.25, -3.5])
         optimizer._xnes.sigma = 6.0
         optimizer._xnes.B = np.array([[1.5, 0.2], [0.0, 0.5]])
-        optimizer._xnes.p_sigma = np.array([9.0, -8.0])
         return XNESStatus.SCALE_COND_MAX
 
     monkeypatch.setattr(optimizer._xnes, "tell", fake_tell)
@@ -931,7 +905,6 @@ def test_failed_termination_restarts_from_schema_loc_with_fresh_scale_and_path(m
     state = optimizer.save()
     assert np.allclose(_read_loc(state), np.array([2.0, -1.0]))
     assert np.allclose(_read_scale(state), np.diag([1.5, 0.7]))
-    assert np.allclose(_read_step_size_path(state), np.zeros(2))
 
 
 def test_save_load_preserves_optimizer_state() -> None:
@@ -959,7 +932,6 @@ def test_save_load_preserves_optimizer_state() -> None:
     assert _read_schema(direct_state) == _read_schema(recreated_state)
     assert np.allclose(_read_loc(direct_state), _read_loc(recreated_state))
     assert np.allclose(_read_scale(direct_state), _read_scale(recreated_state))
-    assert np.allclose(_read_step_size_path(direct_state), _read_step_size_path(recreated_state))
 
 
 def test_transformed_parameters_use_latent_state_but_emit_user_space_values() -> None:
@@ -1004,4 +976,3 @@ def test_transformed_parameters_use_latent_state_but_emit_user_space_values() ->
     assert reloaded_best.b == pytest.approx(best.b)
     assert reloaded_best.c == pytest.approx(best.c)
     assert reloaded_best.d == pytest.approx(best.d)
-

@@ -7,88 +7,35 @@
 
 ---
 
-`leitwerk` is an evolutionary strategy with file persistence and schema reconciliation.
-Define the parameters, set up a loop in the training environment and let it learn.
-It is aimed at noisy, expensive black-box settings like simulators, bots and game AI with a few handcrafted parameters.
+`leitwerk` is an evolutionary optimizer that you can strap onto your self play loop.
+Handcraft some parameters, set up the training and let it fly.
 
 ## Features
 
 - **Easy** : Start from existing values without much setup
 - **Persistent** : State lives in human-readable JSON
 - **Dynamic** : Keep developing without losing progress
-- **Efficient** : Canonical xNES [^1] implementation on par with `cma` [^2] on BBOB [^4]
+- **Efficient** : Canonical xNES [^1] implementation, benchmarked against `cma` [^2] on BBOB [^4]
 
-## Installation
+Requires Python 3.11+ and not much else.
 
-Requires Python 3.11+
-
-```sh
-poetry install --all-extras
-```
-
-## Quickstart
-
-### Step 1 - Define the parameters
-
-`leitwerk` uses annotated dataclasses to define the initial starting point:
+## API
 
 ```py
-@dataclass
-class MyParams:
-    param1: Annotated[float, Parameter(loc=1.2, scale=3.4)] # loc: center guess, scale: spread/uncertainty
-    army_priority: Annotated[float, Parameter(loc=1, min=0)]   # optional lower bounds
+class Parameter:
+    def __init__(self, loc=0.0, scale=1.0, min=None, max=None):
+      
+class Optimizer[T]:
+    def __init__(self, Schema, ...):
+    def load(self, state: JSON) -> SchemaDiff:
+    def ask(self, context: JSON = None) -> T:
+    def tell(self, result: float | Sequence[float]) -> TellResult:
+    def save(self) -> JSON:
 ```
 
-Samples will be provided with the proper type for IntelliSense and type checking.
-Alternatively, you can use plain dictionaries, see the [example below](#example-1-function-minimization).
+## Example
 
-> [!TIP]
-> Use nested schemas to group the parameters into sensible blocks.
-> `leitwerk` handles full tree structures and flattens them internally.
-
-### Step 2 - Set up the Loop
-
-On Startup, create the optimizer and restore state (if available):
-
-```py
-opt = Optimizer(Params, population_size=10)
-
-# optional:
-with open("params.json") as f:
-    schema_diff = opt.load(json.load(f))
-```
-
-`schema_diff` reports about parameters that were added/removed/changed compared to the old state.
-
-Run any number of training cycles:
-
-```py
-for _ in range(32):
-    params = opt.ask()
-    score = ...
-    result = opt.tell(score)
-```
-
-Batching and result aggregation happen under the hood.
-
-Persist state:
-
-```py
-with open("params.json", "w") as f:
-    json.dump(opt.save(), f)
-```
-
-> [!WARNING]
-> `ask()` / `tell()` is strictly sequential.
-> After `ask()`, the next mutating call must be `tell()`.
-> `save()` and `load()` are only supported at idle boundaries, i.e. when no `ask()` is pending.
-> `load()` at an idle boundary may intentionally discard unsaved local progress.
-
----
-
-## Example 1 - Function Minimization
-
-If persistence is not required, `leitwerk` can be used as a standard `ask`/`tell` function optimizer:
+If persistence is not required, `leitwerk` is a standard `ask`/`tell` function optimizer:
 
 ```py
 from leitwerk import Optimizer, Parameter
@@ -100,10 +47,86 @@ opt = Optimizer({"x1": Parameter(), "x2": Parameter()}, minimize=True)
 
 for _ in range(100):
     x = opt.ask()
-    opt.tell(f(**x))
+    if opt.tell(f(**x)).restarted:
 
 print(opt.ask_best())
 # {'x1': 1.007115753775713, 'x2': 0.9922700335131514}
+```
+
+# Usage
+
+## 1. Parameter Schema
+
+**Preflight Check** : Describe your tuning knobs as an annotated dataclass:
+
+```py
+@dataclass
+class Params:
+    army_priority: Annotated[float, Parameter(loc=3.0, scale=0.5)]      # mean + std
+    skirmish_range: Annotated[float, Parameter(min=5, max=10)]          # or lower/upper bounds
+    worker_target: Annotated[float, Parameter(loc=50, scale=10, min=1)] # or mixed
+```
+
+This is the type you will receive as samples, which plays nice with IntelliSense and type-checks.
+Alternatively, use plain dictionaries, see the [example below](#example-1-function-minimization)
+
+- `loc` and `scale` are your best guess and spread/uncertainty, used for initial population and resets.
+- `min` and `max` are hard limits
+- most combinations work, see [Optimizer details](#optimization-details)
+
+> [!TIP]
+> Use nested schemas to group the parameters into blocks, it understands tree structures.
+
+## 2. Configuration
+
+**Engine Ignition** : Start the optimizer with the schema and old state if there is one:
+
+```py
+def on_start(self):
+    self.optimizer = Optimizer(Params)
+    with open("./data/params.json") as f:
+        schema_diff = self.optimizer.load(json.load(f))
+    self.params = self.optimizer.ask()
+```
+
+> [!NOTE]
+> Schema changes can be reconciled a degree:
+> - Parameters are identified by flattened names
+> - When `min`/`max` change, the Parameter is reset using `loc` and `scale`
+> - `SchemaDiff` is a report of added/removed/changed parameters
+
+> [!TIP]
+> When you change how the parameter is used, `leitwerk` cannot know. It might adapt anyway - or consider renaming it.
+
+## 3. Objective Function
+
+**Liftoff** : When you can see the result, encode it as one or more numbers:
+
+```py
+def on_end(self, result):
+    # your evaluation logic
+    elo = {Result.Victory: +4, Result.Tie: 0, Result.Defeat: -4}[result]
+    heuristic = self.state.score.total_damage_dealt_life / max(1, self.state.score.total_damage_taken_life)
+    result = self.opt.tell((elo, heuristic))
+    with open("./data/params.json", "w") as f:
+        json.dump(opt.save(), f)
+```
+
+This will select towards wins and use a heuristic as secondary ranking.
+
+
+> [!IMPORTANT]
+> The objective function is your secret sauce.
+> - Binary loss is fine, but slow
+> - Unit Counts? Army Value? Income?
+> - If the objective changes drastically, consider a reset
+> - Result tuples are compared lexicographically with higher=better (enable minimization with `minimize=True`)
+
+That's it. `leitwerk` is ready to crunch the numbers while you do other things.
+The state is somewhat human-readable, so have a look.
+
+---
+
 ```
 
 ## Example 2 - Starcraft II Bot
@@ -201,6 +224,14 @@ if __name__ == "__main__":
 
 ---
 
+## Local Install
+
+Requires Python 3.11+
+
+```sh
+poetry install --all-extras
+```
+
 ## Context Matching (optional)
 
 You can help `leitwerk` to make the sampling a bit more efficient by sorting
@@ -233,24 +264,24 @@ If context is provided, `leitwerk` uses it for mirror sampling: [^3]
 > - `context=self.enemy_race` : `population_size >= 8`
 > - `context=self.opponent_id` : `population_size >= 2 * division_size`
 
-## Optimizer Details (advanced)
+## Optimization Details
 
-- Population is modelled as unbounded multivariate gaussian distribution
-- Bounded parameters are implemented via smooth bijective mappings:
-  1. `min=None`, `max=None`: identity
-  2. `min=a`, `max=None`: scale + soft-plus + offset
-  3. `min=None`, `max=b`: scale + soft-plus + mirror + offset
-  4. `min=a`, `max=b`: scale/offset + sigmoid + scale/offset
-- Only ranking of results matters, not numerical values
-  - fitness shaping is used internally
-  - makes optimization invariant under monotonic objective transformations
-- Objective values can be sequences/tuples
-  - ranking is lexicographic
-  - this implements simple tie-breaking, not pareto/multi-objective optimization
-- Learning rates use the canonical decomposition [^1] and can be adapted:
-  - `eta_mu=1.0`
-  - `eta_sigma=1.0`
-  - `eta_B=1.0` (will be combined with dimensionality factor)
+- Search distribution: `z ~ N(mu, Sigma)` in latent space, with full covariance `Sigma`
+- User parameters are smooth bijections of latent coordinates:
+  - one-sided bounds: soft-plus map activation `(min, inf)` or `(-inf, max)`
+  - two-sided bounds: sigmoid activation `(min, max)`
+- `loc` is interpreted in user space; if omitted, the latent center `0` is used
+- `scale` always lives in latent space, i.e. it sets search spread before applying the bound mapping
+- Only ranks matter, not objective magnitudes
+  - fitness shaping makes the search invariant under strictly monotone transformations of the objective
+- Tuple results are ordered lexicographically
+  - This is tie-breaking by secondary keys
+  - Pareto optimization TBD
+- xNES hyperparameters:
+  - `population_size` is essentially abstracted away, but finetuned if you want
+  - `eta_mu = 1.0`
+  - `eta_sigma = 1.0`
+  - `eta_B = 1.0` with the canonical dimension factor [^1]
 
 ## License
 

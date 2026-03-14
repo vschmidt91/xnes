@@ -207,11 +207,10 @@ class SchemaSpec(Generic[T]):
     def index_by_name(self) -> dict[str, int]:
         return {field_spec.name: idx for idx, field_spec in enumerate(self.fields)}
 
-    def initial_distribution(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def initial_distribution(self) -> tuple[np.ndarray, np.ndarray]:
         loc = np.array([field_spec.mu0 for field_spec in self.fields], dtype=float)
         scale_diag = np.array([field_spec.sigma0 for field_spec in self.fields], dtype=float)
-        step_size_path = np.zeros(self.dim, dtype=float)
-        return loc, np.diag(scale_diag), step_size_path
+        return loc, np.diag(scale_diag)
 
     def build_params(self, values: np.ndarray) -> T:
         leaf_values = {

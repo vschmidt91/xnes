@@ -1,8 +1,7 @@
 """Core xNES distribution update implementation.
 
 The class maintains the search distribution in factored form `sigma * B`,
-generates mirrored orthogonal samples, and applies canonical xNES updates with
-optional CSA step-size control.
+generates mirrored orthogonal samples, and applies canonical xNES updates.
 """
 
 from __future__ import annotations
@@ -57,15 +56,16 @@ def _default_sample_count(num_samples: int | None, dim: int) -> int:
     return n
 
 
-def _utility_weights(sample_count: int) -> tuple[np.ndarray, np.ndarray, float]:
+def _utility_weights(sample_count: int) -> tuple[np.ndarray, float]:
     w_pos = np.maximum(0.0, np.log(sample_count / 2 + 1) - np.log(np.arange(1, sample_count + 1)))
     w_sum = float(np.sum(w_pos))
     if w_sum <= 0.0:
         msg = "Invalid utility weights: positive weight sum must be > 0."
         raise ValueError(msg)
     w_pos /= w_sum
-    mu_eff_pos = float(1.0 / np.sum(w_pos**2))
-    return w_pos, w_pos - (1.0 / sample_count), mu_eff_pos
+    w_active = w_pos - (1.0 / sample_count)
+    mu_eff = float(1.0 / np.sum(w_active**2))
+    return w_active, mu_eff
 
 
 class XNESStatus(Enum):
@@ -77,7 +77,6 @@ class XNESStatus(Enum):
     SIGMA_INF = auto()
     LOC_INF = auto()
     SCALE_INF = auto()
-    STEP_SIZE_PATH_INF = auto()
     SCALE_COND_INF = auto()
     SCALE_COND_ERROR = auto()
     SCALE_COND_MAX = auto()
@@ -94,12 +93,11 @@ class XNES:
     Args:
         x0: Initial mean vector.
         sigma0: Initial scale, either scalar, diagonal vector, or full matrix.
-        p_sigma: Optional CSA evolution path.
 
-    Runtime attributes `csa_enabled`, `eta_mu`, `eta_sigma`, and `eta_B` are
-    initialized to built-in defaults and may be reassigned directly. `eta_B`
-    acts as a multiplier on the built-in dimension-dependent shape learning
-    rate heuristic.
+    Runtime attributes `eta_mu`, `eta_sigma`, and `eta_B` are initialized to
+    built-in defaults and may be reassigned directly. `eta_B` acts as a
+    multiplier on the built-in dimension-dependent shape learning rate
+    heuristic.
 
     Raises:
         ValueError: If the supplied shapes are inconsistent, the scale matrix is
@@ -110,12 +108,10 @@ class XNES:
     MAX_SIGMA = 1e20
     MAX_CONDITION = 1e14
 
-    def __init__(self, x0: np.ndarray, sigma0: np.ndarray | float, p_sigma: np.ndarray | None = None) -> None:
+    def __init__(self, x0: np.ndarray, sigma0: np.ndarray | float) -> None:
         self.mu = np.asarray(x0, dtype=float)
         self.sigma: float
         self.B: np.ndarray
-        self.p_sigma: np.ndarray
-        self.csa_enabled = True
         self.eta_mu = 1.0
         self.eta_sigma = 1.0
         self.eta_B = 1.0
@@ -123,7 +119,6 @@ class XNES:
         if self.dim == 0:
             self.sigma = 1.0
             self.B = np.eye(0)
-            self.p_sigma = np.zeros(0)
             return
 
         scale0 = _normalize_scale_matrix(sigma0, self.dim)
@@ -135,14 +130,6 @@ class XNES:
 
         self.sigma = max(float(np.exp(logdet / self.dim)), 1e-30)
         self.B = scale0 / self.sigma
-        if p_sigma is None:
-            self.p_sigma = np.zeros(self.dim)
-        else:
-            p_sigma_vec = np.asarray(p_sigma, dtype=float)
-            if p_sigma_vec.shape != (self.dim,):
-                msg = f"Expected p_sigma shape {(self.dim,)}, got {p_sigma_vec.shape}"
-                raise ValueError(msg)
-            self.p_sigma = p_sigma_vec
 
     @property
     def dim(self) -> int:
@@ -191,7 +178,7 @@ class XNES:
             end = min(start + self.dim, n_half)
             k = end - start
             raw = rng.standard_normal((self.dim, k))
-            lengths = np.linalg.norm(raw, axis=0)
+            lengths = norm(raw, axis=0)
             basis, _ = qr(raw, mode="economic")
             z_half[:, start:end] = basis * lengths
 
@@ -222,11 +209,10 @@ class XNES:
         if len(ranking) != n or sorted(ranking) != list(range(n)):
             msg = "ranking must be a permutation matching sample count."
             raise ValueError(msg)
-        w_pos, w_active, mu_eff_pos = _utility_weights(n)
+        w_active, mu_eff = _utility_weights(n)
         z_sorted = samples[:, ranking]
 
         grad_mu = z_sorted @ w_active
-        grad_mu_pos = z_sorted @ w_pos
         grad_M = (z_sorted * w_active) @ z_sorted.T
         grad_sigma = float(np.trace(grad_M) / d)
         grad_B_shape = grad_M - grad_sigma * np.eye(d)
@@ -234,18 +220,8 @@ class XNES:
         mu_step = self.eta_mu * self.sigma * (self.B @ grad_mu)
         self.mu += mu_step
 
-        if self.csa_enabled:
-            c_sigma = (mu_eff_pos + 2.0) / (d + mu_eff_pos + 5.0)
-            d_sigma = 1.0 + 2.0 * max(0.0, np.sqrt((mu_eff_pos - 1.0) / (d + 1.0)) - 1.0) + c_sigma
-            expected_norm = np.sqrt(d) * (1.0 - 1.0 / (4.0 * d) + 1.0 / (21.0 * d * d))
-            self.p_sigma = (1.0 - c_sigma) * self.p_sigma + np.sqrt(
-                c_sigma * (2.0 - c_sigma) * mu_eff_pos
-            ) * grad_mu_pos
-            sigma_log_step = (c_sigma / d_sigma) * (np.linalg.norm(self.p_sigma) / expected_norm - 1.0)
-            sigma_log_step = self.eta_sigma * float(np.clip(sigma_log_step, -0.5, 0.5))
-        else:
-            sigma_log_step = 0.5 * self.eta_sigma * grad_sigma
-            sigma_log_step = float(np.clip(sigma_log_step, -50.0, 50.0))
+        sigma_log_step = 0.5 * self.eta_sigma * grad_sigma
+        sigma_log_step = float(np.clip(sigma_log_step, -50.0, 50.0))
 
         self.sigma *= float(np.exp(sigma_log_step))
         if not np.isfinite(self.sigma):
@@ -269,8 +245,6 @@ class XNES:
             return XNESStatus.LOC_INF
         if not np.all(np.isfinite(self.B)):
             return XNESStatus.SCALE_INF
-        if not np.all(np.isfinite(self.p_sigma)):
-            return XNESStatus.STEP_SIZE_PATH_INF
 
         scale = self.scale
         if not np.all(np.isfinite(scale)):
@@ -281,7 +255,7 @@ class XNES:
             return XNESStatus.LOC_STEP_MIN
 
         try:
-            cond_scale = float(cond(scale))
+            cond_scale = float(cond(self.B))
         except np.linalg.LinAlgError:
             return XNESStatus.SCALE_COND_ERROR
         if not np.isfinite(cond_scale):

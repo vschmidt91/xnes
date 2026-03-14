@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "leitwerk"
-version = "0.6.2"
+version = "0.6.3"
 description = "Evolutionary strategy with file persistence and schema reconciliation."
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
@@ -32,6 +32,7 @@ benchmark = [
   "coco-experiment>=2.8.2,<3.0.0",
   "cocopp>=2.8.2,<3.0.0",
   "pandas>=3.0.1,<4.0.0",
+  "tqdm (>=4.67.3,<5.0.0)",
 ]
 
 [tool.setuptools]

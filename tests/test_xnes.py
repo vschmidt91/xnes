@@ -18,7 +18,6 @@ def test_xnes_rank_invariance_under_monotonic_transform() -> None:
     xnes_a = XNES(np.zeros(dim), np.eye(dim))
     xnes_b = XNES(np.zeros(dim), np.eye(dim))
     for xnes in (xnes_a, xnes_b):
-        xnes.csa_enabled = False
         xnes.eta_mu = 1.0
         xnes.eta_sigma = 0.8
         xnes.eta_B = 0.2
@@ -74,7 +73,6 @@ def test_xnes_linear_invariance_with_stress_values() -> None:
     xnes_x = XNES(mu, scale)
     xnes_y = XNES(transform @ mu + shift, transform @ scale)
     for xnes in (xnes_x, xnes_y):
-        xnes.csa_enabled = False
         xnes.eta_mu = 1.0
         xnes.eta_sigma = 0.7
         xnes.eta_B = 0.3
@@ -109,7 +107,6 @@ def test_xnes_linear_invariance_with_stress_values() -> None:
 
 def test_xnes_eta_B_scales_dimension_dependent_shape_rate() -> None:
     xnes = XNES(np.zeros(3), np.eye(3))
-    xnes.csa_enabled = False
     xnes.eta_mu = 0.0
     xnes.eta_sigma = 0.0
     xnes.eta_B = 0.2

@@ -14,7 +14,8 @@ from .schema import Parameter, SchemaDiff, SchemaSpec, parse_schema
 from .xnes import XNES, XNESStatus
 
 T = TypeVar("T")
-JSON: TypeAlias = Mapping[str, "JSON"] | Sequence["JSON"] | str | int | float | bool | None
+JSONObject: TypeAlias = dict[str, "JSON"]
+JSON: TypeAlias = JSONObject | list["JSON"] | str | int | float | bool | None
 _ResultRecord = tuple[float, ...] | None
 _SUCCESSFUL_TERMINATION_STATUSES = frozenset(
     {
@@ -66,14 +67,12 @@ class Optimizer(Generic[T]):
         schema_type: type[T] | Mapping[str, object],
         population_size: int | None = None,
         minimize: bool = False,
-        csa_enabled: bool = True,
         eta_mu: float = 1.0,
         eta_sigma: float = 1.0,
         eta_B: float = 1.0,
     ) -> None:
         self.population_size = population_size
         self.minimize = minimize
-        self.csa_enabled = csa_enabled
         self.eta_mu = eta_mu
         self.eta_sigma = eta_sigma
         self.eta_B = eta_B
@@ -85,21 +84,20 @@ class Optimizer(Generic[T]):
         self._xnes: XNES
         self._reset_distribution()
 
-    def save(self) -> dict[str, object]:
+    def save(self) -> JSONObject:
         """Serialize the current optimizer state into a JSON-compatible mapping."""
         self._require_idle("save")
         return {
             "schema": self._schema.state_schema(),
             "loc": self._xnes.mu.tolist(),
             "scale": self._xnes.scale.tolist(),
-            "step_size_path": self._xnes.p_sigma.tolist(),
             "batch": self._scheduler.batch.tolist(),
             "results": _serialize_results(self._scheduler.results),
             "context_pending": dict(self._scheduler.context_pending),
             "rng_state": dict(self._rng.bit_generator.state),
         }
 
-    def load(self, state: object) -> SchemaDiff:
+    def load(self, state: JSONObject) -> SchemaDiff:
         """Restore optimizer state from a previous snapshot.
 
         Loading a previous snapshot reconciles added, removed, and changed
@@ -107,33 +105,25 @@ class Optimizer(Generic[T]):
         shared learned state.
         """
         self._require_idle("load")
-        if state is None:
-            msg = "state must be a saved optimizer snapshot, not None."
-            raise TypeError(msg)
-
-        state_obj = cast(Mapping[str, object], state)
-
-        schema_json = cast(Mapping[str, object], state_obj["schema"])
+        schema_json = cast(JSONObject, state["schema"])
         saved_schema = _deserialize_schema(schema_json)
         saved_names = sorted(saved_schema)
-        loc = np.asarray(state_obj["loc"], dtype=float)
-        scale = np.asarray(state_obj["scale"], dtype=float)
-        step_size_path = np.asarray(state_obj["step_size_path"], dtype=float)
-        batch = _as_batch_matrix(state_obj["batch"], len(saved_names))
-        results = _deserialize_results(state_obj["results"])
-        context_pending = dict(cast(Mapping[str, int], state_obj["context_pending"]))
+        loc = np.asarray(state["loc"], dtype=float)
+        scale = np.asarray(state["scale"], dtype=float)
+        batch = _as_batch_matrix(state["batch"], len(saved_names))
+        results = _deserialize_results(state["results"])
+        context_pending = dict(cast(Mapping[str, int], state["context_pending"]))
 
         schema_diff = self._schema.diff(saved_schema)
-        loc, scale, step_size_path = self._reconcile_distribution_state(
+        loc, scale = self._reconcile_distribution_state(
             saved_names,
             schema_diff.unchanged,
             loc,
             scale,
-            step_size_path,
         )
 
-        self._rng.bit_generator.state = dict(cast(Mapping[str, object], state_obj["rng_state"]))
-        self._xnes = self._new_xnes(loc, scale, step_size_path)
+        self._rng.bit_generator.state = dict(cast(Mapping[str, object], state["rng_state"]))
+        self._xnes = self._new_xnes(loc, scale)
         self._pending_reservation = None
         if batch.shape[1] == 0:
             self._sample_batch()
@@ -143,10 +133,10 @@ class Optimizer(Generic[T]):
         return schema_diff
 
     def _reset_distribution(self, loc: np.ndarray | None = None) -> None:
-        reset_loc, scale, step_size_path = self._schema.initial_distribution()
+        reset_loc, scale = self._schema.initial_distribution()
         if loc is not None:
             reset_loc = np.array(loc, dtype=float, copy=True)
-        self._xnes = self._new_xnes(reset_loc, scale, step_size_path)
+        self._xnes = self._new_xnes(reset_loc, scale)
         self._sample_batch()
 
     def ask(self, context: JSON = None) -> T:
@@ -191,16 +181,14 @@ class Optimizer(Generic[T]):
         unchanged_names: list[str],
         loc: np.ndarray,
         scale: np.ndarray,
-        step_size_path: np.ndarray,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        reconciled_loc, reconciled_scale, reconciled_step_size_path = self._schema.initial_distribution()
+    ) -> tuple[np.ndarray, np.ndarray]:
+        reconciled_loc, reconciled_scale = self._schema.initial_distribution()
 
         saved_index = {name: idx for idx, name in enumerate(saved_names)}
         current_index = self._schema.index_by_name()
         shared_indices = [(current_index[name], saved_index[name]) for name in unchanged_names]
         for current_idx, saved_idx in shared_indices:
             reconciled_loc[current_idx] = float(loc[saved_idx])
-            reconciled_step_size_path[current_idx] = float(step_size_path[saved_idx])
 
         if shared_indices:
             shared_current_indices, shared_saved_indices = zip(*shared_indices, strict=True)
@@ -208,7 +196,7 @@ class Optimizer(Generic[T]):
                 np.ix_(shared_saved_indices, shared_saved_indices)
             ]
 
-        return reconciled_loc, reconciled_scale, reconciled_step_size_path
+        return reconciled_loc, reconciled_scale
 
     def _reconcile_batch_state(
         self,
@@ -242,13 +230,8 @@ class Optimizer(Generic[T]):
 
         return reconciled_batch
 
-    def _new_xnes(self, loc: np.ndarray, scale: np.ndarray, step_size_path: np.ndarray) -> XNES:
-        xnes = XNES(
-            loc,
-            scale,
-            p_sigma=step_size_path,
-        )
-        xnes.csa_enabled = self.csa_enabled
+    def _new_xnes(self, loc: np.ndarray, scale: np.ndarray) -> XNES:
+        xnes = XNES(loc, scale)
         xnes.eta_mu = self.eta_mu
         xnes.eta_sigma = self.eta_sigma
         xnes.eta_B = self.eta_B

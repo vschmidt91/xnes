@@ -33,4 +33,3 @@ from .schema import Parameter, SchemaDiff
 from .xnes import XNES, XNESStatus
 
 __all__ = ["Optimizer", "Parameter", "SchemaDiff", "TellResult", "XNES", "XNESStatus"]
-
