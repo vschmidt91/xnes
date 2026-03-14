@@ -82,6 +82,9 @@ class Optimizer(Generic[T]):
         self._scheduler = BatchScheduler()
         self._pending_reservation: Reservation | None = None
         self._xnes: XNES
+        self._total_samples = 0
+        self._num_batches = 0
+        self._num_restarts = 0
         self._reset_distribution()
 
     def save(self) -> JSONObject:
@@ -91,6 +94,7 @@ class Optimizer(Generic[T]):
             "schema": self._schema.state_schema(),
             "loc": self._xnes.mu.tolist(),
             "scale": self._xnes.scale.tolist(),
+            "status": self._status(),
             "batch": self._scheduler.batch.tolist(),
             "results": _serialize_results(self._scheduler.results),
             "context_pending": dict(self._scheduler.context_pending),
@@ -113,6 +117,7 @@ class Optimizer(Generic[T]):
         batch = _as_batch_matrix(state["batch"], len(saved_names))
         results = _deserialize_results(state["results"])
         context_pending = dict(cast(Mapping[str, int], state["context_pending"]))
+        status = cast(Mapping[str, int | float], state["status"])
 
         schema_diff = self._schema.diff(saved_schema)
         loc, scale = self._reconcile_distribution_state(
@@ -124,6 +129,7 @@ class Optimizer(Generic[T]):
 
         self._rng.bit_generator.state = dict(cast(Mapping[str, object], state["rng_state"]))
         self._xnes = self._new_xnes(loc, scale)
+        self._restore_status(status)
         self._pending_reservation = None
         if batch.shape[1] == 0:
             self._sample_batch()
@@ -166,6 +172,7 @@ class Optimizer(Generic[T]):
         result: float | Sequence[float] | np.ndarray,
     ) -> TellResult:
         completed_batch = self._scheduler.record_result(reservation, _normalize_result(result))
+        self._total_samples += 1
         if completed_batch:
             status, restarted = self._complete_batch()
             return TellResult(True, reservation.matched_context, status, restarted)
@@ -243,14 +250,33 @@ class Optimizer(Generic[T]):
         self._scheduler.reset(batch)
 
     def _complete_batch(self) -> tuple[XNESStatus, bool]:
+        self._num_batches += 1
         status = self._xnes.tell(self._scheduler.batch, self._ranking())
         restarted = status is not XNESStatus.OK
         if restarted:
+            self._num_restarts += 1
             restart_loc = self._xnes.mu if status in _SUCCESSFUL_TERMINATION_STATUSES else None
             self._reset_distribution(restart_loc)
         else:
             self._sample_batch()
         return status, restarted
+
+    def _restore_status(self, status: Mapping[str, int | float]) -> None:
+        self._total_samples = int(status["total_samples"])
+        self._num_batches = int(status["num_batches"])
+        self._num_restarts = int(status["num_restarts"])
+
+    def _status(self) -> JSONObject:
+        completed = sum(result is not None for result in self._scheduler.results)
+        return {
+            "total_samples": self._total_samples,
+            "num_batches": self._num_batches,
+            "num_restarts": self._num_restarts,
+            "num_parameters": self._xnes.dim,
+            "axis_ratio": self._xnes.axis_ratio,
+            "step_size": self._xnes.step_size,
+            "batch_progress": completed,
+        }
 
     def _reserve(self, context: str | None) -> Reservation:
         result = self._scheduler.reserve(context)

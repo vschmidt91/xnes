@@ -121,6 +121,37 @@ def _read_context_pending(state: object) -> dict[str, int]:
     return {str(context): int(sample_idx) for context, sample_idx in context_pending_json.items()}
 
 
+def _read_status(state: object) -> dict[str, int | float]:
+    assert isinstance(state, dict)
+    status_json = state["status"]
+    assert isinstance(status_json, Mapping)
+    assert list(status_json) == [
+        "total_samples",
+        "num_batches",
+        "num_restarts",
+        "num_parameters",
+        "axis_ratio",
+        "step_size",
+        "batch_progress",
+    ]
+    return {
+        "total_samples": int(status_json["total_samples"]),
+        "num_batches": int(status_json["num_batches"]),
+        "num_restarts": int(status_json["num_restarts"]),
+        "num_parameters": int(status_json["num_parameters"]),
+        "axis_ratio": float(status_json["axis_ratio"]),
+        "step_size": float(status_json["step_size"]),
+        "batch_progress": float(status_json["batch_progress"]),
+    }
+
+
+def _assert_same_status(actual: dict[str, int | float], expected: dict[str, int | float]) -> None:
+    for key in ("total_samples", "num_batches", "num_restarts", "num_parameters"):
+        assert actual[key] == expected[key]
+    for key in ("axis_ratio", "step_size", "batch_progress"):
+        assert actual[key] == pytest.approx(expected[key])
+
+
 def _softplus_inverse(value: float) -> float:
     return float(value + np.log1p(-np.exp(-value)))
 
@@ -209,6 +240,39 @@ def test_state_save_load_roundtrip() -> None:
     assert _read_schema(loaded) == _read_schema(state)
     assert np.allclose(_read_loc(loaded), _read_loc(state))
     assert np.allclose(_read_scale(loaded), _read_scale(state))
+    _assert_same_status(_read_status(loaded), _read_status(state))
+
+
+def test_status_block_exposes_basic_diagnostics_and_roundtrips() -> None:
+    schema = _make_identity_schema("BasicDiagnostics", alpha=(2.0, 1.5), beta=(-1.0, 1.5))
+    optimizer = _initialized_optimizer(schema, population_size=4)
+
+    initial_status = _read_status(optimizer.save())
+    assert initial_status == {
+        "total_samples": 0,
+        "num_batches": 0,
+        "num_restarts": 0,
+        "num_parameters": 2,
+        "axis_ratio": 1.0,
+        "step_size": 1.5,
+        "batch_progress": 0.0,
+    }
+
+    params = optimizer.ask()
+    optimizer.tell(-(params.alpha**2 + params.beta**2))
+    progressed_state = optimizer.save()
+    progressed_status = _read_status(progressed_state)
+    assert progressed_status["total_samples"] == 1
+    assert progressed_status["num_batches"] == 0
+    assert progressed_status["num_restarts"] == 0
+    assert progressed_status["num_parameters"] == 2
+    assert progressed_status["axis_ratio"] == pytest.approx(1.0)
+    assert progressed_status["step_size"] == pytest.approx(1.5)
+    assert progressed_status["batch_progress"] == 1
+
+    restored = _initialized_optimizer(schema, population_size=4)
+    restored.load(progressed_state)
+    _assert_same_status(_read_status(restored.save()), progressed_status)
 
 
 def test_schema_state_is_human_readable_parameter_specs() -> None:
@@ -783,6 +847,7 @@ def test_runtime_config_is_not_persisted_or_loaded() -> None:
     state = opt_a.save()
     assert isinstance(state, dict)
     assert "context_pending" in state
+    assert "status" in state
     assert "minimize" not in state
     assert "step_size_path" not in state
 
@@ -791,6 +856,7 @@ def test_runtime_config_is_not_persisted_or_loaded() -> None:
     loaded = opt_b.save()
     assert isinstance(loaded, dict)
     assert "context_pending" in loaded
+    assert "status" in loaded
     assert opt_b.minimize is False
     assert opt_b.eta_mu == 1.0
     assert opt_b.eta_sigma == 1.0
@@ -876,6 +942,10 @@ def test_successful_termination_restarts_from_final_mu_with_fresh_scale(
     state = optimizer.save()
     assert np.allclose(_read_loc(state), final_mu)
     assert np.allclose(_read_scale(state), np.diag([1.5, 0.7]))
+    assert _read_status(state)["total_samples"] == 4
+    assert _read_status(state)["num_batches"] == 1
+    assert _read_status(state)["num_restarts"] == 1
+    assert _read_status(state)["batch_progress"] == 0.0
 
 
 def test_failed_termination_restarts_from_schema_loc_with_fresh_scale(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -905,6 +975,10 @@ def test_failed_termination_restarts_from_schema_loc_with_fresh_scale(monkeypatc
     state = optimizer.save()
     assert np.allclose(_read_loc(state), np.array([2.0, -1.0]))
     assert np.allclose(_read_scale(state), np.diag([1.5, 0.7]))
+    assert _read_status(state)["total_samples"] == 4
+    assert _read_status(state)["num_batches"] == 1
+    assert _read_status(state)["num_restarts"] == 1
+    assert _read_status(state)["batch_progress"] == 0.0
 
 
 def test_save_load_preserves_optimizer_state() -> None:

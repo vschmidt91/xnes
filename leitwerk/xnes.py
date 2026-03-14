@@ -138,6 +138,23 @@ class XNES:
         return int(self.mu.size)
 
     @property
+    def step_size(self) -> float:
+        """Current global step size `sigma`."""
+
+        return float(self.sigma)
+
+    @property
+    def axis_ratio(self) -> float:
+        """Current principal-axis ratio of the scale transform."""
+
+        if self.dim <= 1:
+            return 1.0
+        try:
+            return float(cond(self.B))
+        except np.linalg.LinAlgError:
+            return np.inf
+
+    @property
     def scale(self) -> np.ndarray:
         """Current full scale matrix `sigma * B`."""
 
@@ -254,10 +271,7 @@ class XNES:
         if norm(mu_step, 2) < eps:
             return XNESStatus.LOC_STEP_MIN
 
-        try:
-            cond_scale = float(cond(self.B))
-        except np.linalg.LinAlgError:
-            return XNESStatus.SCALE_COND_ERROR
+        cond_scale = self.axis_ratio
         if not np.isfinite(cond_scale):
             return XNESStatus.SCALE_COND_INF
 
