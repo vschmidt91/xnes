@@ -50,12 +50,12 @@ class Optimizer(Generic[T]):
     Mapping schemas must be nested mappings with string keys and
     `Parameter(...)` leaves.
     The `ask()` / `tell()` interface is strictly sequential and keeps the
-    pending reservation inside the optimizer. `save()` is only allowed at idle
-    boundaries, i.e. when no `ask()` is pending. `load()` replaces the current
-    optimizer state and cancels any pending reservation. Optimizer state is
-    keyed by stable dotted leaf names plus persisted parameter definitions.
-    Field ordering is lexicographic by leaf name rather than declaration or
-    insertion order.
+    pending reservation inside the optimizer. `save()` only serializes
+    committed optimizer state and does not persist a pending reservation.
+    `load()` replaces the current optimizer state and cancels any pending
+    reservation. Optimizer state is keyed by stable dotted leaf names plus
+    persisted parameter definitions. Field ordering is lexicographic by leaf
+    name rather than declaration or insertion order.
 
     Results are ranked for maximization by default. Pass `minimize=True` to
     rank lower results as better instead. Runtime configuration stays local to
@@ -90,7 +90,6 @@ class Optimizer(Generic[T]):
 
     def save(self) -> JSONObject:
         """Serialize the current optimizer state into a JSON-compatible mapping."""
-        self._require_idle("save")
         return {
             "status": self._status(),
             "loc": self._xnes.mu.tolist(),

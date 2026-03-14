@@ -132,19 +132,11 @@ print(params.macro)
 
 Alternatively, use dictionaries and string-based access, see the [example above](#example-1).
 
-
  When `Optimizer.load()` detects a schema change, state is reconciled per parameter:
  - Parameters are identified by flattened name
  - Changes to `min`/`max` trigger a reset
  - Changes to `loc`/`scale` do not, but will be used for future resets
  - `load()` returns a `schema_diff` which reports parameters that were added/removed/changed/unchanged.
-
-> [!WARNING]
-> Call ordering is strict:
-> - after `ask()`, the next mutating call must be `tell()`
-> - `save()` is only valid while idle, i.e. after `tell()` and before the next `ask()`
-> - `load()` cancels any pending sample and replaces the current in-memory state
-> - `load()` replaces the current in-memory progress with the snapshot you pass in
 
 > [!TIP]
 > When the _meaning_ of a parameter changes, the optimizer won't know.
@@ -174,6 +166,9 @@ with params_file.open("w") as f:
 > [!WARNING]
 > Make sure the sign of the results and `Optimizer.minimize` match up!
 
+> [!NOTE]
+> Sampling is sequential, so `ask`/ `tell` cycles cannot overlap. Consecutive `ask` and `tell` will both raise.
+
 
 > [!TIP]
 > The right objective function is key.
@@ -184,16 +179,12 @@ with params_file.open("w") as f:
 
 ---
 
-## Local Development
-
-### Commands
+## Developer Commands
 
 - `make check` : linting + tests
 - `make fix`: auto-format
 - `make docs`: build docs
 - `make docs-serve`: serve docs locally
-
----
 
 ## Context Matching (optional)
 
@@ -245,12 +236,11 @@ If context is provided, `leitwerk` uses it for mirror sampling: [^3]
   - `eta_sigma = 1.0`
   - `eta_B = 1.0` with the canonical dimension factor [^1]
 
-## License
-
-This project is licensed under the terms of the MIT license.
-
 [^1]: https://people.idsia.ch/~tom/publications/xnes.pdf
 [^2]: https://github.com/CMA-ES/pycma
 [^3]: https://www.researchgate.net/publication/266087889_Mirrored_Orthogonal_Sampling_with_Pairwise_Selection_in_Evolution_Strategies
 [^4]: https://numbbo.github.io/coco/testsuites/bbob
 
+## License
+
+This project is licensed under the terms of the MIT license.

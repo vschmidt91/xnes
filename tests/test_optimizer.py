@@ -845,14 +845,35 @@ def test_load_cancels_pending_ask_and_replaces_state() -> None:
     assert np.allclose(_read_batch(restored_state), _read_batch(state))
 
 
-def test_save_raises_with_pending_ask() -> None:
+def test_save_ignores_pending_ask_and_snapshots_committed_state() -> None:
     schema = _make_identity_schema("PendingSave", x=(0.0, 1.0))
     optimizer = _initialized_optimizer(schema, population_size=4)
+    initial_state = optimizer.save()
 
-    optimizer.ask()
+    params = optimizer.ask()
+    saved_state = optimizer.save()
 
-    with pytest.raises(RuntimeError, match="Pending ask"):
-        optimizer.save()
+    assert _read_results(saved_state) == _read_results(initial_state)
+    assert np.allclose(_read_loc(saved_state), _read_loc(initial_state))
+    assert np.allclose(_read_scale(saved_state), _read_scale(initial_state))
+    assert np.allclose(_read_batch(saved_state), _read_batch(initial_state))
+
+    optimizer.tell(params.x)
+
+    progressed_state = optimizer.save()
+    assert sum(result is not None for result in _read_results(progressed_state)) == 1
+
+    restored = _initialized_optimizer(schema, population_size=4)
+    restored.load(saved_state)
+
+    with pytest.raises(RuntimeError, match="No pending ask"):
+        restored.tell(params.x)
+
+    restored_state = restored.save()
+    assert _read_results(restored_state) == _read_results(initial_state)
+    assert np.allclose(_read_loc(restored_state), _read_loc(initial_state))
+    assert np.allclose(_read_scale(restored_state), _read_scale(initial_state))
+    assert np.allclose(_read_batch(restored_state), _read_batch(initial_state))
 
 
 def test_load_discards_unsaved_local_progress_at_idle_boundary() -> None:
