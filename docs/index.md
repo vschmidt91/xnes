@@ -6,12 +6,14 @@ update rule and a strict schema-first wrapper.
 It is designed for expensive, stateful evaluation loops where you want to tune
 scalar parameters, checkpoint progress, and optionally route mirrored samples
 by context using `ask(context=...)`. Runtime parameters are exposed directly as
-typed dataclass instances or nested plain dicts. Training is strictly
-sequential: call `ask()`, evaluate once, then call `tell()`. `save()` is only
-supported at idle boundaries, i.e. when no `ask()` is pending. `load()`
-replaces the current state and cancels any pending sample. For deterministic
-inference, use `mean` to read the current means without sampling.
-`expectation` is an alias.
+typed dataclass instances or nested plain dicts. Training keeps at most one
+pending sample: call `ask()`, evaluate once, then call `tell()`. A second
+`ask()` before `tell()` raises, and `tell()` without a pending `ask()` raises.
+`save()` snapshots committed state only and does not persist a pending
+reservation, so saving after `ask()` and reloading later rewinds to before that
+`ask()`. `load()` may be called at any time; it replaces the current state and
+cancels any pending sample. For deterministic inference, use `mean` to read
+the current means without sampling. `expectation` is an alias.
 
 The docs are split into two parts:
 
@@ -24,5 +26,7 @@ each scalar. State layout is lexicographic by field name, so declaration order
 does not affect persistence, and saved schema definitions remain human-readable.
 Context matching uses JSON-compatible labels normalized into stable strings for
 mirror reuse and persistence. Loading a saved snapshot may intentionally
-discard unsaved local progress. Mean snapshots from `mean` are returned
-directly as the schema type.
+discard unsaved local progress, and in-flight evaluations are never resumable
+from disk because pending reservations are ephemeral. For exact restart
+semantics, checkpoint after `tell()`, not after `ask()`. Mean snapshots from
+`mean` are returned directly as the schema type.

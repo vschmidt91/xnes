@@ -47,13 +47,21 @@ unfinished batch is reconciled rather than discarded.
 
 Training loop: call `ask`, evaluate `params.field`, then call `tell(result)`.
 
-`ask()` / `tell()` is strictly sequential. After `ask()` returns, the next
-mutating call must be `tell()`. `save()` is only supported at idle boundaries,
-i.e. when no `ask()` is pending. `load()` cancels any pending sample and
-replaces the current state.
+`ask()` / `tell()` is single-flight: at most one sample may be pending.
+Calling `ask()` twice in a row raises, and `tell()` without a pending `ask()`
+raises.
 
-`load()` may intentionally discard unsaved local progress from earlier
-`tell()` calls.
+Persistence edge cases:
+
+- `save()` may be called while an `ask()` is pending, but it snapshots only
+  committed state. The pending reservation is not serialized.
+- `load()` may be called while an `ask()` is pending; it cancels that pending
+  sample and replaces the current state.
+- if you `save()` after `ask()` and later `load()` that snapshot, the in-flight
+  sample is gone and its later `tell()` will fail with `No pending ask`
+- `load()` may intentionally discard unsaved local progress from earlier
+  `tell()` calls
+- for exact restart semantics, checkpoint after `tell()`, not after `ask()`
 
 For deterministic inference, read `mean` or its alias `expectation`. If you want the means from a
 saved run rather than a fresh optimizer, call `load(...)` first.

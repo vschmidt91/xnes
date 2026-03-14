@@ -1,4 +1,5 @@
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass, fields, is_dataclass
 from pathlib import Path
 from typing import Annotated, SupportsFloat, cast
@@ -13,6 +14,8 @@ from sc2.data import Difficulty, Race, Result
 from sc2.ids.unit_typeid import UnitTypeId
 from sc2.main import run_game
 from sc2.player import Bot, Computer
+from sc2.position import Point2
+from scipy.spatial.distance import pdist, squareform
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA_PATH = ROOT / "data"
@@ -25,13 +28,13 @@ MOVING_AVERAGE_WINDOW = 10
 
 @dataclass
 class BotParams:
-    attack_threshold: Annotated[float, Parameter(min=0, max=1)]
-    retreat_threshold: Annotated[float, Parameter(min=0, max=1)]
+    max_group_distance: Annotated[float, Parameter(loc=3, scale=3, min=0)]  # stay together
+    shield_threshold: Annotated[float, Parameter(min=0, max=1)]  # retreat for regen
 
 
 class LearningBot(BotAI):
     optimizer = Optimizer(BotParams)
-    params: BotParams
+    params: BotParams | None = None
 
     async def on_start(self) -> None:
         self.townhalls[0].train(UnitTypeId.PROBE)
@@ -41,22 +44,49 @@ class LearningBot(BotAI):
                 state = json.load(f)
             diff = self.optimizer.load(state)
             logger.info(diff)
-        context = self.enemy_race.name if self.enemy_race else "unknown"  # optional: matchup-based mirror sampling
+
+        # sammple now if enemy race is known, wait for vision otherwise
+        if self.enemy_race in {Race.Protoss, Race.Terran, Race.Zerg}:
+            self.sample_params(self.enemy_race)
+
+    def sample_params(self, enemy_race: Race) -> None:
+        if self.params is not None:
+            # multiple ask calls are not supported
+            return
+        context = {
+            "enemy_race": enemy_race.name,
+        }
+        logger.info(f"{context=}")
         self.params = self.optimizer.ask(context)
-        logger.info(self.params)
+        logger.info(f"{self.params=}")
 
     async def on_step(self, iteration: int) -> None:
-        mineral_patch = self.mineral_field.closest_to(self.start_location)
-        for worker in self.workers:
-            if worker.shield_percentage > self.params.attack_threshold:
-                if self.enemy_structures:
-                    worker.attack(self.enemy_structures.random.position)
-                else:
+
+        # delayed sampling
+        if self.params is None:
+            if self.all_enemy_units:
+                self.sample_params(self.all_enemy_units.first.race)
+            else:
+                for worker in self.workers:
                     worker.attack(self.enemy_start_locations[0])
-            elif worker.shield_health_percentage < self.params.retreat_threshold:
+            return
+
+        mineral_patch = self.mineral_field.closest_to(self.start_location)
+        group_center = _medoid([u.position for u in self.workers]) if self.workers else self.start_location
+        for worker in self.workers:
+            if worker.distance_to(group_center) > self.params.max_group_distance:
+                worker.move(group_center)
+            elif worker.shield_percentage < self.params.shield_threshold:
                 worker.gather(mineral_patch)
+            elif self.enemy_structures:
+                worker.attack(self.enemy_structures.random.position)
+            else:
+                worker.attack(self.enemy_start_locations[0])
+
+        # resign for speedup
         if self.supply_used == 0:
-            await self.client.debug_kill_unit(self.structures)
+            await self.client.chat_send("gg", False)
+            await self.client.leave()
 
     async def on_end(self, game_result: Result) -> None:
         outcome = {
@@ -66,9 +96,9 @@ class LearningBot(BotAI):
         }[game_result]
 
         efficiency = np.log1p(self.state.score.killed_value_units) - np.log1p(self.state.score.lost_minerals_economy)
-        score = (outcome, efficiency)
-        logger.info(score)
-        tell_result = self.optimizer.tell(score)
+        result = (outcome, efficiency)
+        logger.info(f"{result=}")
+        tell_result = self.optimizer.tell(result)
         logger.info(tell_result)
         history = load_history()
         history.append({"outcome": outcome, "efficiency": efficiency, **flatten_numeric_fields(self.params)})
@@ -77,6 +107,16 @@ class LearningBot(BotAI):
         state = self.optimizer.save()
         with PARAMS_FILE.open("w", encoding="utf-8") as f:
             json.dump(state, f, indent=2)
+
+
+def _medoid(points: Sequence[Point2]) -> Point2:
+    distances = _pairwise_distances(points)
+    medoid_index = distances.sum(axis=1).argmin()
+    return points[medoid_index]
+
+
+def _pairwise_distances(positions) -> np.ndarray:
+    return squareform(pdist(positions), checks=False)
 
 
 def load_history() -> list[dict[str, float]]:
@@ -163,7 +203,7 @@ def main() -> None:
     while True:
         run_game(
             maps.Map(MAP_FILE),
-            [Bot(Race.Protoss, LearningBot()), Computer(Race.Protoss, Difficulty.CheatInsane)],
+            [Bot(Race.Protoss, LearningBot()), Computer(Race.Random, Difficulty.CheatInsane)],
             realtime=False,
         )
 
