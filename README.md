@@ -1,20 +1,19 @@
-![Leitwerk](docs/logo.png)
+<p align="center">
+  <img src="docs/logo.png" alt="Leitwerk">
+</p>
 
 <h1 align="center">Leitwerk</h1>
 <p align="center">
   <em>Tune your magic numbers with mathematics</em>
 </p>
 
----
-
 `leitwerk` is an evolutionary optimizer with typed paramers and persistence.
-Wire up the control knobs, strap it to your machinery and let it fly.
 
 - **Simple** : Start from existing values without much setup
 - **Persistent** : The optimizer lives inside a JSON file
 - **Dynamic** : Keep developing without losing progress
 
-## Installation
+---
 
 Requires: Python 3.11+
 
@@ -24,7 +23,7 @@ For a minimal setup, run:
 $ pip install .
 ```
 
-or for a full dev setup that can run the StarCraft example:
+or for a full setup with tests/linting, notebook support and `burnysc2`:
 
 ```sh
 $ pip install -e .[dev,docs,benchmark]
@@ -48,7 +47,7 @@ print(opt.mean)
 
 ## Example 2 - Starcraft II Bot
 
-For a full example with typed schemas and persistence, run:
+For a more complete example with typed schema and persistence, run:
 
 ```sh
 $ python examples/train_sc2_bot.py
@@ -57,11 +56,13 @@ $ python examples/train_sc2_bot.py
 This trains a simple probe rush with two parameters against the hardest built-in AI.
 The optimizer state is stored in `./data/params.json` and is somewhat human-readable, so have a look.
 
-## Integration Guide
+---
 
-To use `leitwerk` in an existing setup, you usually have to split up the loop and use `load()` / `save()` for persistence (if necessary).
+# User Guide
 
-### 1. Preflight Check
+To use `leitwerk` in an existing setup, you usually have to split the loop and use `load()` / `save()` for persistence (if necessary).
+
+## 1. Preflight Check
 
 Define your parameter schema as an annotated dataclass:
 
@@ -73,25 +74,27 @@ from typing import Annotated
 from leitwerk import Optimizer, Parameter
 
 @dataclass
-class Params:
+class CombatParams:
     attack_threshold: Annotated[float, Parameter()]                     # standard normal N(0, 1)
-    army_priority: Annotated[float, Parameter(loc=3.0, scale=0.5)]      # or mean +/- std
-    skirmish_range: Annotated[float, Parameter(min=5, max=10)]          # or lower/upper bounds
-    worker_target: Annotated[float, Parameter(loc=50, scale=10, min=1)] # or a mix
+    skirmish_range: Annotated[float, Parameter(loc=5.0, scale=1.5)]     # or mean +/- std
+
+@dataclass
+class MacroParams:
+    army_priority: Annotated[float, Parameter(min=0, max=1)]            # or lower/upper bounds
+    worker_limit: Annotated[float, Parameter(loc=66, scale=10, min=12)] # or a mix
+
+@dataclass
+class Params:
+    combat: CombatParams                                                # nested dataclasses for grouping (optional)
+    macro: MacroParams
 ```
 
 This tells the optimizer how to seed the initial population:
 
-- `loc` : initial best guess (prior median in user-space)
-- `scale` : initial spread/uncertainty  (prior standard deviation in latent space)
-- `min` and `max` : hard bounds (enforced with soft-plus/sigmoid transformations)
+- `loc` is the initial best guess (prior median)
+- `scale` is the initial spread/uncertainty  (prior standard deviation in latent space)
+- `min` and `max` are hard bounds (modeled as soft-plus/sigmoid activations)
 - most combinations work, see [Optimizer details](#optimization-details)
-
-Samples are typed, so IntelliSense and type-checking should work.
-Dictionaries are also supported, see the [example above](#example-1)
-
-> [!TIP]
-> Use nested schemas to group the parameters into blocks, `leitwerk` understands tree structures.
 
 ### 2. Takeoff
 
@@ -108,7 +111,7 @@ if params_file.exists():
 params = opt.ask()
 ```
 
-`Optimizer()` takes a few optional arguments:
+`Optimizer(Params)` takes a few optional arguments:
 
 - `minimize` : switch to minimization mode (default: `False`)
 - `population_size` : number of samples per batch (default: `4 + int(3 * log(num_params))`)
@@ -118,16 +121,35 @@ params = opt.ask()
 > These are runtime settings, so your code is the single source of truth for config.
 > The persisted state is strictly for optimization progress.
 
+Parameters are typed for proper IntelliSense and type-checking:
+
+```py
+print(params.combat)
+# CombatParams(attack_threshold=-0.35633796355282366, skirmish_range=3.427746197055024)
+print(params.macro)
+# MacroParams(army_priority=0.8041272429029714, worker_limit=74.90326494070536)
+```
+
+Alternatively, use dictionaries and string-based access, see the [example above](#example-1).
+
+
  When `Optimizer.load()` detects a schema change, state is reconciled per parameter:
  - Parameters are identified by flattened name
  - Changes to `min`/`max` trigger a reset
  - Changes to `loc`/`scale` do not, but will be used for future resets
  - `load()` returns a `schema_diff` which reports parameters that were added/removed/changed/unchanged.
 
+> [!WARNING]
+> Call ordering is strict:
+> - after `ask()`, the next mutating call must be `tell()`
+> - `save()` is only valid while idle, i.e. after `tell()` and before the next `ask()`
+> - `load()` cancels any pending sample and replaces the current in-memory state
+> - `load()` replaces the current in-memory progress with the snapshot you pass in
+
 > [!TIP]
-> When the _meaning_ of a parameter changes, the optimizer cannot know.
+> When the _meaning_ of a parameter changes, the optimizer won't know.
 > It might take a long time to adapt if the new optimum is far away.
-> Consider renaming the parameter and providing a fresh `loc`/ `scale`.
+> Consider renaming the parameter and providing a new `loc`/ `scale` for a targeted reset.
 
 ### 3. Landing
 

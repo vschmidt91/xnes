@@ -7,10 +7,11 @@ It is designed for expensive, stateful evaluation loops where you want to tune
 scalar parameters, checkpoint progress, and optionally route mirrored samples
 by context using `ask(context=...)`. Runtime parameters are exposed directly as
 typed dataclass instances or nested plain dicts. Training is strictly
-sequential: call `ask()`, evaluate once, then call `tell()`. `save()` and
-`load()` are only supported at idle boundaries, i.e. when no `ask()` is
-pending. For deterministic inference, use `mean` to read the current means
-without sampling. `expectation` is an alias.
+sequential: call `ask()`, evaluate once, then call `tell()`. `save()` is only
+supported at idle boundaries, i.e. when no `ask()` is pending. `load()`
+replaces the current state and cancels any pending sample. For deterministic
+inference, use `mean` to read the current means without sampling.
+`expectation` is an alias.
 
 The docs are split into two parts:
 
@@ -22,6 +23,6 @@ as `Annotated[float, Parameter(...)]`, with optional `min` and `max` bounds on
 each scalar. State layout is lexicographic by field name, so declaration order
 does not affect persistence, and saved schema definitions remain human-readable.
 Context matching uses JSON-compatible labels normalized into stable strings for
-mirror reuse and persistence. Loading at an idle boundary may intentionally
+mirror reuse and persistence. Loading a saved snapshot may intentionally
 discard unsaved local progress. Mean snapshots from `mean` are returned
 directly as the schema type.

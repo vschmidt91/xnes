@@ -50,11 +50,12 @@ class Optimizer(Generic[T]):
     Mapping schemas must be nested mappings with string keys and
     `Parameter(...)` leaves.
     The `ask()` / `tell()` interface is strictly sequential and keeps the
-    pending reservation inside the optimizer. `load()` and `save()` are only
-    allowed at idle boundaries, i.e. when no `ask()` is pending. Optimizer
-    state is keyed by stable dotted leaf names plus persisted parameter
-    definitions. Field ordering is lexicographic by leaf name rather than
-    declaration or insertion order.
+    pending reservation inside the optimizer. `save()` is only allowed at idle
+    boundaries, i.e. when no `ask()` is pending. `load()` replaces the current
+    optimizer state and cancels any pending reservation. Optimizer state is
+    keyed by stable dotted leaf names plus persisted parameter definitions.
+    Field ordering is lexicographic by leaf name rather than declaration or
+    insertion order.
 
     Results are ranked for maximization by default. Pass `minimize=True` to
     rank lower results as better instead. Runtime configuration stays local to
@@ -106,9 +107,10 @@ class Optimizer(Generic[T]):
 
         Loading a previous snapshot reconciles added, removed, and changed
         schema leaves by persisted transform compatibility while preserving
-        shared learned state.
+        shared learned state. Any pending `ask()` reservation on the current
+        instance is canceled.
         """
-        self._require_idle("load")
+        self._pending_reservation = None
         schema_json = cast(JSONObject, state["schema"])
         saved_schema = _deserialize_schema(schema_json)
         saved_names = sorted(saved_schema)

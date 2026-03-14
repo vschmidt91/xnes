@@ -826,15 +826,23 @@ def test_tell_raises_without_pending_ask() -> None:
         optimizer.tell(0.0)
 
 
-def test_load_raises_with_pending_ask() -> None:
+def test_load_cancels_pending_ask_and_replaces_state() -> None:
     schema = _make_identity_schema("PendingLoad", x=(0.0, 1.0))
     optimizer = _initialized_optimizer(schema, population_size=4)
     state = optimizer.save()
 
-    optimizer.ask()
+    params = optimizer.ask()
 
-    with pytest.raises(RuntimeError, match="Pending ask"):
-        optimizer.load(state)
+    optimizer.load(state)
+
+    with pytest.raises(RuntimeError, match="No pending ask"):
+        optimizer.tell(params.x)
+
+    restored_state = optimizer.save()
+    assert _read_results(restored_state) == _read_results(state)
+    assert np.allclose(_read_loc(restored_state), _read_loc(state))
+    assert np.allclose(_read_scale(restored_state), _read_scale(state))
+    assert np.allclose(_read_batch(restored_state), _read_batch(state))
 
 
 def test_save_raises_with_pending_ask() -> None:
