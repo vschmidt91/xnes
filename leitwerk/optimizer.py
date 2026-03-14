@@ -14,8 +14,11 @@ from .schema import Parameter, SchemaDiff, SchemaSpec, parse_schema
 from .xnes import XNES, XNESStatus
 
 T = TypeVar("T")
-JSONObject: TypeAlias = dict[str, "JSON"]
-JSON: TypeAlias = JSONObject | list["JSON"] | str | int | float | bool | None
+JSONScalar: TypeAlias = str | int | float | bool | None
+JSONObject: TypeAlias = dict[str, "JSONValue"]
+JSONValue: TypeAlias = JSONObject | list["JSONValue"] | JSONScalar
+JSONLikeObject: TypeAlias = Mapping[str, "JSONLike"]
+JSONLike: TypeAlias = JSONLikeObject | Sequence["JSONLike"] | JSONScalar
 _SUCCESSFUL_TERMINATION_STATUSES = frozenset(
     {
         XNESStatus.SIGMA_MIN,
@@ -118,7 +121,7 @@ class Optimizer(Generic[T]):
         batch = _as_batch_matrix(state["batch"], len(saved_names))
         results = _deserialize_results(state["results"])
         context_pending = dict(cast(Mapping[str, int], state["context_pending"]))
-        status = cast(Mapping[str, JSON], state["status"])
+        status = cast(Mapping[str, JSONValue], state["status"])
 
         schema_diff = self._schema.diff(saved_schema)
         loc, scale = self._reconcile_distribution_state(
@@ -146,7 +149,7 @@ class Optimizer(Generic[T]):
         self._xnes = self._new_xnes(reset_loc, scale)
         self._sample_batch()
 
-    def ask(self, context: JSON = None) -> T:
+    def ask(self, context: JSONLike = None) -> T:
         """Reserve one sampled parameter set for one evaluation.
 
         Context matching uses exact string equality. Non-string contexts are
@@ -263,7 +266,7 @@ class Optimizer(Generic[T]):
             self._sample_batch()
         return status, restarted
 
-    def _restore_status(self, status: Mapping[str, JSON]) -> None:
+    def _restore_status(self, status: Mapping[str, JSONValue]) -> None:
         self._total_samples = int(cast(int | float, status["total_samples"]))
         self._num_batches = int(cast(int | float, status["num_batches"]))
         self._num_restarts = int(cast(int | float, status["num_restarts"]))
@@ -336,7 +339,7 @@ def _normalize_result(result: float | Sequence[float] | np.ndarray) -> tuple[flo
     raise TypeError(msg)
 
 
-def _normalize_context(context: JSON) -> str | None:
+def _normalize_context(context: JSONLike) -> str | None:
     if context is None or isinstance(context, str):
         return context
     try:

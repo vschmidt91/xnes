@@ -115,7 +115,7 @@ def _medoid(points: Sequence[Point2]) -> Point2:
     return points[medoid_index]
 
 
-def _pairwise_distances(positions) -> np.ndarray:
+def _pairwise_distances(positions: Sequence[Point2]) -> np.ndarray:
     return squareform(pdist(positions), checks=False)
 
 
