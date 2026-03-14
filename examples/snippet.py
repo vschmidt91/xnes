@@ -1,13 +1,12 @@
 from leitwerk import Optimizer, Parameter
 
-opt = Optimizer({"x": Parameter(), "y": Parameter()}, minimize=True)
+def f(x1, x2):
+    return (x1 - 1)**2 + (x2 - 1)**2  # minimum at (1, 1)
 
-def f(x, y):
-    return (x - 1)**2 + (y - 1)**2
+opt = Optimizer({"x1": Parameter(), "x2": Parameter()}, minimize=True)
 
 for _ in range(100):
-    trial, params = opt.ask()
-    opt.tell(trial, f(**params))
+    x = opt.ask()
+    opt.tell(f(**x))
 
 print(opt.ask_best())
-# {'x': 1.007115753775713, 'y': 0.9922700335131514}

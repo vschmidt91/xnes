@@ -91,13 +91,13 @@ class Optimizer(Generic[T]):
         """Serialize the current optimizer state into a JSON-compatible mapping."""
         self._require_idle("save")
         return {
-            "schema": self._schema.state_schema(),
+            "status": self._status(),
             "loc": self._xnes.mu.tolist(),
             "scale": self._xnes.scale.tolist(),
-            "status": self._status(),
-            "batch": self._scheduler.batch.tolist(),
+            "schema": self._schema.state_schema(),
             "results": _serialize_results(self._scheduler.results),
             "context_pending": dict(self._scheduler.context_pending),
+            "batch": self._scheduler.batch.tolist(),
             "rng_state": dict(self._rng.bit_generator.state),
         }
 
@@ -267,6 +267,7 @@ class Optimizer(Generic[T]):
         self._num_restarts = int(cast(int | float, status["num_restarts"]))
 
     def _status(self) -> JSONObject:
+        batch_size = len(self._scheduler.results)
         completed = sum(result is not None for result in self._scheduler.results)
         return {
             "total_samples": self._total_samples,
@@ -276,6 +277,7 @@ class Optimizer(Generic[T]):
             "axis_ratio": self._xnes.axis_ratio,
             "step_size": self._xnes.step_size,
             "batch_progress": completed,
+            "batch_size": batch_size,
             "population_size": self.population_size,
             "minimize": self.minimize,
             "eta_mu": self.eta_mu,

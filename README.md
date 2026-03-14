@@ -7,23 +7,61 @@
 
 ---
 
-`leitwerk` is an evolutionary optimizer that you can strap onto your self play loop.
-Handcraft some parameters, set up the training and let it fly.
+`leitwerk` is an evolutionary optimizer you can strap onto your Bot, Simulation or Game AI.
+Handcraft some parameters, set up the loop and let it fly.
 
 ## Features
 
 - **Easy** : Start from existing values without much setup
-- **Persistent** : State lives in human-readable JSON
+- **Persistent** : Optimizer lives in a JSON file
 - **Dynamic** : Keep developing without losing progress
 - **Efficient** : Canonical xNES [^1] implementation, benchmarked against `cma` [^2] on BBOB [^4]
 
-Requires Python 3.11+ and not much else.
+## Installation
 
-## API
+Requires Python 3.11+
+
+```sh
+poetry install --all-extras
+```
+
+## Example 1
+
+On a base level, `leitwerk` is a function optimizer with an `ask`/`tell` interface:
+
+```py
+from leitwerk import Optimizer, Parameter
+
+def f(x1, x2):
+    return (x1 - 1)**2 + (x2 - 1)**2  # minimum at (1, 1)
+
+opt = Optimizer({"x1": Parameter(), "x2": Parameter()}, minimize=True)
+
+for _ in range(100):
+    x = opt.ask()
+    opt.tell(f(**x))
+
+print(opt.ask_best())
+# {'x1': 0.9943998488500848, 'x2': 1.0003564039700967}
+```
+
+## Example 2 - Worker Rush Bot
+
+To see persistence in action, run:
+
+```sh
+poetry run python examples/train_sc2_bot.py
+```
+
+This trains a simple probe rush bot with two parameters against the hardest built-in AI.
+Optimizer state is persisted in `./data/params.json`.
+It is somewhat human-readable, so have a look.
+
+## API Summary
 
 ```py
 class Parameter:
-    def __init__(self, loc=0.0, scale=1.0, min=None, max=None):
+    def __init__(self, loc=None, scale=1.0, min=None, max=None):
       
 class Optimizer[T]:
     def __init__(self, Schema, ...):
@@ -33,204 +71,101 @@ class Optimizer[T]:
     def save(self) -> JSON:
 ```
 
-## Example
+## Integration Guide
 
-If persistence is not required, `leitwerk` is a standard `ask`/`tell` function optimizer:
+### 1. Preflight Check
 
-```py
-from leitwerk import Optimizer, Parameter
-
-def f(x1, x2):
-    return (x1 - 1)**2 + (x2 - 1)**2  # minimum is at (1, 1)
-
-opt = Optimizer({"x1": Parameter(), "x2": Parameter()}, minimize=True)
-
-for _ in range(100):
-    x = opt.ask()
-    if opt.tell(f(**x)).restarted:
-
-print(opt.ask_best())
-# {'x1': 1.007115753775713, 'x2': 0.9922700335131514}
-```
-
-# Usage
-
-## 1. Parameter Schema
-
-**Preflight Check** : Describe your tuning knobs as an annotated dataclass:
+Define your parameter schema as an annotated dataclass:
 
 ```py
 @dataclass
 class Params:
-    army_priority: Annotated[float, Parameter(loc=3.0, scale=0.5)]      # mean + std
+    attack_threshold: Annotated[float, Parameter()]                     # standard normal N(0, 1)
+    army_priority: Annotated[float, Parameter(loc=3.0, scale=0.5)]      # or mean + std
     skirmish_range: Annotated[float, Parameter(min=5, max=10)]          # or lower/upper bounds
-    worker_target: Annotated[float, Parameter(loc=50, scale=10, min=1)] # or mixed
+    worker_target: Annotated[float, Parameter(loc=50, scale=10, min=1)] # or a mix
 ```
 
-This is the type you will receive as samples, which plays nice with IntelliSense and type-checks.
-Alternatively, use plain dictionaries, see the [example below](#example-1-function-minimization)
+This tells the optimizer how to seed the population:
 
-- `loc` and `scale` are your best guess and spread/uncertainty, used for initial population and resets.
-- `min` and `max` are hard limits
+- `loc` : initial best guess (prior median in user-space)
+- `scale` : initial spread/uncertainty  (prior standard deviation in latent space)
+- `min` and `max` : asymptotic bounds (enforced as soft-plus/sigmoid transformations)
 - most combinations work, see [Optimizer details](#optimization-details)
 
+Samples are typed, so IntelliSense and type-checking work.
+Alternatively, you can use plain dictionaries, see the [example below](#example-1-function-minimization)
+
 > [!TIP]
-> Use nested schemas to group the parameters into blocks, it understands tree structures.
+> Use nested schemas to group the parameters into blocks, `leitwerk` understands tree structures.
 
-## 2. Configuration
+### 2. Takeoff
 
-**Engine Ignition** : Start the optimizer with the schema and old state if there is one:
+Create the optimizer with your schema and old state (if present):
 
 ```py
-def on_start(self):
-    self.optimizer = Optimizer(Params)
-    with open("./data/params.json") as f:
-        schema_diff = self.optimizer.load(json.load(f))
-    self.params = self.optimizer.ask()
+opt = Optimizer(Params)
+params_file = Path("params.json")
+if params_file.exists():
+    with params_file.open() as f:
+        schema_diff = opt.load(json.load(f))  # load restores learned state, not constructor options
+params = opt.ask()
+```
+
+Optional optimizer arguments:
+
+- `population_size` : number of samples per optimizer step
+- `minimize` : switches to minimization mode
+- `eta_mu`, `eta_sigma`, `eta_B` : tunable learning rates [^1]
+
+> [!NOTE]
+> When the schema changes, state is reconciled per parameter.
+> - Parameters are identified by their flattened name
+> - `schema_diff` is a report of added/removed/changed/unchanged parameters
+> - Changes to `min`/`max` trigger a reset
+
+> [!TIP]
+> When the _meaning_ of a parameter changes, the optimizer cannot know.
+> It will adapt eventually - alternatively, rename the parameter to trigger a selective reset.
+
+### 3. Landing
+
+When you see the result, encode it as one or more numbers:
+
+```py
+prio1 = +1 if win else 0
+prio2 = calc_heuristic()
+report = opt.tell((prio1, prio2))
+with params_file.open("w") as f:
+    json.dump(opt.save(), f)
 ```
 
 > [!NOTE]
-> Schema changes can be reconciled a degree:
-> - Parameters are identified by flattened names
-> - When `min`/`max` change, the Parameter is reset using `loc` and `scale`
-> - `SchemaDiff` is a report of added/removed/changed parameters
-
-> [!TIP]
-> When you change how the parameter is used, `leitwerk` cannot know. It might adapt anyway - or consider renaming it.
-
-## 3. Objective Function
-
-**Liftoff** : When you can see the result, encode it as one or more numbers:
-
-```py
-def on_end(self, result):
-    # your evaluation logic
-    elo = {Result.Victory: +4, Result.Tie: 0, Result.Defeat: -4}[result]
-    heuristic = self.state.score.total_damage_dealt_life / max(1, self.state.score.total_damage_taken_life)
-    result = self.opt.tell((elo, heuristic))
-    with open("./data/params.json", "w") as f:
-        json.dump(opt.save(), f)
-```
-
-This will select towards wins and use a heuristic as secondary ranking.
-
+> - Result tuples are compared lexicographically with higher=better
+> - Only ranking matters, not objective magnitudes
+> - `Optimizer(..., minimize=True)` switches to minimization mode
 
 > [!IMPORTANT]
-> The objective function is your secret sauce.
-> - Binary loss is fine, but slow
-> - Unit Counts? Army Value? Income?
-> - If the objective changes drastically, consider a reset
-> - Result tuples are compared lexicographically with higher=better (enable minimization with `minimize=True`)
-
-That's it. `leitwerk` is ready to crunch the numbers while you do other things.
-The state is somewhat human-readable, so have a look.
-
----
-
-```
-
-## Example 2 - Starcraft II Bot
-
-This example is a worker rush bot with very simple attack/retreat logic and two parameters.
-It tunes itself to beat the hardest built-in AI in about a hundred games.
-
-Manual changes could do this much easier - this is just a proof of concept.
-
-```py
-import json
-
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Annotated
-
-from loguru import logger
-from sc2 import maps
-from sc2.main import run_game
-from sc2.player import Bot, Computer
-
-from leitwerk import Optimizer, Parameter
-from sc2.bot_ai import BotAI
-from sc2.data import Result, Race, Difficulty
 
 
-DATA_PATH = Path("./data")
-PARAMS_FILE = DATA_PATH / "params.json"
-
-
-@dataclass
-class BotParams:
-    attack_threshold: Annotated[float, Parameter(.5, min=0, max=1)]
-    retreat_threshold: Annotated[float, Parameter(.5, min=0, max=1)]
-
-
-class LearningBot(BotAI):
-
-    async def on_start(self):
-        # restore state from disk
-        self.optimizer = Optimizer(BotParams)
-        DATA_PATH.mkdir(exist_ok=True)
-        if PARAMS_FILE.exists():
-            with PARAMS_FILE.open() as f:
-                state = json.load(f)
-            diff = self.optimizer.load(state)
-            logger.info(diff)
-        context = self.enemy_race.name  # optional: matchup-based mirror sampling
-        self.params = self.optimizer.ask(context)
-        logger.info(self.params)
-
-    async def on_step(self, iteration):
-        mineral_patch = self.mineral_field.closest_to(self.start_location)
-        for worker in self.workers:
-            if worker.shield_percentage > self.params.attack_threshold:
-                if self.enemy_structures:
-                    worker.attack(self.enemy_structures.random.position)
-                else:
-                    worker.attack(self.enemy_start_locations[0])
-            elif worker.shield_health_percentage < self.params.retreat_threshold:
-                worker.gather(mineral_patch)
-        if self.supply_used == 0:
-            await self.client.debug_kill_unit(self.structures)
-
-    async def on_end(self, game_result: Result) -> None:
-        # primary objective: win
-        win_loss = {
-            Result.Victory: +1,
-            Result.Tie: 0,
-            Result.Defeat: -1,
-        }[game_result]
-        # secondary objective: be cost-effective
-        efficiency = self.state.score.total_damage_dealt_life / max(1, self.state.score.total_damage_taken_life)
-        score = (win_loss, efficiency)
-        logger.info(score)
-        tell_result = self.optimizer.tell(score)
-        logger.info(tell_result)
-        state = self.optimizer.save()
-        with PARAMS_FILE.open("w") as f:
-            json.dump(state, f, indent=2)
-
-
-def main():
-    while True:
-        run_game(
-            maps.get("TorchesAIE_v4"),
-            [Bot(Race.Protoss, LearningBot()), Computer(Race.Protoss, Difficulty.CheatInsane)],
-            realtime=False,
-        )
-
-
-if __name__ == "__main__":
-    main()
-```
+The objective function shapes the problem landscape:
+- Binary Win/Loss is fine, but slow
+- Unit Counts? Army Value? Income?
+- When the objective changes drastically, consider a reset
+- You might want to set up multiple optimizers with different objectives
 
 ---
 
-## Local Install
+## Local Development
 
-Requires Python 3.11+
+### Commands
 
-```sh
-poetry install --all-extras
-```
+- `make check` : linting + tests
+- `make fix`: auto-format
+- `make docs`: build docs
+- `make docs-serve`: serve docs locally
+
+---
 
 ## Context Matching (optional)
 
@@ -272,13 +207,12 @@ If context is provided, `leitwerk` uses it for mirror sampling: [^3]
   - two-sided bounds: sigmoid activation `(min, max)`
 - `loc` is interpreted in user space; if omitted, the latent center `0` is used
 - `scale` always lives in latent space, i.e. it sets search spread before applying the bound mapping
-- Only ranks matter, not objective magnitudes
-  - fitness shaping makes the search invariant under strictly monotone transformations of the objective
+- Fitness shaping makes the search invariant under strictly monotone transformations of the objective
 - Tuple results are ordered lexicographically
   - This is tie-breaking by secondary keys
   - Pareto optimization TBD
 - xNES hyperparameters:
-  - `population_size` is essentially abstracted away, but finetuned if you want
+  - `population_size` is essentially abstracted away, finetune if you want
   - `eta_mu = 1.0`
   - `eta_sigma = 1.0`
   - `eta_B = 1.0` with the canonical dimension factor [^1]
