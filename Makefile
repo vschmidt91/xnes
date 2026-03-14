@@ -1,6 +1,6 @@
 .PHONY: fix check docs docs-serve
 PYTHON ?= python
-SOURCES = leitwerk tests
+SOURCES = leitwerk tests examples
 
 fix:
 	$(PYTHON) -m ruff check --fix --unsafe-fixes $(SOURCES)

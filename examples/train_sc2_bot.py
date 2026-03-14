@@ -1,17 +1,16 @@
 import json
 from dataclasses import dataclass, fields, is_dataclass
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, SupportsFloat, cast
 
 import matplotlib.pyplot as plt
 import numpy as np
-from sc2.ids.unit_typeid import UnitTypeId
-
 from leitwerk import Optimizer, Parameter
 from loguru import logger
 from sc2 import maps
 from sc2.bot_ai import BotAI
 from sc2.data import Difficulty, Race, Result
+from sc2.ids.unit_typeid import UnitTypeId
 from sc2.main import run_game
 from sc2.player import Bot, Computer
 
@@ -31,11 +30,10 @@ class BotParams:
 
 
 class LearningBot(BotAI):
-
     optimizer = Optimizer(BotParams)
     params: BotParams
 
-    async def on_start(self):
+    async def on_start(self) -> None:
         self.townhalls[0].train(UnitTypeId.PROBE)
         DATA_PATH.mkdir(exist_ok=True)
         if PARAMS_FILE.exists():
@@ -43,11 +41,11 @@ class LearningBot(BotAI):
                 state = json.load(f)
             diff = self.optimizer.load(state)
             logger.info(diff)
-        context = self.enemy_race.name  # optional: matchup-based mirror sampling
+        context = self.enemy_race.name if self.enemy_race else "unknown"  # optional: matchup-based mirror sampling
         self.params = self.optimizer.ask(context)
         logger.info(self.params)
 
-    async def on_step(self, iteration):
+    async def on_step(self, iteration: int) -> None:
         mineral_patch = self.mineral_field.closest_to(self.start_location)
         for worker in self.workers:
             if worker.shield_percentage > self.params.attack_threshold:
@@ -107,19 +105,18 @@ def moving_average(values: list[float], window: int = MOVING_AVERAGE_WINDOW) -> 
 
 
 def flatten_numeric_fields(value: object, prefix: str = "") -> dict[str, float]:
+    result: dict[str, float] = {}
     if is_dataclass(value):
-        result: dict[str, float] = {}
         for field in fields(value):
             key = f"{prefix}.{field.name}" if prefix else field.name
             result.update(flatten_numeric_fields(getattr(value, field.name), key))
         return result
     if isinstance(value, dict):
-        result: dict[str, float] = {}
         for key, item in value.items():
             name = f"{prefix}.{key}" if prefix else str(key)
             result.update(flatten_numeric_fields(item, name))
         return result
-    return {prefix: float(value)}
+    return {prefix: float(cast(SupportsFloat, value))}
 
 
 def metric_names(history: list[dict[str, float]]) -> list[str]:
@@ -161,7 +158,8 @@ def save_plot(history: list[dict[str, float]]) -> None:
     fig.savefig(PLOT_FILE)
     plt.close(fig)
 
-def main():
+
+def main() -> None:
     while True:
         run_game(
             maps.Map(MAP_FILE),
