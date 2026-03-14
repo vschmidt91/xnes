@@ -133,6 +133,7 @@ def _read_status(state: object) -> dict[str, int | float | bool | None]:
         "axis_ratio",
         "step_size",
         "batch_progress",
+        "batch_size",
         "population_size",
         "minimize",
         "eta_mu",
