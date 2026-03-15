@@ -793,6 +793,22 @@ def test_json_context_is_saved_as_canonical_string() -> None:
     assert _read_context_pending(optimizer.save()) == {'{"a":1,"b":2}': 0}
 
 
+def test_context_pending_is_cleared_when_mirror_is_taken_without_match() -> None:
+    schema = _make_identity_schema("StaleContextPending", x=(0.0, 1.0), y=(0.0, 1.0))
+    optimizer = _initialized_optimizer(schema, population_size=4)
+
+    optimizer.ask(context="arena:zerg")
+    optimizer.tell(1.0)
+
+    optimizer.ask()
+    optimizer.tell(0.0)
+
+    optimizer.ask(context="arena:protoss")
+    optimizer.tell(-1.0)
+
+    assert _read_context_pending(optimizer.save()) == {}
+
+
 def test_ask_rejects_non_json_context() -> None:
     class Opaque:
         pass

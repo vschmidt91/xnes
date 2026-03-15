@@ -86,15 +86,17 @@ class BatchScheduler:
         return sample_index + half if sample_index < half else sample_index - half
 
     def _update_context_pending(self, sample_index: int, context: str | None) -> None:
+        mirror_index = self._mirror_index(sample_index)
+
+        # Any context pointing at the mirror is stale now because that mirror is already filled.
+        # With the current lowest-free-index sampling order, clearing it cannot unlock extra matches.
+        # Clear it anyway for consistency, and in case sampling order changes in the future.
+        stale_contexts = [key for key, pending_index in self.context_pending.items() if pending_index == mirror_index]
+        for key in stale_contexts:
+            del self.context_pending[key]
+
         if context is None:
             return
 
-        pending_index = self.context_pending.get(context)
-        if pending_index is None:
-            mirror_index = self._mirror_index(sample_index)
-            if self.results[mirror_index] is None:
-                self.context_pending[context] = sample_index
-            return
-
-        if self._mirror_index(pending_index) == sample_index:
-            del self.context_pending[context]
+        if self.results[mirror_index] is None:
+            self.context_pending[context] = sample_index
