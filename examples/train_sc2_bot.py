@@ -28,8 +28,8 @@ MOVING_AVERAGE_WINDOW = 10
 
 @dataclass
 class BotParams:
-    max_group_distance: Annotated[float, Parameter(loc=3, scale=3, min=0)]  # stay together
-    shield_threshold: Annotated[float, Parameter(min=0, max=1)]  # retreat for regen
+    max_group_distance: Annotated[float, Parameter(loc=3, scale=3, min=0)]
+    shield_threshold: Annotated[float, Parameter(min=0, max=1)]
 
 
 class LearningBot(BotAI):
