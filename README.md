@@ -72,7 +72,7 @@ For SC2 bot authors, reading this file is probably enough to get started.
 
 ## Integration Guide
 
-The intended loop is one evaluation: load > ask > tell > save
+The intended loop is for one evaluation: load > ask > tell > save
 
 ### 1. Define a Typed Parameter Schema
 
@@ -107,28 +107,28 @@ from pathlib import Path
 from leitwerk import Optimizer
 
 
-params_file = Path("data/params.json")
 opt = Optimizer(Params)
 
+params_file = Path("data/params.json")
 if params_file.exists():
     schema_diff = opt.load(json.loads(params_file.read_text()))
 ```
 
 `schema_diff` tells you which flattened parameter names were added, removed or changed.
 
-`Optimizer(Params, ...)` takes optional runtime arguments:
+`Optimizer(Params, ...)` takes additional arguments:
 
 - `minimize`: rank lower results as better
 - `population_size`: number of evaluations per batch
 - `eta_mu`, `eta_sigma`, `eta_B`: xNES learning rates
 
 > [!NOTE]
-> These are not restored on `load()`, your code is the single source of truth for the optimizer config.
+> Optimizer arguments are runtime settings, they are not restored on `load`.
 
 ### 3. Ask For a Sample
 
 ```py
-context = {"enemy_race": "Protoss"}
+context = {"enemy_race": "Protoss"}     # optional context
 params = opt.ask(context)
 print(params)
 # Params(attack_threshold=-0.8312413125179872, worker_limit=59.407519238244)
@@ -149,7 +149,7 @@ result = +1 if win else 0
 report = opt.tell(result)
 
 # better:
-# report = opt.tell([result, calc_heuristic()])
+# report = opt.tell((result, calc_heuristic()))
 
 params_file.parent.mkdir(parents=True, exist_ok=True)
 params_file.write_text(json.dumps(opt.save(), indent=2))
@@ -169,6 +169,8 @@ Result handling is simple:
 - which xNES status was returned
 - whether the optimizer restarted with a fresh distribution.
 
+---
+
 ## What Happens When the Schema Changes
 
 This is one of the main reasons to use `leitwerk` in an active project.
@@ -183,13 +185,13 @@ In practice, you can keep developing, adding knobs, and updating priors without 
 
 ## Choosing Objectives
 
-For bot training, the objective usually matters more than the optimizer.
+For efficient training, the objective often matters more than the optimizer.
 
-The right objective function is key:
-- Binary win/loss makes sense to prioritize, but is not very informative on its own
-- Smooth gradients can help: army value, income, cost-effectiveness, ...
-- Changing the objective later on _may_ work, but at least the current batch will have mixed signals
-- Consider multiple optimizers/objectives for different parameters
+- put win rate first if that is the real target
+- add tie-breakers such as army value, income, or cost efficiency
+- this is NOT multi-objective / pareto optimization
+- keep objective semantics stable for long term training
+- use separate optimizers if parameters actually belong to separate objectives
 
 ## Context Matching
 
@@ -208,9 +210,8 @@ Why this helps:
 
 - samples are generated in mirrored pairs
 - matching both sides of a pair to the same context keeps the gradient estimate centered
-- this is a stabilizing trick, not full context-dependent optimization
 
-If you need truly separate learning per matchup or opponent, use multiple optimizers.
+This is a stabilizing trick, not actual context-aware optimization.
 
 ## More Reading
 
