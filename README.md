@@ -33,7 +33,7 @@ Development setup with the SC2 example, tests, docs, plotting, and benchmark too
 pip install -e .[dev,docs,benchmark]
 ```
 
-## Core API
+## Minimal Example
 
 ```py
 from leitwerk import Optimizer, Parameter
@@ -47,7 +47,7 @@ print(opt.mean)
 # {'a': 1.0000000001945673, 'b': 2.0000000008038628}
 ```
 
-## Quickstart: Run the Example Bot
+## Quickstart: Run the Example SC2 Bot
 
 ```sh
 python examples/train_sc2_bot.py
@@ -60,10 +60,10 @@ The example in [examples/train_sc2_bot.py](examples/train_sc2_bot.py):
 - scores each game with win/loss and a secondary efficiency signal
 - saves state after every completed evaluation
 
-It writes:
+It writes progress into:
 
 - `data/params.json`: optimizer state
-- `data/history.json`: flattened result history and parameter values
+- `data/history.json`: result history and parameter values
 - `data/plot.png`: rolling plots for outcome, efficiency, and learned parameters
 
 For SC2 bot authors, reading this file is probably enough to get started.
@@ -72,7 +72,7 @@ For SC2 bot authors, reading this file is probably enough to get started.
 
 ## Integration Guide
 
-The intended loop is for one evaluation: load > ask > tell > save
+The intended loop for one evaluation is: load > ask > tell > save
 
 ### 1. Define a Typed Parameter Schema
 
@@ -134,7 +134,7 @@ print(params)
 # Params(attack_threshold=-0.8312413125179872, worker_limit=59.407519238244)
 ```
 
-For deterministic sampling, use:
+For a deterministic evaluation, use:
 
 ```py
 params = opt.mean
