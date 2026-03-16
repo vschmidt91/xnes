@@ -6,7 +6,7 @@ from typing import Annotated, Any, cast
 
 import numpy as np
 import pytest
-from leitwerk import Optimizer, Parameter, SchemaDiff, TellResult, XNESStatus
+from leitwerk import Optimizer, OptimizerSettings, Parameter, SchemaDiff, TellResult, XNESStatus
 from leitwerk.optimizer import JSONObject
 
 
@@ -41,7 +41,28 @@ def _initialized_optimizer(
     population_size: int,
     minimize: bool = False,
 ) -> Optimizer[Any]:
-    return Optimizer(schema, population_size=population_size, minimize=minimize)
+    return _optimizer(schema, population_size=population_size, minimize=minimize)
+
+
+def _optimizer(
+    schema: type[Any] | Mapping[str, object],
+    *,
+    population_size: int | None = None,
+    minimize: bool = False,
+    eta_mu: float = 1.0,
+    eta_sigma: float = 1.0,
+    eta_B: float = 1.0,
+) -> Optimizer[Any]:
+    return Optimizer(
+        schema,
+        settings=OptimizerSettings(
+            population_size=population_size,
+            minimize=minimize,
+            eta_mu=eta_mu,
+            eta_sigma=eta_sigma,
+            eta_B=eta_B,
+        ),
+    )
 
 
 def _initialized_state(schema: type[Any] | Mapping[str, object], *, population_size: int) -> JSONObject:
@@ -121,6 +142,26 @@ def _read_context_pending(state: object) -> dict[str, int]:
     return {str(context): int(sample_idx) for context, sample_idx in context_pending_json.items()}
 
 
+def _read_settings(state: object) -> dict[str, int | float | bool | None]:
+    assert isinstance(state, dict)
+    settings_json = state["settings"]
+    assert isinstance(settings_json, Mapping)
+    assert list(settings_json) == [
+        "population_size",
+        "minimize",
+        "eta_mu",
+        "eta_sigma",
+        "eta_B",
+    ]
+    return {
+        "population_size": None if settings_json["population_size"] is None else int(settings_json["population_size"]),
+        "minimize": bool(settings_json["minimize"]),
+        "eta_mu": float(settings_json["eta_mu"]),
+        "eta_sigma": float(settings_json["eta_sigma"]),
+        "eta_B": float(settings_json["eta_B"]),
+    }
+
+
 def _read_status(state: object) -> dict[str, int | float | bool | None]:
     assert isinstance(state, dict)
     status_json = state["status"]
@@ -134,11 +175,6 @@ def _read_status(state: object) -> dict[str, int | float | bool | None]:
         "step_size",
         "batch_progress",
         "batch_size",
-        "population_size",
-        "minimize",
-        "eta_mu",
-        "eta_sigma",
-        "eta_B",
     ]
     return {
         "total_samples": int(status_json["total_samples"]),
@@ -148,11 +184,6 @@ def _read_status(state: object) -> dict[str, int | float | bool | None]:
         "axis_ratio": float(status_json["axis_ratio"]),
         "step_size": float(status_json["step_size"]),
         "batch_progress": float(status_json["batch_progress"]),
-        "population_size": None if status_json["population_size"] is None else int(status_json["population_size"]),
-        "minimize": bool(status_json["minimize"]),
-        "eta_mu": float(status_json["eta_mu"]),
-        "eta_sigma": float(status_json["eta_sigma"]),
-        "eta_B": float(status_json["eta_B"]),
     }
 
 
@@ -160,9 +191,19 @@ def _assert_same_status(
     actual: dict[str, int | float | bool | None],
     expected: dict[str, int | float | bool | None],
 ) -> None:
-    for key in ("total_samples", "num_batches", "num_restarts", "num_parameters", "population_size", "minimize"):
+    for key in ("total_samples", "num_batches", "num_restarts", "num_parameters"):
         assert actual[key] == expected[key]
-    for key in ("axis_ratio", "step_size", "batch_progress", "eta_mu", "eta_sigma", "eta_B"):
+    for key in ("axis_ratio", "step_size", "batch_progress"):
+        assert actual[key] == pytest.approx(expected[key])
+
+
+def _assert_same_settings(
+    actual: dict[str, int | float | bool | None],
+    expected: dict[str, int | float | bool | None],
+) -> None:
+    for key in ("population_size", "minimize"):
+        assert actual[key] == expected[key]
+    for key in ("eta_mu", "eta_sigma", "eta_B"):
         assert actual[key] == pytest.approx(expected[key])
 
 
@@ -184,7 +225,7 @@ def _run_function_optimization(
         "SphereParams",
         **{f"x{i}": (init_loc, init_scale) for i in range(dim)},
     )
-    optimizer: Optimizer[Any] = Optimizer(schema, population_size=population_size, minimize=minimize)
+    optimizer: Optimizer[Any] = _optimizer(schema, population_size=population_size, minimize=minimize)
 
     initial_loc = _read_loc(optimizer.save())
     initial_value = objective(initial_loc)
@@ -233,7 +274,7 @@ def test_optimizer_improves_sphere_in_minimization_mode() -> None:
 
 def test_state_save_load_roundtrip() -> None:
     schema_a = _make_identity_schema("RoundtripA", alpha=(2.0, 1.5), beta=(-1.0, 2.0))
-    opt_a = Optimizer(schema_a, population_size=20)
+    opt_a = _optimizer(schema_a, population_size=20)
 
     for _ in range(37):
         params = opt_a.ask()
@@ -246,7 +287,7 @@ def test_state_save_load_roundtrip() -> None:
     assert "step_size_path" not in state
 
     schema_b = _make_identity_schema("RoundtripB", beta=(-1.0, 2.0), alpha=(2.0, 1.5))
-    opt_b = Optimizer(schema_b, population_size=20)
+    opt_b = _optimizer(schema_b, population_size=20)
     load_result = opt_b.load(state)
     assert load_result == SchemaDiff(added=[], removed=[], changed=[], unchanged=["alpha", "beta"])
     loaded = opt_b.save()
@@ -255,6 +296,7 @@ def test_state_save_load_roundtrip() -> None:
     assert np.allclose(_read_loc(loaded), _read_loc(state))
     assert np.allclose(_read_scale(loaded), _read_scale(state))
     _assert_same_status(_read_status(loaded), _read_status(state))
+    _assert_same_settings(_read_settings(loaded), _read_settings(state))
 
 
 def test_status_block_exposes_basic_diagnostics_and_roundtrips() -> None:
@@ -270,6 +312,8 @@ def test_status_block_exposes_basic_diagnostics_and_roundtrips() -> None:
         "axis_ratio": 1.0,
         "step_size": 1.5,
         "batch_progress": 0,
+    }
+    assert _read_settings(optimizer.save()) == {
         "population_size": 4,
         "minimize": False,
         "eta_mu": 1.0,
@@ -288,15 +332,18 @@ def test_status_block_exposes_basic_diagnostics_and_roundtrips() -> None:
     assert progressed_status["axis_ratio"] == pytest.approx(1.0)
     assert progressed_status["step_size"] == pytest.approx(1.5)
     assert progressed_status["batch_progress"] == 1
-    assert progressed_status["population_size"] == 4
-    assert progressed_status["minimize"] is False
-    assert progressed_status["eta_mu"] == pytest.approx(1.0)
-    assert progressed_status["eta_sigma"] == pytest.approx(1.0)
-    assert progressed_status["eta_B"] == pytest.approx(1.0)
+    assert _read_settings(progressed_state) == {
+        "population_size": 4,
+        "minimize": False,
+        "eta_mu": 1.0,
+        "eta_sigma": 1.0,
+        "eta_B": 1.0,
+    }
 
     restored = _initialized_optimizer(schema, population_size=4)
     restored.load(progressed_state)
     _assert_same_status(_read_status(restored.save()), progressed_status)
+    _assert_same_settings(_read_settings(restored.save()), _read_settings(progressed_state))
 
 
 def test_schema_state_is_human_readable_parameter_specs() -> None:
@@ -317,7 +364,7 @@ def test_schema_state_is_human_readable_parameter_specs() -> None:
 
 def test_load_reconciles_added_and_removed_parameters() -> None:
     base_schema = _make_identity_schema("BaseSchema", x=(2.0, 1.5), y=(-1.0, 0.7))
-    base = Optimizer(base_schema, population_size=4)
+    base = _optimizer(base_schema, population_size=4)
 
     for _ in range(5):
         params = base.ask()
@@ -334,7 +381,7 @@ def test_load_reconciles_added_and_removed_parameters() -> None:
     assert any(result is not None for result in base_results)
 
     added_schema = _make_identity_schema("AddedSchema", x=(2.0, 1.5), y=(-1.0, 0.7), z=(3.0, 2.0))
-    added = Optimizer(added_schema, population_size=4)
+    added = _optimizer(added_schema, population_size=4)
     load_result = added.load(base_state)
     assert load_result == SchemaDiff(added=["z"], removed=[], changed=[], unchanged=["x", "y"])
     added_state = added.save()
@@ -369,7 +416,7 @@ def test_load_reconciles_added_and_removed_parameters() -> None:
     assert any(result is not None for result in added_results)
 
     removed_schema = _make_identity_schema("RemovedSchema", x=(2.0, 1.5), y=(-1.0, 0.7))
-    removed = Optimizer(removed_schema, population_size=4)
+    removed = _optimizer(removed_schema, population_size=4)
     load_result = removed.load(added_partial_state)
     assert load_result == SchemaDiff(added=[], removed=["z"], changed=[], unchanged=["x", "y"])
     removed_state = removed.save()
@@ -388,7 +435,7 @@ def test_load_reconciles_bounds_changes_and_selectively_preserves_batch() -> Non
         x=Parameter(loc=0.25, scale=1.0, min=0.0),
         y=Parameter(loc=-1.0, scale=0.7),
     )
-    base = Optimizer(base_schema, population_size=4)
+    base = _optimizer(base_schema, population_size=4)
 
     for _ in range(5):
         params = base.ask()
@@ -416,7 +463,7 @@ def test_load_reconciles_bounds_changes_and_selectively_preserves_batch() -> Non
         x=Parameter(loc=0.25, scale=1.0, min=0.0, max=1.0),
         y=Parameter(loc=-1.0, scale=0.7),
     )
-    changed = Optimizer(changed_schema, population_size=4)
+    changed = _optimizer(changed_schema, population_size=4)
     load_result = changed.load(base_state)
     assert load_result == SchemaDiff(added=[], removed=[], changed=["x"], unchanged=["y"])
     changed_state = changed.save()
@@ -453,7 +500,7 @@ def test_loc_and_scale_changes_do_not_trigger_schema_changeover() -> None:
         x=Parameter(loc=4.0, scale=1.5),
         y=Parameter(loc=-1.0, scale=2.0),
     )
-    changed = Optimizer(changed_schema, population_size=4)
+    changed = _optimizer(changed_schema, population_size=4)
     load_result = changed.load(base_state)
     assert load_result == SchemaDiff(added=[], removed=[], changed=[], unchanged=["x", "y"])
 
@@ -517,7 +564,7 @@ def test_nested_schema_flattens_leaf_names_and_rebuilds_dataclasses() -> None:
     )
 
     expected_names = ["alpha", "combat.attack_threshold", "combat.retreat_threshold", "mining.gas_priority"]
-    optimizer: Optimizer[Any] = Optimizer(schema, population_size=6)
+    optimizer: Optimizer[Any] = _optimizer(schema, population_size=6)
     assert _read_schema_names(optimizer.save()) == expected_names
 
     mean = optimizer.mean
@@ -613,7 +660,7 @@ def test_mapping_schema_state_save_load_roundtrip() -> None:
             "alpha": Parameter(loc=2.0, scale=1.5),
         },
     }
-    opt_a: Optimizer[Any] = Optimizer(schema_a, population_size=20)
+    opt_a: Optimizer[Any] = _optimizer(schema_a, population_size=20)
 
     for _ in range(37):
         params = opt_a.ask()
@@ -631,7 +678,7 @@ def test_mapping_schema_state_save_load_roundtrip() -> None:
         },
         "beta": Parameter(loc=-1.0, scale=2.0),
     }
-    opt_b: Optimizer[Any] = Optimizer(schema_b, population_size=20)
+    opt_b: Optimizer[Any] = _optimizer(schema_b, population_size=20)
     load_result = opt_b.load(state)
     assert load_result == SchemaDiff(added=[], removed=[], changed=[], unchanged=["beta", "block.alpha"])
     loaded = opt_b.save()
@@ -910,16 +957,9 @@ def test_load_discards_unsaved_local_progress_at_idle_boundary() -> None:
     assert np.allclose(_read_batch(restored_state), _read_batch(initial_state))
 
 
-def test_runtime_config_is_reported_in_status_but_not_loaded() -> None:
+def test_runtime_config_is_reported_in_settings_but_not_loaded() -> None:
     schema = _make_identity_schema("RuntimeConfig", x=(4.0, 2.0))
-    opt_a = Optimizer(
-        schema,
-        population_size=14,
-        minimize=True,
-        eta_mu=0.9,
-        eta_sigma=0.7,
-        eta_B=0.2,
-    )
+    opt_a = _optimizer(schema, population_size=14, minimize=True, eta_mu=0.9, eta_sigma=0.7, eta_B=0.2)
     for _ in range(20):
         params = opt_a.ask()
         x = params.x
@@ -928,35 +968,41 @@ def test_runtime_config_is_reported_in_status_but_not_loaded() -> None:
     state = opt_a.save()
     assert isinstance(state, dict)
     assert "context_pending" in state
+    assert "settings" in state
     assert "status" in state
     assert "minimize" not in state
     assert "step_size_path" not in state
-    assert _read_status(state)["population_size"] == 14
-    assert _read_status(state)["minimize"] is True
-    assert _read_status(state)["eta_mu"] == pytest.approx(0.9)
-    assert _read_status(state)["eta_sigma"] == pytest.approx(0.7)
-    assert _read_status(state)["eta_B"] == pytest.approx(0.2)
+    assert _read_settings(state) == {
+        "population_size": 14,
+        "minimize": True,
+        "eta_mu": 0.9,
+        "eta_sigma": 0.7,
+        "eta_B": 0.2,
+    }
 
-    opt_b = Optimizer(schema, population_size=4)
+    opt_b = _optimizer(schema, population_size=4)
     opt_b.load(state)
     loaded = opt_b.save()
     assert isinstance(loaded, dict)
     assert "context_pending" in loaded
+    assert "settings" in loaded
     assert "status" in loaded
-    assert opt_b.minimize is False
-    assert opt_b.eta_mu == 1.0
-    assert opt_b.eta_sigma == 1.0
-    assert opt_b.eta_B == 1.0
-    assert _read_status(loaded)["population_size"] == 4
-    assert _read_status(loaded)["minimize"] is False
-    assert _read_status(loaded)["eta_mu"] == pytest.approx(1.0)
-    assert _read_status(loaded)["eta_sigma"] == pytest.approx(1.0)
-    assert _read_status(loaded)["eta_B"] == pytest.approx(1.0)
+    assert opt_b.settings.minimize is False
+    assert opt_b.settings.eta_mu == 1.0
+    assert opt_b.settings.eta_sigma == 1.0
+    assert opt_b.settings.eta_B == 1.0
+    assert _read_settings(loaded) == {
+        "population_size": 4,
+        "minimize": False,
+        "eta_mu": 1.0,
+        "eta_sigma": 1.0,
+        "eta_B": 1.0,
+    }
 
 
 def test_load_allows_switching_optimization_direction_mid_batch() -> None:
     schema = _make_identity_schema("SwitchDirection", x=(0.0, 1.0))
-    base = Optimizer(schema, population_size=4, minimize=True)
+    base = _optimizer(schema, population_size=4, minimize=True)
 
     first_params = base.ask()
     base.tell(first_params.x)
@@ -966,8 +1012,8 @@ def test_load_allows_switching_optimization_direction_mid_batch() -> None:
     assert completed_indices == [0]
     assert saved_results[0] == pytest.approx((first_params.x,))
 
-    minimizing = Optimizer(schema, population_size=4, minimize=True)
-    maximizing = Optimizer(schema, population_size=4)
+    minimizing = _optimizer(schema, population_size=4, minimize=True)
+    maximizing = _optimizer(schema, population_size=4)
     minimizing.load(state)
     maximizing.load(state)
 
@@ -988,7 +1034,7 @@ def test_restart_on_conditioning_failure() -> None:
     assert isinstance(state, dict)
     state["scale"] = [[1e-10, 0.0], [0.0, 1e10]]
 
-    restored = Optimizer(schema, population_size=10)
+    restored = _optimizer(schema, population_size=10)
     restored.load(state)
 
     for _ in range(10):
@@ -1084,7 +1130,7 @@ def test_save_load_preserves_optimizer_state() -> None:
         direct_result = -(direct_x**2 + 0.5 * direct_y**2)
         direct.tell(direct_result)
 
-        recreated = Optimizer(schema, population_size=12)
+        recreated = _optimizer(schema, population_size=12)
         recreated.load(recreated_state)
         recreated_params = recreated.ask()
         recreated_x = recreated_params.x
@@ -1107,7 +1153,7 @@ def test_transformed_parameters_use_latent_state_but_emit_user_space_values() ->
         c=Parameter(loc=3.0, scale=1.0, min=0.0),
         d=Parameter(loc=3.0, scale=1.0, max=4.0),
     )
-    optimizer = Optimizer(schema, population_size=6)
+    optimizer = _optimizer(schema, population_size=6)
 
     state = optimizer.save()
     expected_latent_loc = np.array(
@@ -1134,7 +1180,7 @@ def test_transformed_parameters_use_latent_state_but_emit_user_space_values() ->
         assert params.d < 4.0
         optimizer.tell(0.0)
 
-    reloaded = Optimizer(schema, population_size=6)
+    reloaded = _optimizer(schema, population_size=6)
     reloaded.load(state)
     reloaded_mean = reloaded.mean
     assert reloaded_mean.a == pytest.approx(mean.a)

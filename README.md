@@ -123,7 +123,8 @@ if params_file.exists():
 - `eta_mu`, `eta_sigma`, `eta_B`: xNES learning rates
 
 > [!NOTE]
-> Optimizer arguments are runtime settings, they are not restored on `load`.
+> Optimizer arguments are runtime settings. `save()` includes them only in a
+> top-level `settings` block for inspection, and `load()` does not restore them.
 
 ### 3. Ask For a Sample
 

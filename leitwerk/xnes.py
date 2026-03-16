@@ -94,11 +94,6 @@ class XNES:
         x0: Initial mean vector.
         sigma0: Initial scale, either scalar, diagonal vector, or full matrix.
 
-    Runtime attributes `eta_mu`, `eta_sigma`, and `eta_B` are initialized to
-    built-in defaults and may be reassigned directly. `eta_B` acts as a
-    multiplier on the built-in dimension-dependent shape learning rate
-    heuristic.
-
     Raises:
         ValueError: If the supplied shapes are inconsistent, the scale matrix is
             not positive with finite determinant.
@@ -112,9 +107,6 @@ class XNES:
         self.mu = np.asarray(x0, dtype=float)
         self.sigma: float
         self.B: np.ndarray
-        self.eta_mu = 1.0
-        self.eta_sigma = 1.0
-        self.eta_B = 1.0
 
         if self.dim == 0:
             self.sigma = 1.0
@@ -201,12 +193,23 @@ class XNES:
 
         return np.hstack([z_half, -z_half])
 
-    def tell(self, samples: np.ndarray, ranking: list[int], eps: float = 1e-10) -> XNESStatus:
+    def tell(
+        self,
+        samples: np.ndarray,
+        ranking: list[int],
+        eta_mu: float = 1.0,
+        eta_sigma: float = 1.0,
+        eta_B: float = 1.0,
+        eps: float = 1e-10,
+    ) -> XNESStatus:
         """Apply one xNES update from ranked standardized samples.
 
         Args:
             samples: Standardized sample matrix with shape `(dim, n)`.
             ranking: Permutation of sample indices ordered from best to worst.
+            eta_mu: Mean learning-rate override.
+            eta_sigma: Global-scale learning-rate override.
+            eta_B: Shape learning-rate multiplier override.
             eps: Numerical stopping threshold.
 
         Returns:
@@ -234,10 +237,10 @@ class XNES:
         grad_sigma = float(np.trace(grad_M) / d)
         grad_B_shape = grad_M - grad_sigma * np.eye(d)
 
-        mu_step = self.eta_mu * self.sigma * (self.B @ grad_mu)
+        mu_step = eta_mu * self.sigma * (self.B @ grad_mu)
         self.mu += mu_step
 
-        sigma_log_step = 0.5 * self.eta_sigma * grad_sigma
+        sigma_log_step = 0.5 * eta_sigma * grad_sigma
         sigma_log_step = float(np.clip(sigma_log_step, -50.0, 50.0))
 
         self.sigma *= float(np.exp(sigma_log_step))
@@ -250,8 +253,8 @@ class XNES:
         if self.sigma > self.MAX_SIGMA:
             return XNESStatus.SIGMA_MAX
 
-        eta_B = self.eta_B * _default_eta_B(d)
-        self.B = self.B @ expm(0.5 * eta_B * grad_B_shape)
+        eta_B_eff = eta_B * _default_eta_B(d)
+        self.B = self.B @ expm(0.5 * eta_B_eff * grad_B_shape)
 
         sign, logdet = np.linalg.slogdet(self.B)
         if sign <= 0 or not np.isfinite(logdet):

@@ -1,6 +1,6 @@
-from leitwerk import Optimizer, Parameter
+from leitwerk import Optimizer, OptimizerSettings, Parameter
 
-opt: Optimizer = Optimizer({"a": Parameter(), "b": Parameter()}, minimize=True)
+opt: Optimizer = Optimizer({"a": Parameter(), "b": Parameter()}, OptimizerSettings(minimize=True))
 
 for _ in range(500):
     x = opt.ask()

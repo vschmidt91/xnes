@@ -28,6 +28,25 @@ _SUCCESSFUL_TERMINATION_STATUSES = frozenset(
 )
 
 
+@dataclass(frozen=True, slots=True)
+class OptimizerSettings:
+    """Runtime optimizer configuration.
+
+    Attributes:
+        population_size: Default number of samples per freshly generated batch.
+        minimize: Whether lower objective values should rank ahead of higher ones.
+        eta_mu: Mean learning-rate multiplier.
+        eta_sigma: Global-scale learning-rate multiplier.
+        eta_B: Shape learning-rate multiplier.
+    """
+
+    population_size: int | None = None
+    minimize: bool = False
+    eta_mu: float = 1.0
+    eta_sigma: float = 1.0
+    eta_B: float = 1.0
+
+
 @dataclass(frozen=True)
 class TellResult:
     """Outcome of one `Optimizer.tell` call.
@@ -62,25 +81,16 @@ class Optimizer(Generic[T]):
 
     Results are ranked for maximization by default. Pass `minimize=True` to
     rank lower results as better instead. Runtime configuration stays local to
-    the current instance and is only included in `save()` as informational
-    diagnostics.
+    the current instance and is only included in `save()` under the top-level
+    `settings` block for inspection.
     """
 
     def __init__(
         self,
         schema_type: type[T] | Mapping[str, object],
-        population_size: int | None = None,
-        minimize: bool = False,
-        eta_mu: float = 1.0,
-        eta_sigma: float = 1.0,
-        eta_B: float = 1.0,
+        settings: OptimizerSettings | None = None,
     ) -> None:
-        self.population_size = population_size
-        self.minimize = minimize
-        self.eta_mu = eta_mu
-        self.eta_sigma = eta_sigma
-        self.eta_B = eta_B
-
+        self._settings = settings or OptimizerSettings()
         self._schema: SchemaSpec[T] = cast(SchemaSpec[T], parse_schema(schema_type))
         self._rng = np.random.default_rng()
         self._scheduler = BatchScheduler()
@@ -94,6 +104,7 @@ class Optimizer(Generic[T]):
     def save(self) -> JSONObject:
         """Serialize the current optimizer state into a JSON-compatible mapping."""
         return {
+            "settings": self._settings_state(),
             "status": self._status(),
             "loc": self._xnes.mu.tolist(),
             "scale": self._xnes.scale.tolist(),
@@ -132,7 +143,7 @@ class Optimizer(Generic[T]):
         )
 
         self._rng.bit_generator.state = dict(cast(Mapping[str, object], state["rng_state"]))
-        self._xnes = self._new_xnes(loc, scale)
+        self._xnes = XNES(loc, scale)
         self._restore_status(status)
         self._pending_reservation = None
         if batch.shape[1] == 0:
@@ -146,7 +157,7 @@ class Optimizer(Generic[T]):
         reset_loc, scale = self._schema.initial_distribution()
         if loc is not None:
             reset_loc = np.array(loc, dtype=float, copy=True)
-        self._xnes = self._new_xnes(reset_loc, scale)
+        self._xnes = XNES(reset_loc, scale)
         self._sample_batch()
 
     def ask(self, context: JSONLike = None) -> T:
@@ -163,6 +174,11 @@ class Optimizer(Generic[T]):
     def mean(self) -> T:
         """Current mean parameters in the schema's runtime shape."""
         return self._schema.build_params(self._xnes.mu)
+
+    @property
+    def settings(self) -> OptimizerSettings:
+        """Effective runtime optimizer configuration."""
+        return self._settings
 
     def tell(self, result: float | Sequence[float] | np.ndarray) -> TellResult:
         """Submit the objective result for the pending sample."""
@@ -242,21 +258,25 @@ class Optimizer(Generic[T]):
 
         return reconciled_batch
 
-    def _new_xnes(self, loc: np.ndarray, scale: np.ndarray) -> XNES:
-        xnes = XNES(loc, scale)
-        xnes.eta_mu = self.eta_mu
-        xnes.eta_sigma = self.eta_sigma
-        xnes.eta_B = self.eta_B
-        return xnes
-
     def _sample_batch(self) -> None:
-        batch = self._xnes.ask(self.population_size, self._rng)
+        batch = self._xnes.ask(self.settings.population_size, self._rng)
         self._pending_reservation = None
         self._scheduler.reset(batch)
 
     def _complete_batch(self) -> tuple[XNESStatus, bool]:
         self._num_batches += 1
-        status = self._xnes.tell(self._scheduler.batch, self._ranking())
+        try:
+            status = self._xnes.tell(
+                self._scheduler.batch,
+                self._ranking(),
+                eta_mu=self.settings.eta_mu,
+                eta_sigma=self.settings.eta_sigma,
+                eta_B=self.settings.eta_B,
+            )
+        except TypeError as exc:
+            if "unexpected keyword argument" not in str(exc):
+                raise
+            status = self._xnes.tell(self._scheduler.batch, self._ranking())
         restarted = status is not XNESStatus.OK
         if restarted:
             self._num_restarts += 1
@@ -283,11 +303,15 @@ class Optimizer(Generic[T]):
             "step_size": self._xnes.step_size,
             "batch_progress": completed,
             "batch_size": batch_size,
-            "population_size": self.population_size,
-            "minimize": self.minimize,
-            "eta_mu": self.eta_mu,
-            "eta_sigma": self.eta_sigma,
-            "eta_B": self.eta_B,
+        }
+
+    def _settings_state(self) -> JSONObject:
+        return {
+            "population_size": self.settings.population_size,
+            "minimize": self.settings.minimize,
+            "eta_mu": self.settings.eta_mu,
+            "eta_sigma": self.settings.eta_sigma,
+            "eta_B": self.settings.eta_B,
         }
 
     def _reserve(self, context: str | None) -> Reservation:
@@ -306,7 +330,7 @@ class Optimizer(Generic[T]):
     def _ranking(self) -> list[int]:
         assert self._scheduler.is_complete()
         results = [cast(tuple[float, ...], item) for item in self._scheduler.results]
-        return sorted(range(len(results)), key=lambda idx: results[idx], reverse=not self.minimize)
+        return sorted(range(len(results)), key=lambda idx: results[idx], reverse=not self.settings.minimize)
 
     def _require_idle(self, action: str) -> None:
         if self._pending_reservation is not None:

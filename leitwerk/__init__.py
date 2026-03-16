@@ -28,8 +28,18 @@ Example:
     ```
 """
 
-from .optimizer import Optimizer, TellResult
+from .optimizer import Optimizer, OptimizerSettings, TellResult
 from .schema import Parameter, SchemaDiff
+from .session import OptimizerSession
 from .xnes import XNES, XNESStatus
 
-__all__ = ["Optimizer", "Parameter", "SchemaDiff", "TellResult", "XNES", "XNESStatus"]
+__all__ = [
+    "Optimizer",
+    "OptimizerSession",
+    "OptimizerSettings",
+    "Parameter",
+    "SchemaDiff",
+    "TellResult",
+    "XNES",
+    "XNESStatus",
+]
