@@ -9,6 +9,8 @@ import pytest
 from leitwerk import Optimizer, OptimizerReport, OptimizerSettings, Parameter, SchemaDiff, XNESStatus
 from leitwerk.optimizer import JSONObject
 
+_TEST_SEED = 12345
+
 
 def _make_schema(schema_name: str, **parameters: Parameter) -> type[Any]:
     return make_dataclass(
@@ -49,6 +51,7 @@ def _optimizer(
     schema: type[Any] | Mapping[str, object],
     *,
     population_size: int | None = None,
+    seed: int | None = _TEST_SEED,
     minimize: bool = False,
     eta_mu: float = 1.0,
     eta_sigma: float = 1.0,
@@ -58,6 +61,7 @@ def _optimizer(
         schema,
         settings=OptimizerSettings(
             population_size=population_size,
+            seed=seed,
             minimize=minimize,
             eta_mu=eta_mu,
             eta_sigma=eta_sigma,
@@ -149,6 +153,7 @@ def _read_settings(state: object) -> dict[str, int | float | bool | None]:
     assert isinstance(settings_json, Mapping)
     assert list(settings_json) == [
         "population_size",
+        "seed",
         "minimize",
         "eta_mu",
         "eta_sigma",
@@ -156,6 +161,7 @@ def _read_settings(state: object) -> dict[str, int | float | bool | None]:
     ]
     return {
         "population_size": None if settings_json["population_size"] is None else int(settings_json["population_size"]),
+        "seed": None if settings_json["seed"] is None else int(settings_json["seed"]),
         "minimize": bool(settings_json["minimize"]),
         "eta_mu": float(settings_json["eta_mu"]),
         "eta_sigma": float(settings_json["eta_sigma"]),
@@ -202,7 +208,7 @@ def _assert_same_settings(
     actual: dict[str, int | float | bool | None],
     expected: dict[str, int | float | bool | None],
 ) -> None:
-    for key in ("population_size", "minimize"):
+    for key in ("population_size", "seed", "minimize"):
         assert actual[key] == expected[key]
     for key in ("eta_mu", "eta_sigma", "eta_B"):
         assert actual[key] == pytest.approx(expected[key])
@@ -286,6 +292,7 @@ def test_state_save_load_roundtrip() -> None:
     state = opt_a.save()
     assert isinstance(state, dict)
     assert "step_size_path" not in state
+    assert "rng_state" not in state
 
     schema_b = _make_identity_schema("RoundtripB", beta=(-1.0, 2.0), alpha=(2.0, 1.5))
     opt_b = _optimizer(schema_b, population_size=20)
@@ -316,6 +323,7 @@ def test_status_block_exposes_basic_diagnostics_and_roundtrips() -> None:
     }
     assert _read_settings(optimizer.save()) == {
         "population_size": 4,
+        "seed": _TEST_SEED,
         "minimize": False,
         "eta_mu": 1.0,
         "eta_sigma": 1.0,
@@ -335,6 +343,7 @@ def test_status_block_exposes_basic_diagnostics_and_roundtrips() -> None:
     assert progressed_status["batch_progress"] == 1
     assert _read_settings(progressed_state) == {
         "population_size": 4,
+        "seed": _TEST_SEED,
         "minimize": False,
         "eta_mu": 1.0,
         "eta_sigma": 1.0,
@@ -963,7 +972,7 @@ def test_load_discards_unsaved_local_progress_at_idle_boundary() -> None:
 
 def test_runtime_config_is_reported_in_settings_but_not_loaded() -> None:
     schema = _make_identity_schema("RuntimeConfig", x=(4.0, 2.0))
-    opt_a = _optimizer(schema, population_size=14, minimize=True, eta_mu=0.9, eta_sigma=0.7, eta_B=0.2)
+    opt_a = _optimizer(schema, population_size=14, seed=101, minimize=True, eta_mu=0.9, eta_sigma=0.7, eta_B=0.2)
     for _ in range(20):
         params = opt_a.ask()
         x = params.x
@@ -974,29 +983,34 @@ def test_runtime_config_is_reported_in_settings_but_not_loaded() -> None:
     assert "context_pending" in state
     assert "settings" in state
     assert "status" in state
+    assert "rng_state" not in state
     assert "minimize" not in state
     assert "step_size_path" not in state
     assert _read_settings(state) == {
         "population_size": 14,
+        "seed": 101,
         "minimize": True,
         "eta_mu": 0.9,
         "eta_sigma": 0.7,
         "eta_B": 0.2,
     }
 
-    opt_b = _optimizer(schema, population_size=4)
+    opt_b = _optimizer(schema, population_size=4, seed=202)
     opt_b.load(state)
     loaded = opt_b.save()
     assert isinstance(loaded, dict)
     assert "context_pending" in loaded
     assert "settings" in loaded
     assert "status" in loaded
+    assert "rng_state" not in loaded
     assert opt_b.settings.minimize is False
     assert opt_b.settings.eta_mu == 1.0
     assert opt_b.settings.eta_sigma == 1.0
     assert opt_b.settings.eta_B == 1.0
+    assert opt_b.settings.seed == 202
     assert _read_settings(loaded) == {
         "population_size": 4,
+        "seed": 202,
         "minimize": False,
         "eta_mu": 1.0,
         "eta_sigma": 1.0,

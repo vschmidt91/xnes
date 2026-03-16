@@ -34,6 +34,7 @@ class OptimizerSettings:
 
     Attributes:
         population_size: Default number of samples per freshly generated batch.
+        seed: Optional root seed used to deterministically derive each freshly sampled batch.
         minimize: Whether lower objective values should rank ahead of higher ones.
         eta_mu: Mean learning-rate multiplier.
         eta_sigma: Global-scale learning-rate multiplier.
@@ -41,6 +42,7 @@ class OptimizerSettings:
     """
 
     population_size: int | None = None
+    seed: int | None = None
     minimize: bool = False
     eta_mu: float = 1.0
     eta_sigma: float = 1.0
@@ -92,7 +94,6 @@ class Optimizer(Generic[T]):
     ) -> None:
         self._settings = settings or OptimizerSettings()
         self._schema: SchemaSpec[T] = cast(SchemaSpec[T], parse_schema(schema_type))
-        self._rng = np.random.default_rng()
         self._scheduler = BatchScheduler()
         self._pending_reservation: Reservation | None = None
         self._xnes: XNES
@@ -112,7 +113,6 @@ class Optimizer(Generic[T]):
             "results": _serialize_results(self._scheduler.results),
             "context_pending": dict(self._scheduler.context_pending),
             "batch": self._scheduler.batch.tolist(),
-            "rng_state": dict(self._rng.bit_generator.state),
         }
 
     def load(self, state: JSONObject) -> SchemaDiff:
@@ -142,7 +142,6 @@ class Optimizer(Generic[T]):
             scale,
         )
 
-        self._rng.bit_generator.state = dict(cast(Mapping[str, object], state["rng_state"]))
         self._xnes = XNES(loc, scale)
         self._restore_status(status)
         self._pending_reservation = None
@@ -259,9 +258,16 @@ class Optimizer(Generic[T]):
         return reconciled_batch
 
     def _sample_batch(self) -> None:
-        batch = self._xnes.ask(self.settings.population_size, self._rng)
+        batch = self._xnes.ask(self.settings.population_size, self._batch_rng())
         self._pending_reservation = None
         self._scheduler.reset(batch)
+
+    def _batch_rng(self) -> np.random.Generator:
+        seed = self.settings.seed
+        if seed is None:
+            return np.random.Generator(np.random.PCG64())
+        batch_seed = np.random.SeedSequence(int(seed), spawn_key=(self._num_batches,))
+        return np.random.Generator(np.random.PCG64(batch_seed))
 
     def _complete_batch(self) -> tuple[XNESStatus, bool]:
         self._num_batches += 1
