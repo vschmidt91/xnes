@@ -6,7 +6,7 @@ from typing import Annotated
 from leitwerk import Optimizer, Parameter
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class Params:
     attack_threshold: Annotated[float, Parameter()]
     worker_limit: Annotated[float, Parameter(loc=66, scale=10, min=12)]

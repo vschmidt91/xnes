@@ -26,7 +26,7 @@ MAP_FILE = ROOT / "resources" / "PylonAIE_v4.SC2Map"
 MOVING_AVERAGE_WINDOW = 10
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class BotParams:
     max_group_distance: Annotated[float, Parameter(loc=3, scale=3, min=0)]
     shield_threshold: Annotated[float, Parameter(min=0, max=1)]

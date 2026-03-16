@@ -14,7 +14,7 @@ Path = tuple[str, ...]
 BuildFn = Callable[[Mapping[Path, float]], Any]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Parameter:
     """User-facing metadata for one optimized scalar schema field.
 
@@ -134,7 +134,7 @@ class Parameter:
         _coerce_positive(self.scale, _field_component_name(name, "scale"))
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class SchemaDiff:
     """Difference between persisted and current schema definitions.
 
@@ -151,7 +151,7 @@ class SchemaDiff:
     unchanged: list[str]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class FieldSpec:
     """Internal normalized description of one optimized schema leaf."""
 
@@ -165,7 +165,7 @@ class FieldSpec:
         return self.parameter.decode_scalar(z)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class SchemaSpec(Generic[T]):
     """Internal parsed schema-tree description used by `Optimizer`."""
 

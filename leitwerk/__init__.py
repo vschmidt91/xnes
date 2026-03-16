@@ -28,7 +28,7 @@ Example:
     ```
 """
 
-from .optimizer import Optimizer, OptimizerSettings, TellResult
+from .optimizer import Optimizer, OptimizerReport, OptimizerSettings
 from .schema import Parameter, SchemaDiff
 from .session import OptimizerSession
 from .xnes import XNES, XNESStatus
@@ -39,7 +39,7 @@ __all__ = [
     "OptimizerSettings",
     "Parameter",
     "SchemaDiff",
-    "TellResult",
+    "OptimizerReport",
     "XNES",
     "XNESStatus",
 ]

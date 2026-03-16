@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Generic, TypeAlias, TypeVar, cast
 
 import numpy as np
@@ -47,8 +47,8 @@ class OptimizerSettings:
     eta_B: float = 1.0
 
 
-@dataclass(frozen=True)
-class TellResult:
+@dataclass(frozen=True, slots=True)
+class OptimizerReport:
     """Outcome of one `Optimizer.tell` call.
 
     Attributes:
@@ -180,7 +180,7 @@ class Optimizer(Generic[T]):
         """Effective runtime optimizer configuration."""
         return self._settings
 
-    def tell(self, result: float | Sequence[float] | np.ndarray) -> TellResult:
+    def tell(self, result: float | Sequence[float] | np.ndarray) -> OptimizerReport:
         """Submit the objective result for the pending sample."""
         reservation = self._require_pending()
         tell_result = self._tell_reservation(reservation, result)
@@ -191,13 +191,13 @@ class Optimizer(Generic[T]):
         self,
         reservation: Reservation,
         result: float | Sequence[float] | np.ndarray,
-    ) -> TellResult:
+    ) -> OptimizerReport:
         completed_batch = self._scheduler.record_result(reservation, _normalize_result(result))
         self._total_samples += 1
         if completed_batch:
             status, restarted = self._complete_batch()
-            return TellResult(True, reservation.matched_context, status, restarted)
-        return TellResult(False, reservation.matched_context, XNESStatus.OK, False)
+            return OptimizerReport(True, reservation.matched_context, status, restarted)
+        return OptimizerReport(False, reservation.matched_context, XNESStatus.OK, False)
 
     def _params_for(self, reservation: Reservation) -> T:
         latent_sample = self._xnes.transform(self._scheduler.batch[:, [reservation.sample_id]])[:, 0]
@@ -306,13 +306,7 @@ class Optimizer(Generic[T]):
         }
 
     def _settings_state(self) -> JSONObject:
-        return {
-            "population_size": self.settings.population_size,
-            "minimize": self.settings.minimize,
-            "eta_mu": self.settings.eta_mu,
-            "eta_sigma": self.settings.eta_sigma,
-            "eta_B": self.settings.eta_B,
-        }
+        return asdict(self._settings)
 
     def _reserve(self, context: str | None) -> Reservation:
         result = self._scheduler.reserve(context)

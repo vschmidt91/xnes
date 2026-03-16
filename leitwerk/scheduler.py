@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import numpy as np
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Reservation:
     sample_id: int
     context: str | None

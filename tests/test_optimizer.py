@@ -6,7 +6,7 @@ from typing import Annotated, Any, cast
 
 import numpy as np
 import pytest
-from leitwerk import Optimizer, OptimizerSettings, Parameter, SchemaDiff, TellResult, XNESStatus
+from leitwerk import Optimizer, OptimizerReport, OptimizerSettings, Parameter, SchemaDiff, XNESStatus
 from leitwerk.optimizer import JSONObject
 
 
@@ -15,6 +15,7 @@ def _make_schema(schema_name: str, **parameters: Parameter) -> type[Any]:
         schema_name,
         [(field_name, Annotated[float, parameter]) for field_name, parameter in parameters.items()],
         frozen=True,
+        slots=True,
     )
 
 
@@ -547,11 +548,13 @@ def test_nested_schema_flattens_leaf_names_and_rebuilds_dataclasses() -> None:
             ("attack_threshold", Annotated[float, Parameter(loc=2.0, scale=3.0, min=0.0)]),
         ],
         frozen=True,
+        slots=True,
     )
     mining = make_dataclass(
         "MiningParameters",
         [("gas_priority", Annotated[float, Parameter(loc=0.5, scale=1.0, min=0.0, max=1.0)])],
         frozen=True,
+        slots=True,
     )
     schema = make_dataclass(
         "NestedParameters",
@@ -561,6 +564,7 @@ def test_nested_schema_flattens_leaf_names_and_rebuilds_dataclasses() -> None:
             ("combat", combat),
         ],
         frozen=True,
+        slots=True,
     )
 
     expected_names = ["alpha", "combat.attack_threshold", "combat.retreat_threshold", "mining.gas_priority"]
@@ -694,7 +698,7 @@ def test_mapping_schema_rejects_non_parameter_leaf_values() -> None:
 
 
 def test_schema_requires_parameter_annotated_float_fields() -> None:
-    bad_schema = make_dataclass("BadSchema", [("x", float)], frozen=True)
+    bad_schema = make_dataclass("BadSchema", [("x", float)], frozen=True, slots=True)
 
     with pytest.raises(TypeError, match=r"Annotated\[float, Parameter"):
         Optimizer(bad_schema)
@@ -797,17 +801,17 @@ def test_context_reuses_mirror_on_repeat() -> None:
     first_params = optimizer.ask(context=context)
     first = np.array([first_params.x, first_params.y], dtype=float)
     first_report = optimizer.tell(1.0)
-    assert first_report == TellResult(False, False, XNESStatus.OK, False)
+    assert first_report == OptimizerReport(False, False, XNESStatus.OK, False)
 
     optimizer.ask()
     second_report = optimizer.tell(0.0)
-    assert second_report == TellResult(False, False, XNESStatus.OK, False)
+    assert second_report == OptimizerReport(False, False, XNESStatus.OK, False)
 
     mirror_params = optimizer.ask(context=context)
     mirror = np.array([mirror_params.x, mirror_params.y], dtype=float)
     assert np.allclose(mirror, -first)
     third_report = optimizer.tell(-1.0)
-    assert third_report == TellResult(False, True, XNESStatus.OK, False)
+    assert third_report == OptimizerReport(False, True, XNESStatus.OK, False)
 
 
 def test_json_context_reuses_mirror_on_canonical_repeat() -> None:
@@ -817,17 +821,17 @@ def test_json_context_reuses_mirror_on_canonical_repeat() -> None:
     first_params = optimizer.ask(context={"b": 2, "a": 1})
     first = np.array([first_params.x, first_params.y], dtype=float)
     first_report = optimizer.tell(1.0)
-    assert first_report == TellResult(False, False, XNESStatus.OK, False)
+    assert first_report == OptimizerReport(False, False, XNESStatus.OK, False)
 
     optimizer.ask()
     second_report = optimizer.tell(0.0)
-    assert second_report == TellResult(False, False, XNESStatus.OK, False)
+    assert second_report == OptimizerReport(False, False, XNESStatus.OK, False)
 
     mirror_params = optimizer.ask(context={"a": 1, "b": 2})
     mirror = np.array([mirror_params.x, mirror_params.y], dtype=float)
     assert np.allclose(mirror, -first)
     third_report = optimizer.tell(-1.0)
-    assert third_report == TellResult(False, True, XNESStatus.OK, False)
+    assert third_report == OptimizerReport(False, True, XNESStatus.OK, False)
 
 
 def test_json_context_is_saved_as_canonical_string() -> None:

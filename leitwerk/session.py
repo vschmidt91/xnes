@@ -11,7 +11,7 @@ from typing import Generic, TypeVar, cast
 
 import numpy as np
 
-from .optimizer import JSONLike, JSONObject, Optimizer, OptimizerSettings, TellResult
+from .optimizer import JSONLike, JSONObject, Optimizer, OptimizerReport, OptimizerSettings
 from .schema import SchemaDiff
 
 T = TypeVar("T")
@@ -66,7 +66,7 @@ class OptimizerSession(Generic[T]):
         self._require_clean()
         return self._optimizer.ask(context)
 
-    def tell(self, result: float | Sequence[float] | np.ndarray) -> TellResult:
+    def tell(self, result: float | Sequence[float] | np.ndarray) -> OptimizerReport:
         """Record one result and atomically persist the updated optimizer state."""
         tell_result = self._optimizer.tell(result)
         self._dirty = True
