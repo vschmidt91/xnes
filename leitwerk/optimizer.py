@@ -185,6 +185,14 @@ class Optimizer(Generic[T]):
         return self._schema.build_params(self._xnes.mu)
 
     @property
+    def scale_marginal(self) -> T:
+        """Current scale-vector parameters in the schema's runtime shape."""
+        scale_marginal = self._xnes.scale_marginal
+        return self._schema.instantiate(
+            {field.path: float(sigma) for field, sigma in zip(self._schema.fields, scale_marginal, strict=True)},
+        )
+
+    @property
     def settings(self) -> OptimizerSettings:
         """Effective runtime optimizer configuration with sparse overrides merged."""
         return _merge_settings(self._settings_baseline, self._settings_override)

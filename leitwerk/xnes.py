@@ -152,6 +152,13 @@ class XNES:
 
         return self.sigma * self.B
 
+    @property
+    def scale_marginal(self) -> np.ndarray:
+        """Current marginal per-dimension standard deviations in latent space."""
+
+        scale = self.scale
+        return np.sqrt(np.maximum(np.einsum("ij,ij->i", scale, scale), 0.0))
+
     def transform(self, samples: np.ndarray) -> np.ndarray:
         """Map standardized samples `z` into current distribution coordinates."""
 

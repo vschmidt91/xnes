@@ -62,6 +62,11 @@ class OptimizerSession(Generic[T]):
         """Current optimizer mean parameters."""
         return self._optimizer.mean
 
+    @property
+    def scale_marginal(self) -> T:
+        """Current optimizer scale-vector parameters."""
+        return self._optimizer.scale_marginal
+
     def ask(self, context: JSONLike = None) -> T:
         """Reserve one sampled parameter set for evaluation."""
         return self._optimizer.ask(context)

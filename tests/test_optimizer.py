@@ -593,6 +593,15 @@ def test_nested_schema_flattens_leaf_names_and_rebuilds_dataclasses() -> None:
     assert mean.combat.retreat_threshold == -1.0
     assert mean.mining.gas_priority == 0.5
 
+    scale_marginal = optimizer.scale_marginal
+    assert scale_marginal.__class__ is schema
+    assert scale_marginal.combat.__class__ is combat
+    assert scale_marginal.mining.__class__ is mining
+    assert scale_marginal.alpha == 0.25
+    assert scale_marginal.combat.attack_threshold == pytest.approx(3.0)
+    assert scale_marginal.combat.retreat_threshold == 2.0
+    assert scale_marginal.mining.gas_priority == 1.0
+
     params = optimizer.ask()
     assert params.__class__ is schema
     assert params.combat.__class__ is combat
@@ -630,6 +639,15 @@ def test_nested_mapping_schema_flattens_leaf_names_and_rebuilds_plain_dicts() ->
     assert mean["combat"]["attack_threshold"] == 2.0
     assert mean["combat"]["retreat_threshold"] == -1.0
     assert mean["mining"]["gas_priority"] == 0.5
+
+    scale_marginal = optimizer.scale_marginal
+    assert isinstance(scale_marginal, dict)
+    assert isinstance(scale_marginal["combat"], dict)
+    assert isinstance(scale_marginal["mining"], dict)
+    assert scale_marginal["alpha"] == 0.25
+    assert scale_marginal["combat"]["attack_threshold"] == pytest.approx(3.0)
+    assert scale_marginal["combat"]["retreat_threshold"] == 2.0
+    assert scale_marginal["mining"]["gas_priority"] == 1.0
 
     params = optimizer.ask()
     assert isinstance(params, dict)

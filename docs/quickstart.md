@@ -65,4 +65,5 @@ Persistence edge cases:
 
 For deterministic inference, read `mean`. If you want the means from a
 saved run rather than a fresh optimizer, call `load(...)` first.
+For the current per-parameter spread in latent space, use `scale_marginal`.
 

@@ -41,6 +41,9 @@ def test_session_flush_persists_initial_state_and_restores(tmp_path: Path) -> No
     assert session.schema_diff is None
     assert session.settings == expected_settings
     assert session.mean.__class__ is schema
+    assert session.scale_marginal.__class__ is schema
+    assert session.scale_marginal.alpha == 1.5
+    assert session.scale_marginal.beta == 2.0
 
     session.flush()
 
@@ -53,6 +56,7 @@ def test_session_flush_persists_initial_state_and_restores(tmp_path: Path) -> No
     assert restored.settings == expected_settings
     assert restored.schema_diff == SchemaDiff(added=[], removed=[], changed=[], unchanged=["alpha", "beta"])
     assert restored.mean == session.mean
+    assert restored.scale_marginal == session.scale_marginal
 
 
 def test_session_tell_persists_committed_progress(tmp_path: Path) -> None:
