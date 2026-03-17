@@ -6,7 +6,7 @@ from typing import Annotated, SupportsFloat, cast
 
 import matplotlib.pyplot as plt
 import numpy as np
-from leitwerk import Optimizer, Parameter
+from leitwerk import OptimizerSession, Parameter
 from loguru import logger
 from sc2 import maps
 from sc2.bot_ai import BotAI
@@ -28,22 +28,21 @@ MOVING_AVERAGE_WINDOW = 10
 
 @dataclass(frozen=True, slots=True)
 class BotParams:
-    max_group_distance: Annotated[float, Parameter(loc=3, scale=3, min=0)]
-    shield_threshold: Annotated[float, Parameter(min=0, max=1)]
+    max_group_distance: Annotated[float, Parameter(loc=3, scale=3, min=1)]
+    attack_threshold: Annotated[float, Parameter(min=0, max=1)]
+    group_weighting: Annotated[float, Parameter(min=0, max=1)]
 
 
 class LearningBot(BotAI):
-    optimizer = Optimizer(BotParams)
-    params: BotParams | None = None
+    def __init__(self) -> None:
+        super().__init__()
+        self.optimizer = OptimizerSession(PARAMS_FILE, BotParams)
+        self.params: BotParams | None = None
 
     async def on_start(self) -> None:
         self.townhalls[0].train(UnitTypeId.PROBE)
-        DATA_PATH.mkdir(exist_ok=True)
-        if PARAMS_FILE.exists():
-            with PARAMS_FILE.open() as f:
-                state = json.load(f)
-            diff = self.optimizer.load(state)
-            logger.info(diff)
+        if self.optimizer.restored:
+            logger.info(self.optimizer.schema_diff)
 
         # sammple now if enemy race is known, wait for vision otherwise
         if self.enemy_race in {Race.Protoss, Race.Terran, Race.Zerg}:
@@ -71,22 +70,37 @@ class LearningBot(BotAI):
                     worker.attack(self.enemy_start_locations[0])
             return
 
+        # resign for speedup
+        if self.supply_used == 0:
+            await self.client.chat_send("gg", False)
+            await self.client.leave()
+            return
+
         mineral_patch = self.mineral_field.closest_to(self.start_location)
-        group_center = _medoid([u.position for u in self.workers]) if self.workers else self.start_location
-        for worker in self.workers:
+        positions = [u.position for u in self.workers]
+        group_center = self.start_location
+        weights = np.array([])
+        if self.workers:
+            group_center = _medoid(positions)
+            distances = _pairwise_distances(positions)
+            weights = 1.0 / (1.0 + distances)
+            np.fill_diagonal(weights, 1e-10)
+            weights /= np.sum(weights, axis=0, keepdims=True)
+
+        hp_vector = np.array([u.shield_percentage for u in self.workers])
+        hp_group_vector = hp_vector @ weights
+
+        for worker, hp, hp_group in zip(self.workers, hp_vector, hp_group_vector, strict=False):
+            combat_health = self.params.group_weighting * hp_group + (1 - self.params.group_weighting) * hp
+
             if worker.distance_to(group_center) > self.params.max_group_distance:
                 worker.move(group_center)
-            elif worker.shield_percentage < self.params.shield_threshold:
+            elif combat_health < self.params.attack_threshold:
                 worker.gather(mineral_patch)
             elif self.enemy_structures:
                 worker.attack(self.enemy_structures.random.position)
             else:
                 worker.attack(self.enemy_start_locations[0])
-
-        # resign for speedup
-        if self.supply_used == 0:
-            await self.client.chat_send("gg", False)
-            await self.client.leave()
 
     async def on_end(self, game_result: Result) -> None:
         outcome = {
@@ -98,15 +112,14 @@ class LearningBot(BotAI):
         efficiency = np.log1p(self.state.score.killed_value_units) - np.log1p(self.state.score.lost_minerals_economy)
         result = (outcome, efficiency)
         logger.info(f"{result=}")
-        tell_result = self.optimizer.tell(result)
-        logger.info(tell_result)
+
+        report = self.optimizer.tell(result)
+        logger.info(report)
+
         history = load_history()
         history.append({"outcome": outcome, "efficiency": efficiency, **flatten_numeric_fields(self.params)})
         save_history(history)
         save_plot(history)
-        state = self.optimizer.save()
-        with PARAMS_FILE.open("w", encoding="utf-8") as f:
-            json.dump(state, f, indent=2)
 
 
 def _medoid(points: Sequence[Point2]) -> Point2:

@@ -33,12 +33,13 @@ def test_session_flush_persists_initial_state_and_restores(tmp_path: Path) -> No
     schema = _make_schema("SessionParams", beta=(-1.0, 2.0), alpha=(2.0, 1.5))
     settings = OptimizerSettings(population_size=6, seed=_TEST_SEED)
     path = tmp_path / "session.json"
+    expected_settings = OptimizerSettings(population_size=6, seed=_TEST_SEED)
 
     session = OptimizerSession(path, schema, settings=settings)
 
     assert session.restored is False
     assert session.schema_diff is None
-    assert session.settings == settings
+    assert session.settings == expected_settings
     assert session.mean.__class__ is schema
 
     session.flush()
@@ -46,10 +47,10 @@ def test_session_flush_persists_initial_state_and_restores(tmp_path: Path) -> No
     expected = Optimizer(schema, settings=settings).save()
     assert _read_state(path) == expected
 
-    restored = OptimizerSession(path, schema, settings=settings)
+    restored = OptimizerSession(path, schema)
 
     assert restored.restored is True
-    assert restored.settings == settings
+    assert restored.settings == expected_settings
     assert restored.schema_diff == SchemaDiff(added=[], removed=[], changed=[], unchanged=["alpha", "beta"])
     assert restored.mean == session.mean
 
@@ -86,6 +87,32 @@ def test_session_reports_schema_diff_on_restore(tmp_path: Path) -> None:
     assert restored.restored is True
     assert restored.schema_diff == SchemaDiff(added=["z"], removed=[], changed=[], unchanged=["x", "y"])
     assert restored.mean.__class__ is changed_schema
+
+
+def test_session_runtime_settings_override_persisted_baseline(tmp_path: Path) -> None:
+    schema = _make_schema("SessionSettings", x=(2.0, 1.5))
+    path = tmp_path / "session.json"
+    OptimizerSession(
+        path,
+        schema,
+        settings=OptimizerSettings(population_size=6, seed=_TEST_SEED, minimize=True, eta_mu=0.9),
+    ).flush()
+
+    restored = OptimizerSession(path, schema, settings=OptimizerSettings(seed=999, eta_sigma=0.3))
+
+    assert restored.restored is True
+    assert restored.settings == OptimizerSettings(
+        population_size=6,
+        seed=999,
+        minimize=True,
+        eta_mu=0.9,
+        eta_sigma=0.3,
+    )
+
+    restored.flush()
+
+    reloaded = OptimizerSession(path, schema)
+    assert reloaded.settings == restored.settings
 
 
 def test_session_rejects_non_object_checkpoint(tmp_path: Path) -> None:

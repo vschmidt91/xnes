@@ -25,9 +25,9 @@ def test_xnes_rank_invariance_under_monotonic_transform() -> None:
     rng_b = np.random.default_rng(5)
 
     for _ in range(steps):
-        z_a = xnes_a.ask(n, rng_a)
+        z_a = xnes_a.sample_distribution(n, rng_a)
         x_a = xnes_a.transform(z_a)
-        z_b = xnes_b.ask(n, rng_b)
+        z_b = xnes_b.sample_distribution(n, rng_b)
         assert np.allclose(z_a, z_b)
         assert np.allclose(x_a, xnes_a.transform(z_a))
 
@@ -38,8 +38,8 @@ def test_xnes_rank_invariance_under_monotonic_transform() -> None:
         ranking_transformed = _ranking(transformed_scores)
         assert ranking_raw == ranking_transformed
 
-        xnes_a.tell(z_a, ranking_raw, eta_mu=eta_mu, eta_sigma=eta_sigma, eta_B=eta_B)
-        xnes_b.tell(z_b, ranking_transformed, eta_mu=eta_mu, eta_sigma=eta_sigma, eta_B=eta_B)
+        xnes_a.update_distribution(z_a, ranking_raw, eta_mu=eta_mu, eta_sigma=eta_sigma, eta_B=eta_B)
+        xnes_b.update_distribution(z_b, ranking_transformed, eta_mu=eta_mu, eta_sigma=eta_sigma, eta_B=eta_B)
 
     assert np.allclose(xnes_a.mu, xnes_b.mu)
     assert np.allclose(xnes_a.scale, xnes_b.scale)
@@ -80,15 +80,15 @@ def test_xnes_linear_invariance_with_stress_values() -> None:
     score_projection = np.array([1.7, -0.2, 3.3], dtype=float)
 
     for _ in range(steps):
-        z_x = xnes_x.ask(n, rng_x)
-        z_y = xnes_y.ask(n, rng_y)
+        z_x = xnes_x.sample_distribution(n, rng_x)
+        z_y = xnes_y.sample_distribution(n, rng_y)
         assert np.allclose(z_x, z_y)
 
         scores = score_projection @ z_x + 1e-12 * np.arange(n)
         ranking = _ranking(scores)
 
-        status_x = xnes_x.tell(z_x, ranking, eta_mu=eta_mu, eta_sigma=eta_sigma, eta_B=eta_B)
-        status_y = xnes_y.tell(z_y, ranking, eta_mu=eta_mu, eta_sigma=eta_sigma, eta_B=eta_B)
+        status_x = xnes_x.update_distribution(z_x, ranking, eta_mu=eta_mu, eta_sigma=eta_sigma, eta_B=eta_B)
+        status_y = xnes_y.update_distribution(z_y, ranking, eta_mu=eta_mu, eta_sigma=eta_sigma, eta_B=eta_B)
         assert status_x == status_y
 
         assert np.all(np.isfinite(xnes_x.mu))
@@ -131,7 +131,7 @@ def test_xnes_eta_B_scales_dimension_dependent_shape_rate() -> None:
     assert sign > 0
     expected_B *= np.exp(-logdet / d)
 
-    status = xnes.tell(samples, ranking, eta_mu=0.0, eta_sigma=0.0, eta_B=0.2)
+    status = xnes.update_distribution(samples, ranking, eta_mu=0.0, eta_sigma=0.0, eta_B=0.2)
     assert status is XNESStatus.LOC_STEP_MIN
     assert np.allclose(xnes.mu, np.zeros(3))
     assert np.isclose(xnes.sigma, 1.0)

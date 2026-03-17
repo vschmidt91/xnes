@@ -4,6 +4,7 @@ opt: Optimizer = Optimizer({"a": Parameter(), "b": Parameter()}, OptimizerSettin
 
 for _ in range(500):
     x = opt.ask()
-    opt.tell((x["a"] - 1) ** 2 + (x["b"] - 2) ** 2)
+    report = opt.tell((x["a"] - 1) ** 2 + (x["b"] - 2) ** 2)
+    print(report)
 
 print(opt.mean)

@@ -11,9 +11,9 @@
 
 It gives you:
 
-- typed parameter objects in the code
+- typed parameters with priors in your code
 - JSON checkpoints you can inspect, diff, and resume
-- schema reconciliation, so you can keep iterating without throwing away learned state
+- schema reconciliation, so you can keep developing and preserve training progress
 
 ---
 
@@ -36,15 +36,17 @@ pip install -e .[dev,docs,benchmark]
 ## Minimal Example
 
 ```py
-from leitwerk import Optimizer, Parameter
+from leitwerk import Optimizer, OptimizerSettings, Parameter
 
-opt = Optimizer({"a": Parameter(), "b": Parameter()}, minimize=True)
+opt = Optimizer({"a": Parameter(), "b": Parameter()}, OptimizerSettings(minimize=True))
 for _ in range(500):
     x = opt.ask()
     opt.tell((x["a"] - 1) ** 2 + (x["b"] - 2) ** 2)
+```
 
-print(opt.mean)
-# {'a': 1.0000000001945673, 'b': 2.0000000008038628}
+```pycon
+>>> opt.mean
+{'a': 1.0000000001945673, 'b': 2.0000000008038628}
 ```
 
 ## Quickstart: Run the Example SC2 Bot
@@ -66,13 +68,9 @@ It writes progress into:
 - `data/history.json`: result history and parameter values
 - `data/plot.png`: rolling plots for outcome, efficiency, and learned parameters
 
-For SC2 bot authors, reading this file is probably enough to get started.
-
 ---
 
 ## Integration Guide
-
-The intended loop for one evaluation is: load > ask > tell > save
 
 ### 1. Define a Typed Parameter Schema
 
@@ -84,7 +82,7 @@ from leitwerk import Parameter
 
 
 @dataclass
-class Params:
+class MyParams:
     attack_threshold: Annotated[float, Parameter()]
     worker_limit: Annotated[float, Parameter(loc=66, scale=10, min=12)]
 ```
@@ -96,64 +94,70 @@ class Params:
 - `min` and `max`: optional bounds
 
 > [!TIP]
-> Nested dataclasses are supported if you want to group parameters together.
+> Nested schemas are supported if you want to group parameters together.
 
-### 2. Create or Resume the Optimizer
+### 2. Create the Optimizer
+
+For file persistence, use the `OptimizerSession` wrapper:
 
 ```py
-import json
-from pathlib import Path
+from leitwerk import OptimizerSession, OptimizerSettings
 
-from leitwerk import Optimizer
-
-
-opt = Optimizer(Params)
-
-params_file = Path("data/params.json")
-if params_file.exists():
-    schema_diff = opt.load(json.loads(params_file.read_text()))
+settings = OptimizerSettings(population_size=10)
+opt = OptimizerSession("params.json", MyParams, settings)
 ```
 
-`schema_diff` tells you which flattened parameter names were added, removed or changed.
+Optimizer settings are optional, the available arguments are:
 
-`Optimizer(Params, ...)` takes additional arguments:
-
-- `minimize`: rank lower results as better
 - `population_size`: number of evaluations per batch
+- `seed`: for reproducible sampling
+- `minimize`: rank lower results as better
 - `eta_mu`, `eta_sigma`, `eta_B`: xNES learning rates
 
 > [!NOTE]
-> Optimizer arguments are runtime settings. `save()` includes them only in a
-> top-level `settings` block for inspection, and `load()` does not restore them.
+> These settings are persisted as fallback, runtime values override.
 
-### 3. Ask For a Sample
+If `params.json` already exists, the optimizer will [reconcile](#what-happens-when-the-schema-changes):
+
+```pycon
+>>> opt.schema_diff
+SchemaDiff(added=[], removed=[], changed=[], unchanged=['attack_threshold', 'worker_limit'])
+```
+
+### 3. Sample the Distribution
 
 ```py
-context = {"enemy_race": "Protoss"}     # optional context
+context = {"opponent_race": "Protoss"}  # optional
 params = opt.ask(context)
-print(params)
-# Params(attack_threshold=-0.8312413125179872, worker_limit=59.407519238244)
 ```
 
-For a deterministic evaluation, use:
-
-```py
-params = opt.mean
-print(params)
-# Params(attack_threshold=0.0, worker_limit=66.0)
+```pycon
+>>> params
+MyParams(attack_threshold=-0.8312413125179872, worker_limit=59.407519238244)
 ```
 
-### 4. Tell the Result and Save
+For deterministic evaluation, use the distribution mean:
+
+```pycon
+>>> opt.mean
+MyParams(attack_threshold=0.0, worker_limit=66.0)
+```
+
+### 4. Tell the Result
+
+Encode the objective as one or more numbers:
 
 ```py
 result = +1 if win else 0
-report = opt.tell(result)
+report = opt.tell(result)   # saves to params.json atomically
 
 # better:
 # report = opt.tell((result, calc_heuristic()))
+```
 
-params_file.parent.mkdir(parents=True, exist_ok=True)
-params_file.write_text(json.dumps(opt.save(), indent=2))
+```pycon
+>>> report
+OptimizerReport(completed_batch=False, matched_context=False, status=<XNESStatus.OK: 1>, restarted=False)
 ```
 
 Result handling is simple:
@@ -163,26 +167,18 @@ Result handling is simple:
 - the first item is the main objective, later items act as tie-breakers
 - only relative ranking matters, not absolute numeric values
 
-`report` tells you:
-
-- whether the batch completed
-- whether context matching found a mirrored sample
-- which xNES status was returned
-- whether the optimizer restarted with a fresh distribution.
-
 ---
 
 ## What Happens When the Schema Changes
 
-This is one of the main reasons to use `leitwerk` in an active project.
+This is the main reason to use `leitwerk` - it handles the changes so you can keep iterating.
 
-- parameters are identified by flattened names and reconciled individually
+- parameters are identified by flattened names
 - renaming a parameter resets that parameter
 - changing `min` or `max` resets that parameter
-- changing `loc` or `scale` defines future resets, but does not trigger one
+- changing `loc` or `scale` defines the new reset target, but does not trigger one
 
-In practice, you can keep developing, adding knobs, and updating priors without resetting the whole learned state every time.
-
+In practice, this means you can add and remove parameters, without resetting the whole state.
 
 ## Choosing Objectives
 
@@ -190,19 +186,21 @@ For efficient training, the objective often matters more than the optimizer.
 
 - put win rate first if that is the real target
 - add tie-breakers such as army value, income, or cost efficiency
-- this is NOT multi-objective / pareto optimization
 - keep objective semantics stable for long term training
-- use separate optimizers if parameters actually belong to separate objectives
+- use multiple optimizers if parameters actually belong to separate objectives
+
+This is not multi-objective / pareto optimization.
 
 ## Context Matching
 
 `opt.ask(context=...)` lets the scheduler match mirrored samples in the same context when possible.
 
-Useful contexts for SC2 bots:
+Useful contexts for SC2 bots include:
 
-- `self.enemy_race.name`
-- `self.opponent_id`
-- `self.game_info.map_name`
+- opponent race
+- own race (for random bots)
+- map name
+- opponent id
 
 The context value is matched by exact equality.
 Non-string values are serialized to canonical JSON strings before matching and persistence.

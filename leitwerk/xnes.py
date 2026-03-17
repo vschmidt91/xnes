@@ -104,7 +104,7 @@ class XNES:
     MAX_CONDITION = 1e14
 
     def __init__(self, x0: np.ndarray, sigma0: np.ndarray | float) -> None:
-        self.mu = np.asarray(x0, dtype=float)
+        self.mu = np.array(x0, dtype=float, copy=True)
         self.sigma: float
         self.B: np.ndarray
 
@@ -158,7 +158,7 @@ class XNES:
         z = _validated_samples(samples, self.dim)
         return self.mu[:, None] + self.scale @ z
 
-    def ask(
+    def sample_distribution(
         self,
         num_samples: int | None = None,
         rng: np.random.Generator | None = None,
@@ -182,6 +182,8 @@ class XNES:
         n_half = n // 2
         rng = rng or np.random.default_rng()
 
+        # return rng.standard_normal((self.dim, n))
+
         z_half = np.empty((self.dim, n_half))
         for start in range(0, n_half, self.dim):
             end = min(start + self.dim, n_half)
@@ -193,13 +195,13 @@ class XNES:
 
         return np.hstack([z_half, -z_half])
 
-    def tell(
+    def update_distribution(
         self,
         samples: np.ndarray,
         ranking: list[int],
         eta_mu: float = 1.0,
-        eta_sigma: float = 1.0,
-        eta_B: float = 1.0,
+        eta_sigma: float = 0.5,
+        eta_B: float = 0.25,
         eps: float = 1e-10,
     ) -> XNESStatus:
         """Apply one xNES update from ranked standardized samples.

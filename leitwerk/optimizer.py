@@ -33,20 +33,26 @@ class OptimizerSettings:
     """Runtime optimizer configuration.
 
     Attributes:
-        population_size: Default number of samples per freshly generated batch.
-        seed: Optional root seed used to deterministically derive each freshly sampled batch.
-        minimize: Whether lower objective values should rank ahead of higher ones.
-        eta_mu: Mean learning-rate multiplier.
-        eta_sigma: Global-scale learning-rate multiplier.
-        eta_B: Shape learning-rate multiplier.
+        population_size: Optional batch-size override. `None` keeps the persisted
+            baseline or the built-in xNES sample-count default.
+        seed: Optional root seed override used to deterministically derive each
+            freshly sampled batch.
+        minimize: Optional ranking-direction override. `None` keeps the
+            persisted baseline and falls back to maximization on fresh runs.
+        eta_mu: Optional mean learning-rate override. `None` keeps the
+            persisted baseline or the xNES default.
+        eta_sigma: Optional global-scale learning-rate override. `None` keeps
+            the persisted baseline or the xNES default.
+        eta_B: Optional shape learning-rate override. `None` keeps the
+            persisted baseline or the xNES default.
     """
 
     population_size: int | None = None
     seed: int | None = None
-    minimize: bool = False
-    eta_mu: float = 1.0
-    eta_sigma: float = 1.0
-    eta_B: float = 1.0
+    minimize: bool | None = None
+    eta_mu: float | None = None
+    eta_sigma: float | None = None
+    eta_B: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,10 +87,10 @@ class Optimizer(Generic[T]):
     persisted parameter definitions. Field ordering is lexicographic by leaf
     name rather than declaration or insertion order.
 
-    Results are ranked for maximization by default. Pass `minimize=True` to
-    rank lower results as better instead. Runtime configuration stays local to
-    the current instance and is only included in `save()` under the top-level
-    `settings` block for inspection.
+    Results are ranked for maximization by default. Runtime settings passed at
+    construction act as sparse overrides over any persisted `settings`
+    baseline restored by `load()`. Fresh runs persist their initial settings as
+    that baseline.
     """
 
     def __init__(
@@ -92,7 +98,8 @@ class Optimizer(Generic[T]):
         schema_type: type[T] | Mapping[str, object],
         settings: OptimizerSettings | None = None,
     ) -> None:
-        self._settings = settings or OptimizerSettings()
+        self._settings_override = settings if settings is not None else OptimizerSettings()
+        self._settings_baseline = self._settings_override
         self._schema: SchemaSpec[T] = cast(SchemaSpec[T], parse_schema(schema_type))
         self._scheduler = BatchScheduler()
         self._pending_reservation: Reservation | None = None
@@ -105,7 +112,7 @@ class Optimizer(Generic[T]):
     def save(self) -> JSONObject:
         """Serialize the current optimizer state into a JSON-compatible mapping."""
         return {
-            "settings": self._settings_state(),
+            "settings": asdict(self._settings_baseline),
             "status": self._status(),
             "loc": self._xnes.mu.tolist(),
             "scale": self._xnes.scale.tolist(),
@@ -120,10 +127,13 @@ class Optimizer(Generic[T]):
 
         Loading a previous snapshot reconciles added, removed, and changed
         schema leaves by persisted transform compatibility while preserving
-        shared learned state. Any pending `ask()` reservation on the current
+        shared learned state. The restored `settings` block becomes the
+        baseline for any fields that were not explicitly overridden at
+        construction time. Any pending `ask()` reservation on the current
         instance is canceled.
         """
         self._pending_reservation = None
+        self._settings_baseline = _merge_settings(_deserialize_settings(state["settings"]), self._settings_override)
         schema_json = cast(JSONObject, state["schema"])
         saved_schema = _deserialize_schema(schema_json)
         saved_names = sorted(saved_schema)
@@ -176,8 +186,8 @@ class Optimizer(Generic[T]):
 
     @property
     def settings(self) -> OptimizerSettings:
-        """Effective runtime optimizer configuration."""
-        return self._settings
+        """Effective runtime optimizer configuration with sparse overrides merged."""
+        return _merge_settings(self._settings_baseline, self._settings_override)
 
     def tell(self, result: float | Sequence[float] | np.ndarray) -> OptimizerReport:
         """Submit the objective result for the pending sample."""
@@ -258,7 +268,8 @@ class Optimizer(Generic[T]):
         return reconciled_batch
 
     def _sample_batch(self) -> None:
-        batch = self._xnes.ask(self.settings.population_size, self._batch_rng())
+        settings = self.settings
+        batch = self._xnes.sample_distribution(settings.population_size, self._batch_rng())
         self._pending_reservation = None
         self._scheduler.reset(batch)
 
@@ -271,18 +282,20 @@ class Optimizer(Generic[T]):
 
     def _complete_batch(self) -> tuple[XNESStatus, bool]:
         self._num_batches += 1
+        settings = self.settings
+        tell_kwargs: dict[str, float] = {}
+        if settings.eta_mu is not None:
+            tell_kwargs["eta_mu"] = settings.eta_mu
+        if settings.eta_sigma is not None:
+            tell_kwargs["eta_sigma"] = settings.eta_sigma
+        if settings.eta_B is not None:
+            tell_kwargs["eta_B"] = settings.eta_B
         try:
-            status = self._xnes.tell(
-                self._scheduler.batch,
-                self._ranking(),
-                eta_mu=self.settings.eta_mu,
-                eta_sigma=self.settings.eta_sigma,
-                eta_B=self.settings.eta_B,
-            )
+            status = self._xnes.update_distribution(self._scheduler.batch, self._ranking(), **tell_kwargs)
         except TypeError as exc:
             if "unexpected keyword argument" not in str(exc):
                 raise
-            status = self._xnes.tell(self._scheduler.batch, self._ranking())
+            status = self._xnes.update_distribution(self._scheduler.batch, self._ranking())
         restarted = status is not XNESStatus.OK
         if restarted:
             self._num_restarts += 1
@@ -311,9 +324,6 @@ class Optimizer(Generic[T]):
             "batch_size": batch_size,
         }
 
-    def _settings_state(self) -> JSONObject:
-        return asdict(self._settings)
-
     def _reserve(self, context: str | None) -> Reservation:
         result = self._scheduler.reserve(context)
         if result is None:
@@ -330,7 +340,9 @@ class Optimizer(Generic[T]):
     def _ranking(self) -> list[int]:
         assert self._scheduler.is_complete()
         results = [cast(tuple[float, ...], item) for item in self._scheduler.results]
-        return sorted(range(len(results)), key=lambda idx: results[idx], reverse=not self.settings.minimize)
+        settings = self.settings
+        minimize = settings.minimize if settings.minimize is not None else False
+        return sorted(range(len(results)), key=lambda idx: results[idx], reverse=not minimize)
 
     def _require_idle(self, action: str) -> None:
         if self._pending_reservation is not None:
@@ -375,6 +387,26 @@ def _normalize_context(context: JSONLike) -> str | None:
 
 def _deserialize_schema(schema_json: Mapping[str, object]) -> dict[str, Parameter]:
     return {str(name): Parameter.from_state(spec) for name, spec in schema_json.items()}
+
+
+def _deserialize_settings(settings_json: object) -> OptimizerSettings:
+    settings = cast(Mapping[str, JSONScalar], settings_json)
+    return OptimizerSettings(
+        population_size=cast(int | None, settings.get("population_size")),
+        seed=cast(int | None, settings.get("seed")),
+        minimize=cast(bool | None, settings.get("minimize")),
+        eta_mu=cast(float | None, settings.get("eta_mu")),
+        eta_sigma=cast(float | None, settings.get("eta_sigma")),
+        eta_B=cast(float | None, settings.get("eta_B")),
+    )
+
+
+def _merge_settings(baseline: OptimizerSettings, override: OptimizerSettings) -> OptimizerSettings:
+    merged = asdict(baseline)
+    for key, value in asdict(override).items():
+        if value is not None:
+            merged[key] = value
+    return OptimizerSettings(**merged)
 
 
 def _serialize_results(results: Sequence[tuple[float, ...] | None]) -> list[list[float] | None]:

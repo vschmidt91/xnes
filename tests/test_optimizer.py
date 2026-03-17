@@ -42,7 +42,7 @@ def _initialized_optimizer(
     schema: type[Any] | Mapping[str, object],
     *,
     population_size: int,
-    minimize: bool = False,
+    minimize: bool | None = None,
 ) -> Optimizer[Any]:
     return _optimizer(schema, population_size=population_size, minimize=minimize)
 
@@ -52,10 +52,10 @@ def _optimizer(
     *,
     population_size: int | None = None,
     seed: int | None = _TEST_SEED,
-    minimize: bool = False,
-    eta_mu: float = 1.0,
-    eta_sigma: float = 1.0,
-    eta_B: float = 1.0,
+    minimize: bool | None = None,
+    eta_mu: float | None = None,
+    eta_sigma: float | None = None,
+    eta_B: float | None = None,
 ) -> Optimizer[Any]:
     return Optimizer(
         schema,
@@ -151,21 +151,20 @@ def _read_settings(state: object) -> dict[str, int | float | bool | None]:
     assert isinstance(state, dict)
     settings_json = state["settings"]
     assert isinstance(settings_json, Mapping)
-    assert list(settings_json) == [
-        "population_size",
-        "seed",
-        "minimize",
-        "eta_mu",
-        "eta_sigma",
-        "eta_B",
-    ]
+    assert set(settings_json) == {"population_size", "seed", "minimize", "eta_mu", "eta_sigma", "eta_B"}
+    population_size = settings_json["population_size"]
+    seed = settings_json["seed"]
+    minimize = settings_json["minimize"]
+    eta_mu = settings_json["eta_mu"]
+    eta_sigma = settings_json["eta_sigma"]
+    eta_B = settings_json["eta_B"]
     return {
-        "population_size": None if settings_json["population_size"] is None else int(settings_json["population_size"]),
-        "seed": None if settings_json["seed"] is None else int(settings_json["seed"]),
-        "minimize": bool(settings_json["minimize"]),
-        "eta_mu": float(settings_json["eta_mu"]),
-        "eta_sigma": float(settings_json["eta_sigma"]),
-        "eta_B": float(settings_json["eta_B"]),
+        "population_size": None if population_size is None else int(population_size),
+        "seed": None if seed is None else int(seed),
+        "minimize": None if minimize is None else bool(minimize),
+        "eta_mu": None if eta_mu is None else float(eta_mu),
+        "eta_sigma": None if eta_sigma is None else float(eta_sigma),
+        "eta_B": None if eta_B is None else float(eta_B),
     }
 
 
@@ -208,10 +207,14 @@ def _assert_same_settings(
     actual: dict[str, int | float | bool | None],
     expected: dict[str, int | float | bool | None],
 ) -> None:
+    assert actual.keys() == expected.keys()
     for key in ("population_size", "seed", "minimize"):
         assert actual[key] == expected[key]
     for key in ("eta_mu", "eta_sigma", "eta_B"):
-        assert actual[key] == pytest.approx(expected[key])
+        if expected[key] is None:
+            assert actual[key] is None
+        else:
+            assert actual[key] == pytest.approx(expected[key])
 
 
 def _softplus_inverse(value: float) -> float:
@@ -324,10 +327,10 @@ def test_status_block_exposes_basic_diagnostics_and_roundtrips() -> None:
     assert _read_settings(optimizer.save()) == {
         "population_size": 4,
         "seed": _TEST_SEED,
-        "minimize": False,
-        "eta_mu": 1.0,
-        "eta_sigma": 1.0,
-        "eta_B": 1.0,
+        "minimize": None,
+        "eta_mu": None,
+        "eta_sigma": None,
+        "eta_B": None,
     }
 
     params = optimizer.ask()
@@ -344,10 +347,10 @@ def test_status_block_exposes_basic_diagnostics_and_roundtrips() -> None:
     assert _read_settings(progressed_state) == {
         "population_size": 4,
         "seed": _TEST_SEED,
-        "minimize": False,
-        "eta_mu": 1.0,
-        "eta_sigma": 1.0,
-        "eta_B": 1.0,
+        "minimize": None,
+        "eta_mu": None,
+        "eta_sigma": None,
+        "eta_B": None,
     }
 
     restored = _initialized_optimizer(schema, population_size=4)
@@ -970,7 +973,7 @@ def test_load_discards_unsaved_local_progress_at_idle_boundary() -> None:
     assert np.allclose(_read_batch(restored_state), _read_batch(initial_state))
 
 
-def test_runtime_config_is_reported_in_settings_but_not_loaded() -> None:
+def test_persisted_settings_become_baseline_when_no_runtime_override_is_supplied() -> None:
     schema = _make_identity_schema("RuntimeConfig", x=(4.0, 2.0))
     opt_a = _optimizer(schema, population_size=14, seed=101, minimize=True, eta_mu=0.9, eta_sigma=0.7, eta_B=0.2)
     for _ in range(20):
@@ -995,7 +998,7 @@ def test_runtime_config_is_reported_in_settings_but_not_loaded() -> None:
         "eta_B": 0.2,
     }
 
-    opt_b = _optimizer(schema, population_size=4, seed=202)
+    opt_b = Optimizer(schema)
     opt_b.load(state)
     loaded = opt_b.save()
     assert isinstance(loaded, dict)
@@ -1003,19 +1006,53 @@ def test_runtime_config_is_reported_in_settings_but_not_loaded() -> None:
     assert "settings" in loaded
     assert "status" in loaded
     assert "rng_state" not in loaded
-    assert opt_b.settings.minimize is False
-    assert opt_b.settings.eta_mu == 1.0
-    assert opt_b.settings.eta_sigma == 1.0
-    assert opt_b.settings.eta_B == 1.0
-    assert opt_b.settings.seed == 202
-    assert _read_settings(loaded) == {
+    assert opt_b.settings == OptimizerSettings(
+        population_size=14,
+        seed=101,
+        minimize=True,
+        eta_mu=0.9,
+        eta_sigma=0.7,
+        eta_B=0.2,
+    )
+    assert _read_settings(loaded) == _read_settings(state)
+
+
+def test_runtime_settings_override_persisted_baseline_and_rewrites_it() -> None:
+    schema = _make_identity_schema("RuntimeOverrides", x=(4.0, 2.0))
+    baseline = _optimizer(schema, population_size=14, seed=101, minimize=True, eta_mu=0.9, eta_sigma=0.7, eta_B=0.2)
+    state = baseline.save()
+
+    overridden = Optimizer(
+        schema,
+        settings=OptimizerSettings(
+            population_size=4,
+            seed=202,
+            minimize=False,
+            eta_sigma=0.3,
+        ),
+    )
+    overridden.load(state)
+
+    assert overridden.settings == OptimizerSettings(
+        population_size=4,
+        seed=202,
+        minimize=False,
+        eta_mu=0.9,
+        eta_sigma=0.3,
+        eta_B=0.2,
+    )
+    assert _read_settings(overridden.save()) == {
         "population_size": 4,
         "seed": 202,
         "minimize": False,
-        "eta_mu": 1.0,
-        "eta_sigma": 1.0,
-        "eta_B": 1.0,
+        "eta_mu": 0.9,
+        "eta_sigma": 0.3,
+        "eta_B": 0.2,
     }
+
+    restored = Optimizer(schema)
+    restored.load(overridden.save())
+    assert restored.settings == overridden.settings
 
 
 def test_load_allows_switching_optimization_direction_mid_batch() -> None:
@@ -1031,7 +1068,7 @@ def test_load_allows_switching_optimization_direction_mid_batch() -> None:
     assert saved_results[0] == pytest.approx((first_params.x,))
 
     minimizing = _optimizer(schema, population_size=4, minimize=True)
-    maximizing = _optimizer(schema, population_size=4)
+    maximizing = _optimizer(schema, population_size=4, minimize=False)
     minimizing.load(state)
     maximizing.load(state)
 
@@ -1074,13 +1111,13 @@ def test_successful_termination_restarts_from_final_mu_with_fresh_scale(
     optimizer = _initialized_optimizer(schema, population_size=4)
     final_mu = np.array([4.25, -3.5])
 
-    def fake_tell(samples: np.ndarray, ranking: list[int]) -> XNESStatus:
+    def fake_update_distribution(samples: np.ndarray, ranking: list[int]) -> XNESStatus:
         optimizer._xnes.mu = final_mu.copy()
         optimizer._xnes.sigma = 6.0
         optimizer._xnes.B = np.array([[1.5, 0.2], [0.0, 0.5]])
         return XNESStatus.LOC_STEP_MIN
 
-    monkeypatch.setattr(optimizer._xnes, "tell", fake_tell)
+    monkeypatch.setattr(optimizer._xnes, "update_distribution", fake_update_distribution)
 
     for _ in range(3):
         optimizer.ask()
@@ -1107,13 +1144,13 @@ def test_failed_termination_restarts_from_schema_loc_with_fresh_scale(monkeypatc
     schema = _make_identity_schema("RestartFailure", x=(2.0, 1.5), y=(-1.0, 0.7))
     optimizer = _initialized_optimizer(schema, population_size=4)
 
-    def fake_tell(samples: np.ndarray, ranking: list[int]) -> XNESStatus:
+    def fake_update_distribution(samples: np.ndarray, ranking: list[int]) -> XNESStatus:
         optimizer._xnes.mu = np.array([4.25, -3.5])
         optimizer._xnes.sigma = 6.0
         optimizer._xnes.B = np.array([[1.5, 0.2], [0.0, 0.5]])
         return XNESStatus.SCALE_COND_MAX
 
-    monkeypatch.setattr(optimizer._xnes, "tell", fake_tell)
+    monkeypatch.setattr(optimizer._xnes, "update_distribution", fake_update_distribution)
 
     for _ in range(3):
         optimizer.ask()
