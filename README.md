@@ -33,22 +33,6 @@ Development setup with the SC2 example, tests, docs, plotting, and benchmark too
 pip install -e .[dev,docs,benchmark]
 ```
 
-## Minimal Example
-
-```py
-from leitwerk import Optimizer, OptimizerSettings, Parameter
-
-opt = Optimizer({"a": Parameter(), "b": Parameter()}, OptimizerSettings(minimize=True))
-for _ in range(500):
-    x = opt.ask()
-    opt.tell((x["a"] - 1) ** 2 + (x["b"] - 2) ** 2)
-```
-
-```pycon
->>> opt.mean
-{'a': 1.0000000001945673, 'b': 2.0000000008038628}
-```
-
 ## Quickstart: Run the Example SC2 Bot
 
 ```sh
@@ -168,6 +152,22 @@ Result handling is simple:
 - only relative ranking matters, not absolute numeric values
 
 ---
+
+## Minimal Example
+
+```py
+from leitwerk import Optimizer, OptimizerSettings, Parameter
+
+opt = Optimizer({"a": Parameter(), "b": Parameter()}, OptimizerSettings(minimize=True))
+for _ in range(500):
+    x = opt.ask()
+    opt.tell((x["a"] - 1) ** 2 + (x["b"] - 2) ** 2)
+```
+
+```pycon
+>>> opt.mean
+{'a': 1.0000000001945673, 'b': 2.0000000008038628}
+```
 
 ## What Happens When the Schema Changes
 
