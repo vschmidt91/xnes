@@ -13,7 +13,7 @@ pending sample: call `ask()`, evaluate once, then call `tell()`. A second
 reservation, so saving after `ask()` and reloading later rewinds to before that
 `ask()`. `load()` may be called at any time; it replaces the current state and
 cancels any pending sample. For deterministic inference, use `mean` to read
-the current means without sampling. `expectation` is an alias.
+the current means without sampling.
 
 The docs are split into two parts:
 

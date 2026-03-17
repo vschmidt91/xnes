@@ -8,7 +8,7 @@ from typing import Annotated
 
 import numpy as np
 
-from leitwerk import Optimizer, Parameter
+from leitwerk import Optimizer, OptimizerSettings, Parameter
 
 
 @dataclass(frozen=True)
@@ -18,7 +18,7 @@ class Params:
 
 
 state_path = Path("optimizer-state.json")
-opt = Optimizer(Params, population_size=32)
+opt = Optimizer(Params, OptimizerSettings(population_size=32))
 if state_path.exists():
     state = json.loads(state_path.read_text())
     load_result = opt.load(state)
@@ -63,6 +63,6 @@ Persistence edge cases:
   `tell()` calls
 - for exact restart semantics, checkpoint after `tell()`, not after `ask()`
 
-For deterministic inference, read `mean` or its alias `expectation`. If you want the means from a
+For deterministic inference, read `mean`. If you want the means from a
 saved run rather than a fresh optimizer, call `load(...)` first.
 
