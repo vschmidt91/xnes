@@ -56,7 +56,7 @@ It writes progress into:
 
 ## Integration Guide
 
-### 1. Define a Typed Parameter Schema
+### 1. Define a Parameter Schema
 
 ```py
 from dataclasses import dataclass
@@ -71,7 +71,7 @@ class MyParams:
     worker_limit: Annotated[float, Parameter(loc=66, scale=10, min=12)]
 ```
 
-`Parameter(...)` defines how each value is initialized:
+`Parameter(...)` how each value is initialized - the prior distribution:
 
 - `loc`: initial best guess
 - `scale`: initial spread
@@ -108,7 +108,7 @@ If `params.json` already exists, the optimizer will [reconcile](#what-happens-wh
 SchemaDiff(added=[], removed=[], changed=[], unchanged=['attack_threshold', 'worker_limit'])
 ```
 
-### 3. Sample the Distribution
+### 3. Sample
 
 ```py
 context = {"opponent_race": "Protoss"}  # optional
@@ -127,7 +127,7 @@ For deterministic evaluation, use the distribution mean:
 MyParams(attack_threshold=0.0, worker_limit=66.0)
 ```
 
-### 4. Tell the Result
+### 4. Evaluate and Tell the Result
 
 Encode the objective as one or more numbers:
 
@@ -154,6 +154,8 @@ Result handling is simple:
 ---
 
 ## Minimal Example
+
+The core API of `leitwerk` is an ask-and-tell blackbox optimizer:
 
 ```py
 from leitwerk import Optimizer, OptimizerSettings, Parameter
