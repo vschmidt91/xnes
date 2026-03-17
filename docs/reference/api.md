@@ -2,9 +2,13 @@
 
 ::: leitwerk.Optimizer
 
-::: leitwerk.Parameter
+::: leitwerk.OptimizerSession
 
-::: leitwerk.TellResult
+::: leitwerk.OptimizerSettings
+
+::: leitwerk.OptimizerReport
+
+::: leitwerk.Parameter
 
 ::: leitwerk.SchemaDiff
 
