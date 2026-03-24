@@ -30,22 +30,31 @@ class OptimizerSession(Generic[T]):
         session_path = Path(path)
         optimizer = Optimizer(schema_type, settings=settings)
 
-        schema_diff = None
+        restored = False
+        schema_diff = _fresh_schema_diff(optimizer)
         if session_path.exists():
             state = json.loads(session_path.read_text(encoding="utf-8"))
             if not isinstance(state, dict):
                 msg = "Persisted optimizer state must be a JSON object."
                 raise TypeError(msg)
+            restored = True
             schema_diff = optimizer.load(cast(JSONObject, state))
 
         self._path = session_path
         self._optimizer = optimizer
+        self._dirty = False
+        self._restored = restored
         self._schema_diff = schema_diff
 
     @property
     def restored(self) -> bool:
         """Whether this session loaded an existing checkpoint."""
-        return self._schema_diff is not None
+        return self._restored
+
+    @property
+    def dirty(self) -> bool:
+        """Whether committed optimizer state exists that has not been durably flushed."""
+        return self._dirty
 
     @property
     def settings(self) -> OptimizerSettings:
@@ -53,8 +62,8 @@ class OptimizerSession(Generic[T]):
         return self._optimizer.settings
 
     @property
-    def schema_diff(self) -> SchemaDiff | None:
-        """Reconciled difference between persisted and current schema definitions."""
+    def schema_diff(self) -> SchemaDiff:
+        """Difference against the restored schema, or an empty baseline on fresh sessions."""
         return self._schema_diff
 
     @property
@@ -69,17 +78,31 @@ class OptimizerSession(Generic[T]):
 
     def ask(self, context: JSONLike = None) -> T:
         """Reserve one sampled parameter set for evaluation."""
+        self._require_clean()
         return self._optimizer.ask(context)
 
     def tell(self, result: float | Sequence[float] | np.ndarray) -> OptimizerReport:
         """Record one result and atomically persist the updated optimizer state."""
         report = self._optimizer.tell(result)
+        self._dirty = True
         self.flush()
         return report
 
     def flush(self) -> None:
         """Persist the current committed optimizer state."""
+        self._dirty = True
         _write_json_atomically(self._path, self._optimizer.save())
+        self._dirty = False
+
+    def _require_clean(self) -> None:
+        if self._dirty:
+            msg = "Session has unflushed committed state. Call flush() before ask()."
+            raise RuntimeError(msg)
+
+
+def _fresh_schema_diff(optimizer: Optimizer[object]) -> SchemaDiff:
+    schema_json = cast(Mapping[str, object], optimizer.save()["schema"])
+    return SchemaDiff(added=list(schema_json), removed=[], changed=[], unchanged=[])
 
 
 def _write_json_atomically(path: Path, payload: JSONObject) -> None:

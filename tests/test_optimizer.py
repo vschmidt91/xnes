@@ -359,6 +359,42 @@ def test_status_block_exposes_basic_diagnostics_and_roundtrips() -> None:
     _assert_same_settings(_read_settings(restored.save()), _read_settings(progressed_state))
 
 
+def test_load_rejects_nonfinite_loc() -> None:
+    schema = _make_identity_schema("BadLocCheckpoint", x=(0.0, 1.0))
+    state = _initialized_state(schema, population_size=4)
+    state["loc"] = [float("nan")]
+
+    with pytest.raises(ValueError, match="checkpoint loc must contain only finite values"):
+        _optimizer(schema, population_size=4).load(state)
+
+
+def test_load_rejects_misaligned_batch_shape() -> None:
+    schema = _make_identity_schema("BadBatchCheckpoint", x=(0.0, 1.0))
+    state = _initialized_state(schema, population_size=4)
+    state["batch"] = [1.0, -1.0]
+
+    with pytest.raises(ValueError, match=r"checkpoint batch must have shape \(1, n\)"):
+        _optimizer(schema, population_size=4).load(state)
+
+
+def test_load_rejects_nonfinite_results() -> None:
+    schema = _make_identity_schema("BadResultsCheckpoint", x=(0.0, 1.0))
+    state = _initialized_state(schema, population_size=4)
+    state["results"] = [[float("nan")], None, None, None]
+
+    with pytest.raises(ValueError, match=r"checkpoint results\[0\] must contain only finite values"):
+        _optimizer(schema, population_size=4).load(state)
+
+
+def test_load_rejects_bad_context_pending_shape() -> None:
+    schema = _make_identity_schema("BadContextCheckpoint", x=(0.0, 1.0))
+    state = _initialized_state(schema, population_size=4)
+    state["context_pending"] = {1: 0}
+
+    with pytest.raises(TypeError, match="checkpoint context_pending keys must be strings"):
+        _optimizer(schema, population_size=4).load(state)
+
+
 def test_schema_state_is_human_readable_parameter_specs() -> None:
     schema = _make_schema(
         "ReadableState",

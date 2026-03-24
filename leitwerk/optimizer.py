@@ -133,16 +133,21 @@ class Optimizer(Generic[T]):
         instance is canceled.
         """
         self._pending_reservation = None
-        self._settings_baseline = _merge_settings(_deserialize_settings(state["settings"]), self._settings_override)
-        schema_json = cast(JSONObject, state["schema"])
+        state_obj = _require_object(state, "checkpoint state")
+        self._settings_baseline = _merge_settings(
+            _deserialize_settings(_require_field(state_obj, "settings")),
+            self._settings_override,
+        )
+        schema_json = _require_object(_require_field(state_obj, "schema"), "checkpoint schema")
         saved_schema = _deserialize_schema(schema_json)
         saved_names = sorted(saved_schema)
-        loc = np.asarray(state["loc"], dtype=float)
-        scale = np.asarray(state["scale"], dtype=float)
-        batch = _as_batch_matrix(state["batch"], len(saved_names))
-        results = _deserialize_results(state["results"])
-        context_pending = dict(cast(Mapping[str, int], state["context_pending"]))
-        status = cast(Mapping[str, JSONValue], state["status"])
+        saved_dim = len(saved_names)
+        loc = _as_finite_vector(_require_field(state_obj, "loc"), saved_dim, "checkpoint loc")
+        scale = _as_finite_matrix(_require_field(state_obj, "scale"), (saved_dim, saved_dim), "checkpoint scale")
+        batch = _as_batch_matrix(_require_field(state_obj, "batch"), saved_dim)
+        results = _deserialize_results(_require_field(state_obj, "results"))
+        context_pending = _deserialize_context_pending(_require_field(state_obj, "context_pending"))
+        status = _validate_status(_require_field(state_obj, "status"))
 
         schema_diff = self._schema.diff(saved_schema)
         loc, scale = self._reconcile_distribution_state(
@@ -394,11 +399,21 @@ def _normalize_context(context: JSONLike) -> str | None:
 
 
 def _deserialize_schema(schema_json: Mapping[str, object]) -> dict[str, Parameter]:
-    return {str(name): Parameter.from_state(spec) for name, spec in schema_json.items()}
+    schema: dict[str, Parameter] = {}
+    for name, spec in schema_json.items():
+        if not isinstance(name, str):
+            msg = "checkpoint schema keys must be strings."
+            raise TypeError(msg)
+        try:
+            schema[name] = Parameter.from_state(spec)
+        except (KeyError, TypeError, ValueError) as exc:
+            msg = f"checkpoint schema entry {name!r} is invalid."
+            raise ValueError(msg) from exc
+    return schema
 
 
 def _deserialize_settings(settings_json: object) -> OptimizerSettings:
-    settings = cast(Mapping[str, JSONScalar], settings_json)
+    settings = cast(Mapping[str, JSONScalar], _require_object(settings_json, "checkpoint settings"))
     return OptimizerSettings(
         population_size=cast(int | None, settings.get("population_size")),
         seed=cast(int | None, settings.get("seed")),
@@ -422,14 +437,43 @@ def _serialize_results(results: Sequence[tuple[float, ...] | None]) -> list[list
 
 
 def _deserialize_results(result_rows: object) -> list[tuple[float, ...] | None]:
-    rows = cast(Sequence[Sequence[float] | None], result_rows)
-    return [None if row is None else tuple(float(value) for value in row) for row in rows]
+    if not isinstance(result_rows, Sequence) or isinstance(result_rows, (str, bytes)):
+        msg = "checkpoint results must be a sequence."
+        raise TypeError(msg)
+    rows = cast(Sequence[object], result_rows)
+    results: list[tuple[float, ...] | None] = []
+    for idx, row in enumerate(rows):
+        if row is None:
+            results.append(None)
+            continue
+        if not isinstance(row, Sequence) or isinstance(row, (str, bytes)):
+            msg = f"checkpoint results[{idx}] must be null or a sequence of numbers."
+            raise TypeError(msg)
+        try:
+            values = tuple(float(value) for value in row)
+        except (TypeError, ValueError) as exc:
+            msg = f"checkpoint results[{idx}] must contain only numeric values."
+            raise TypeError(msg) from exc
+        if not values:
+            msg = f"checkpoint results[{idx}] cannot be empty."
+            raise ValueError(msg)
+        if not np.all(np.isfinite(values)):
+            msg = f"checkpoint results[{idx}] must contain only finite values."
+            raise ValueError(msg)
+        results.append(values)
+    return results
 
 
 def _as_batch_matrix(batch_json: object, dim: int) -> np.ndarray:
-    batch = np.asarray(batch_json, dtype=float)
+    batch = _as_finite_array(batch_json, "checkpoint batch")
     if batch.ndim == 1 and batch.size == 0:
         return np.zeros((dim, 0), dtype=float)
+    if batch.ndim != 2 or batch.shape[0] != dim:
+        msg = f"checkpoint batch must have shape ({dim}, n)."
+        raise ValueError(msg)
+    if batch.shape[1] % 2 == 1:
+        msg = "checkpoint batch sample count must be even."
+        raise ValueError(msg)
     return batch
 
 
@@ -440,3 +484,89 @@ def _mirror_indices(sample_count: int) -> np.ndarray:
         mirror_index[:half] += half
         mirror_index[half:] -= half
     return mirror_index
+
+
+def _require_field(state: Mapping[str, object], name: str) -> object:
+    if name not in state:
+        msg = f"checkpoint state is missing {name!r}."
+        raise ValueError(msg)
+    return state[name]
+
+
+def _require_object(value: object, name: str) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        msg = f"{name} must be a JSON object."
+        raise TypeError(msg)
+    return cast(Mapping[str, object], value)
+
+
+def _as_finite_array(value: object, name: str) -> np.ndarray:
+    try:
+        array = np.asarray(value, dtype=float)
+    except (TypeError, ValueError) as exc:
+        msg = f"{name} must contain only numeric values."
+        raise TypeError(msg) from exc
+    if not np.all(np.isfinite(array)):
+        msg = f"{name} must contain only finite values."
+        raise ValueError(msg)
+    return array
+
+
+def _as_finite_vector(value: object, size: int, name: str) -> np.ndarray:
+    vector = _as_finite_array(value, name)
+    if vector.ndim != 1 or vector.shape[0] != size:
+        msg = f"{name} must have shape ({size},)."
+        raise ValueError(msg)
+    return vector
+
+
+def _as_finite_matrix(value: object, shape: tuple[int, int], name: str) -> np.ndarray:
+    matrix = _as_finite_array(value, name)
+    if matrix.ndim != 2 or matrix.shape != shape:
+        msg = f"{name} must have shape {shape}."
+        raise ValueError(msg)
+    return matrix
+
+
+def _deserialize_context_pending(context_pending_json: object) -> dict[str, int]:
+    context_pending = _require_object(context_pending_json, "checkpoint context_pending")
+    restored: dict[str, int] = {}
+    for context, sample_idx in context_pending.items():
+        context_name = _require_string(context, "checkpoint context_pending keys")
+        restored[context_name] = _coerce_int_like(sample_idx, f"checkpoint context_pending[{context_name!r}]")
+    return restored
+
+
+def _validate_status(status_json: object) -> Mapping[str, JSONValue]:
+    status = _require_object(status_json, "checkpoint status")
+    _coerce_non_negative_int_like(_require_field(status, "total_samples"), "checkpoint status.total_samples")
+    _coerce_non_negative_int_like(_require_field(status, "num_batches"), "checkpoint status.num_batches")
+    _coerce_non_negative_int_like(_require_field(status, "num_restarts"), "checkpoint status.num_restarts")
+    return cast(Mapping[str, JSONValue], status)
+
+
+def _require_string(value: object, name: str) -> str:
+    if not isinstance(value, str):
+        msg = f"{name} must be strings."
+        raise TypeError(msg)
+    return value
+
+
+def _coerce_int_like(value: object, name: str) -> int:
+    if isinstance(value, bool):
+        msg = f"{name} must be an integer."
+        raise TypeError(msg)
+    if isinstance(value, (int, np.integer)):
+        return int(value)
+    if isinstance(value, (float, np.floating)) and np.isfinite(value) and float(value).is_integer():
+        return int(value)
+    msg = f"{name} must be an integer."
+    raise TypeError(msg)
+
+
+def _coerce_non_negative_int_like(value: object, name: str) -> int:
+    out = _coerce_int_like(value, name)
+    if out < 0:
+        msg = f"{name} must be non-negative."
+        raise ValueError(msg)
+    return out
