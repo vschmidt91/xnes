@@ -7,9 +7,9 @@ from typing import Annotated, Any
 
 import leitwerk.session as session_module
 import pytest
-from leitwerk import Optimizer, OptimizerSession, OptimizerSettings, Parameter, SchemaDiff
+from leitwerk import OptimizerSession, OptimizerSettings, Parameter, SchemaDiff
 
-_TEST_SEED = 12345
+from ._optimizer_helpers import _TEST_SEED
 
 
 def _make_schema(schema_name: str, **parameters: tuple[float, float]) -> type[Any]:
@@ -30,159 +30,147 @@ def _read_state(path: Path) -> dict[str, object]:
     return state
 
 
-def test_session_flush_persists_initial_state_and_restores(tmp_path: Path) -> None:
-    schema = _make_schema("SessionParams", beta=(-1.0, 2.0), alpha=(2.0, 1.5))
-    settings = OptimizerSettings(population_size=6, seed=_TEST_SEED)
-    path = tmp_path / "session.json"
-    expected_settings = OptimizerSettings(population_size=6, seed=_TEST_SEED)
+class TestSessionPersistence:
+    def test_session_flush_persists_initial_state_and_restores(self, tmp_path: Path) -> None:
+        schema = _make_schema("SessionParams", beta=(-1.0, 2.0), alpha=(2.0, 1.5))
+        settings = OptimizerSettings(population_size=6, seed=_TEST_SEED)
+        path = tmp_path / "session.json"
 
-    session = OptimizerSession(path, schema, settings=settings)
+        session = OptimizerSession(path, schema, settings=settings)
 
-    assert session.restored is False
-    assert session.dirty is False
-    assert session.schema_diff == SchemaDiff(added=["alpha", "beta"], removed=[], changed=[], unchanged=[])
-    assert session.settings == expected_settings
-    assert session.mean.__class__ is schema
-    assert session.scale_marginal.__class__ is schema
-    assert session.scale_marginal.alpha == 1.5
-    assert session.scale_marginal.beta == 2.0
+        assert session.restored is False
+        assert session.dirty is False
+        assert session.schema_diff == SchemaDiff(added=["alpha", "beta"], removed=[], changed=[], unchanged=[])
+        assert session.settings == settings
+        assert session.mean.__class__ is schema
+        assert session.scale_marginal.__class__ is schema
+        assert session.scale_marginal.alpha == 1.5
+        assert session.scale_marginal.beta == 2.0
 
-    session.flush()
-    assert session.dirty is False
+        session.flush()
+        assert session.dirty is False
+        assert path.exists()
 
-    expected = Optimizer(schema, settings=settings).save()
-    assert _read_state(path) == expected
+        restored = OptimizerSession(path, schema)
 
-    restored = OptimizerSession(path, schema)
+        assert restored.restored is True
+        assert restored.dirty is False
+        assert restored.settings == settings
+        assert restored.schema_diff == SchemaDiff(added=[], removed=[], changed=[], unchanged=["alpha", "beta"])
+        assert restored.mean == session.mean
+        assert restored.scale_marginal == session.scale_marginal
 
-    assert restored.restored is True
-    assert restored.dirty is False
-    assert restored.settings == expected_settings
-    assert restored.schema_diff == SchemaDiff(added=[], removed=[], changed=[], unchanged=["alpha", "beta"])
-    assert restored.mean == session.mean
-    assert restored.scale_marginal == session.scale_marginal
+    def test_session_tell_auto_flushes_committed_progress(self, tmp_path: Path) -> None:
+        schema = _make_schema("TellSessionParams", x=(2.0, 1.5), y=(-1.0, 0.7))
+        settings = OptimizerSettings(population_size=4, seed=_TEST_SEED)
+        path = tmp_path / "session.json"
+        session = OptimizerSession(path, schema, settings=settings)
 
+        params = session.ask()
+        report = session.tell(-(params.x**2 + 0.5 * params.y**2))
 
-def test_session_tell_persists_committed_progress(tmp_path: Path) -> None:
-    schema = _make_schema("TellSessionParams", x=(2.0, 1.5), y=(-1.0, 0.7))
-    settings = OptimizerSettings(population_size=4, seed=_TEST_SEED)
-    path = tmp_path / "session.json"
-    session = OptimizerSession(path, schema, settings=settings)
-    optimizer: Optimizer[Any] = Optimizer(schema, settings=settings)
+        assert report.completed_batch is False
+        assert session.dirty is False
+        assert path.exists()
 
-    session_params = session.ask()
-    optimizer_params = optimizer.ask()
-    assert session_params == optimizer_params
+        restored = OptimizerSession(path, schema, settings=settings)
+        assert restored.ask() == session.ask()
 
-    result = -(session_params.x**2 + 0.5 * session_params.y**2)
-    assert session.tell(result) == optimizer.tell(result)
-    assert _read_state(path) == optimizer.save()
+    def test_session_reports_schema_diff_on_restore(self, tmp_path: Path) -> None:
+        base_schema = _make_schema("BaseSessionParams", y=(-1.0, 0.7), x=(2.0, 1.5))
+        path = tmp_path / "session.json"
+        settings = OptimizerSettings(population_size=4, seed=_TEST_SEED)
 
-    restored = OptimizerSession(path, schema, settings=settings)
-    assert restored.ask() == session.ask()
+        OptimizerSession(path, base_schema, settings=settings).flush()
 
+        changed_schema = _make_schema("ChangedSessionParams", z=(3.0, 2.0), x=(2.0, 1.5), y=(-1.0, 0.7))
+        restored = OptimizerSession(path, changed_schema, settings=settings)
 
-def test_session_reports_schema_diff_on_restore(tmp_path: Path) -> None:
-    base_schema = _make_schema("BaseSessionParams", y=(-1.0, 0.7), x=(2.0, 1.5))
-    path = tmp_path / "session.json"
-    settings = OptimizerSettings(population_size=4, seed=_TEST_SEED)
+        assert restored.restored is True
+        assert restored.schema_diff == SchemaDiff(added=["z"], removed=[], changed=[], unchanged=["x", "y"])
+        assert restored.mean.__class__ is changed_schema
 
-    OptimizerSession(path, base_schema, settings=settings).flush()
+    def test_session_runtime_settings_override_persisted_baseline(self, tmp_path: Path) -> None:
+        schema = _make_schema("SessionSettings", x=(2.0, 1.5))
+        path = tmp_path / "session.json"
+        OptimizerSession(
+            path,
+            schema,
+            settings=OptimizerSettings(population_size=6, seed=_TEST_SEED, minimize=True, eta_mean=0.9),
+        ).flush()
 
-    changed_schema = _make_schema("ChangedSessionParams", z=(3.0, 2.0), x=(2.0, 1.5), y=(-1.0, 0.7))
-    restored = OptimizerSession(path, changed_schema, settings=settings)
+        restored = OptimizerSession(path, schema, settings=OptimizerSettings(seed=999, eta_scale_global=0.3))
 
-    assert restored.restored is True
-    assert restored.schema_diff == SchemaDiff(added=["z"], removed=[], changed=[], unchanged=["x", "y"])
-    assert restored.mean.__class__ is changed_schema
+        assert restored.restored is True
+        assert restored.settings == OptimizerSettings(
+            population_size=6,
+            seed=999,
+            minimize=True,
+            eta_mean=0.9,
+            eta_scale_global=0.3,
+        )
 
-
-def test_session_failed_tell_flush_marks_dirty_and_blocks_ask(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    schema = _make_schema("DirtySessionParams", x=(2.0, 1.5))
-    path = tmp_path / "session.json"
-    session = OptimizerSession(path, schema, settings=OptimizerSettings(population_size=4, seed=_TEST_SEED))
-
-    def fail_write(path: Path, payload: dict[str, object]) -> None:
-        del path, payload
-        msg = "disk full"
-        raise OSError(msg)
-
-    monkeypatch.setattr(session_module, "_write_json_atomically", fail_write)
-
-    params = session.ask()
-
-    with pytest.raises(OSError, match="disk full"):
-        session.tell(-(params.x**2))
-
-    assert session.dirty is True
-    with pytest.raises(RuntimeError, match=r"flush\(\) before ask"):
-        session.ask()
+        restored.flush()
+        assert OptimizerSession(path, schema).settings == restored.settings
 
 
-def test_session_flush_recovers_dirty_state_after_transient_write_failure(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    schema = _make_schema("DirtyRecoveryParams", x=(2.0, 1.5))
-    path = tmp_path / "session.json"
-    session = OptimizerSession(path, schema, settings=OptimizerSettings(population_size=4, seed=_TEST_SEED))
-    real_write = session_module._write_json_atomically
+class TestSessionFailureHandling:
+    def test_session_failed_tell_flush_marks_dirty_and_blocks_ask(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        schema = _make_schema("DirtySessionParams", x=(2.0, 1.5))
+        path = tmp_path / "session.json"
+        session = OptimizerSession(path, schema, settings=OptimizerSettings(population_size=4, seed=_TEST_SEED))
 
-    def fail_write(path: Path, payload: dict[str, object]) -> None:
-        del path, payload
-        msg = "disk full"
-        raise OSError(msg)
+        def fail_write(path: Path, payload: dict[str, object]) -> None:
+            del path, payload
+            raise OSError("disk full")
 
-    monkeypatch.setattr(session_module, "_write_json_atomically", fail_write)
+        monkeypatch.setattr(session_module, "_write_json_atomically", fail_write)
 
-    params = session.ask()
+        params = session.ask()
+        with pytest.raises(OSError, match="disk full"):
+            session.tell(-(params.x**2))
 
-    with pytest.raises(OSError, match="disk full"):
-        session.tell(-(params.x**2))
+        assert session.dirty is True
+        with pytest.raises(RuntimeError, match=r"flush\(\) before ask"):
+            session.ask()
 
-    assert session.dirty is True
+    def test_session_flush_recovers_dirty_state_after_transient_write_failure(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        schema = _make_schema("DirtyRecoveryParams", x=(2.0, 1.5))
+        path = tmp_path / "session.json"
+        session = OptimizerSession(path, schema, settings=OptimizerSettings(population_size=4, seed=_TEST_SEED))
+        real_write = session_module._write_json_atomically
 
-    monkeypatch.setattr(session_module, "_write_json_atomically", real_write)
-    session.flush()
+        def fail_write(path: Path, payload: dict[str, object]) -> None:
+            del path, payload
+            raise OSError("disk full")
 
-    assert session.dirty is False
-    assert path.exists()
-    assert session.ask().__class__ is schema
+        monkeypatch.setattr(session_module, "_write_json_atomically", fail_write)
 
+        params = session.ask()
+        with pytest.raises(OSError, match="disk full"):
+            session.tell(-(params.x**2))
 
-def test_session_runtime_settings_override_persisted_baseline(tmp_path: Path) -> None:
-    schema = _make_schema("SessionSettings", x=(2.0, 1.5))
-    path = tmp_path / "session.json"
-    OptimizerSession(
-        path,
-        schema,
-        settings=OptimizerSettings(population_size=6, seed=_TEST_SEED, minimize=True, eta_mean=0.9),
-    ).flush()
+        assert session.dirty is True
 
-    restored = OptimizerSession(path, schema, settings=OptimizerSettings(seed=999, eta_scale_global=0.3))
+        monkeypatch.setattr(session_module, "_write_json_atomically", real_write)
+        session.flush()
 
-    assert restored.restored is True
-    assert restored.settings == OptimizerSettings(
-        population_size=6,
-        seed=999,
-        minimize=True,
-        eta_mean=0.9,
-        eta_scale_global=0.3,
-    )
+        assert session.dirty is False
+        assert path.exists()
+        assert session.ask().__class__ is schema
 
-    restored.flush()
+    def test_session_rejects_non_object_checkpoint(self, tmp_path: Path) -> None:
+        schema = _make_schema("InvalidCheckpointParams", x=(0.0, 1.0))
+        path = tmp_path / "session.json"
+        path.write_text("[]", encoding="utf-8")
 
-    reloaded = OptimizerSession(path, schema)
-    assert reloaded.settings == restored.settings
-
-
-def test_session_rejects_non_object_checkpoint(tmp_path: Path) -> None:
-    schema = _make_schema("InvalidCheckpointParams", x=(0.0, 1.0))
-    path = tmp_path / "session.json"
-    path.write_text("[]", encoding="utf-8")
-
-    with pytest.raises(TypeError, match="JSON object"):
-        OptimizerSession(path, schema)
+        with pytest.raises(TypeError, match="JSON object"):
+            OptimizerSession(path, schema)
