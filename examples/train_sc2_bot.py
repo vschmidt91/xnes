@@ -1,11 +1,13 @@
 import json
-from collections.abc import Sequence
+from collections.abc import Sequence, Mapping
 from dataclasses import dataclass, fields, is_dataclass
 from pathlib import Path
 from typing import Annotated, SupportsFloat, cast
 
 import matplotlib.pyplot as plt
 import numpy as np
+from sc2.unit import Unit
+
 from leitwerk import OptimizerSession, Parameter
 from loguru import logger
 from sc2 import maps
@@ -28,9 +30,9 @@ MOVING_AVERAGE_WINDOW = 10
 
 @dataclass(frozen=True, slots=True)
 class BotParams:
-    max_group_distance: Annotated[float, Parameter(mean=3, scale=3, min=1)]
-    attack_threshold: Annotated[float, Parameter(min=0, max=1)]
-    group_weighting: Annotated[float, Parameter(min=0, max=1)]
+    max_group_distance: Annotated[float, Parameter(mean=5, scale=2, min=1)]
+    time_horizon: Annotated[float, Parameter(mean=2, min=0)]
+    attack_threshold: Annotated[float, Parameter()]
 
 
 class LearningBot(BotAI):
@@ -71,31 +73,20 @@ class LearningBot(BotAI):
             return
 
         # resign for speedup
-        if self.supply_used == 0:
+        if self.supply_used == 0 or self.time > 10 * 60:
             await self.client.chat_send("gg", False)
             await self.client.leave()
             return
 
         mineral_patch = self.mineral_field.closest_to(self.start_location)
-        positions = [u.position for u in self.workers]
-        group_center = self.start_location
-        weights = np.array([])
-        if self.workers:
-            group_center = _medoid(positions)
-            distances = _pairwise_distances(positions)
-            weights = 1.0 / (1.0 + distances)
-            np.fill_diagonal(weights, 1e-10)
-            weights /= np.sum(weights, axis=0, keepdims=True)
+        group_center = _medoid([u.position for u in self.workers]) if self.workers else self.start_location
+        simulation = _simulate_combat(self.workers | self.enemy_units, self.params.time_horizon)
 
-        hp_vector = np.array([u.shield_percentage for u in self.workers])
-        hp_group_vector = hp_vector @ weights
-
-        for worker, hp, hp_group in zip(self.workers, hp_vector, hp_group_vector, strict=False):
-            combat_health = self.params.group_weighting * hp_group + (1 - self.params.group_weighting) * hp
-
+        for worker in self.workers:
+            confidence = simulation[worker]
             if worker.distance_to(group_center) > self.params.max_group_distance:
                 worker.move(group_center)
-            elif combat_health < self.params.attack_threshold:
+            elif confidence < self.params.attack_threshold:
                 worker.gather(mineral_patch)
             elif self.enemy_structures:
                 worker.attack(self.enemy_structures.random.position)
@@ -120,6 +111,29 @@ class LearningBot(BotAI):
         history.append({"outcome": outcome, "efficiency": efficiency, **flatten_numeric_fields(self.params)})
         save_history(history)
         save_plot(history)
+
+
+def _simulate_combat(units: Sequence[Unit], time_horizon: float) -> Mapping[Unit, float]:
+    alliance = np.array([u.owner_id for u in units])
+    range_matrix = np.array([[u.air_range if v.is_flying else u.ground_range for v in units] for u in units])
+    dps = np.array([[u.calculate_dps_vs_target(v) for v in units] for u in units])
+    radius = np.array([u.radius for u in units], dtype=float)
+    health = np.array([max(1.0, u.health + u.shield) for u in units], dtype=float)
+    speed = np.array([1.4 * u.real_speed for u in units], dtype=float)
+    distance = _pairwise_distances([u.position for u in units])
+    range_projection = range_matrix + radius[:, None] + time_horizon * speed[:, None]
+    in_range = distance <= range_projection + radius[None, :]
+    is_opponent = alliance[:, None] != alliance[None, :]
+    is_target = is_opponent & in_range
+    num_targets = np.sum(is_target, axis=1, keepdims=True)
+    targeting = np.divide(is_target, num_targets, where=num_targets != 0, out=np.zeros_like(distance, dtype=float))
+    fire = dps * targeting / health[None, :]
+    losses = np.sum(fire, axis=0)
+    attrition = np.sum(fire, axis=1)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        outcome = np.log(attrition) - np.log(losses)
+    outcome_dict = dict(zip(units, outcome))
+    return outcome_dict
 
 
 def _medoid(points: Sequence[Point2]) -> Point2:
