@@ -38,14 +38,14 @@ def test_xnes_rank_invariance_under_monotonic_transform() -> None:
         ranking_transformed = _ranking(transformed_scores)
         assert ranking_raw == ranking_transformed
 
-        xnes_a.update_distribution(
+        xnes_a.update(
             z_a,
             ranking_raw,
             eta_mean=eta_mean,
             eta_scale_global=eta_scale_global,
             eta_scale_shape=eta_scale_shape,
         )
-        xnes_b.update_distribution(
+        xnes_b.update(
             z_b,
             ranking_transformed,
             eta_mean=eta_mean,
@@ -64,7 +64,7 @@ def test_xnes_linear_invariance_with_stress_values() -> None:
     eta_scale_global = 0.7
     eta_scale_shape = 0.3
 
-    mu = np.array([1e10, -1e10, 5e9], dtype=float)
+    mean = np.array([1e10, -1e10, 5e9], dtype=float)
     scale = np.array(
         [
             [1.0e-10, 2.0e-11, -1.0e-11],
@@ -84,8 +84,8 @@ def test_xnes_linear_invariance_with_stress_values() -> None:
     )
     shift = np.array([-2.0e9, 4.0e9, -3.0e8], dtype=float)
 
-    xnes_x = XNES(mu, scale)
-    xnes_y = XNES(transform @ mu + shift, transform @ scale)
+    xnes_x = XNES(mean, scale)
+    xnes_y = XNES(transform @ mean + shift, transform @ scale)
 
     rng_x = np.random.default_rng(9)
     rng_y = np.random.default_rng(9)
@@ -99,14 +99,14 @@ def test_xnes_linear_invariance_with_stress_values() -> None:
         scores = score_projection @ z_x + 1e-12 * np.arange(n)
         ranking = _ranking(scores)
 
-        status_x = xnes_x.update_distribution(
+        status_x = xnes_x.update(
             z_x,
             ranking,
             eta_mean=eta_mean,
             eta_scale_global=eta_scale_global,
             eta_scale_shape=eta_scale_shape,
         )
-        status_y = xnes_y.update_distribution(
+        status_y = xnes_y.update(
             z_y,
             ranking,
             eta_mean=eta_mean,
@@ -155,8 +155,24 @@ def test_xnes_eta_scale_shape_scales_dimension_dependent_shape_rate() -> None:
     assert sign > 0
     expected_B *= np.exp(-logdet / d)
 
-    status = xnes.update_distribution(samples, ranking, eta_mean=0.0, eta_scale_global=0.0, eta_scale_shape=0.2)
+    status = xnes.update(samples, ranking, eta_mean=0.0, eta_scale_global=0.0, eta_scale_shape=0.2)
     assert status is XNESStatus.MEAN_STEP_MIN
     assert np.allclose(xnes.mean, np.zeros(3))
     assert np.isclose(xnes.scale_global, 1.0)
     assert np.allclose(xnes.scale_shape, expected_B)
+
+
+def test_xnes_status_classification_partitions_statuses() -> None:
+    ok = {status for status in XNESStatus if status.is_ok}
+    completion = {status for status in XNESStatus if status.is_completion}
+    error = {status for status in XNESStatus if status.is_error}
+    terminal = {status for status in XNESStatus if status.is_terminal}
+
+    assert ok == {XNESStatus.OK}
+    assert completion == {
+        XNESStatus.SCALE_GLOBAL_MIN,
+        XNESStatus.MEAN_STEP_MIN,
+        XNESStatus.SCALE_NORM_MIN,
+    }
+    assert error == set(XNESStatus) - ok - completion
+    assert terminal == completion | error

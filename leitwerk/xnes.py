@@ -14,74 +14,6 @@ from numpy.linalg import cond, norm
 from scipy.linalg import expm, qr
 
 
-def _default_eta_scale_shape(dim: int) -> float:
-    """Return the built-in dimension-dependent shape learning-rate factor."""
-
-    if dim <= 0:
-        return 1.0
-    return float(0.6 * (3.0 + np.log(dim)) / (dim * np.sqrt(dim)))
-
-
-def _normalize_scale_matrix(scale: np.ndarray | float, dim: int) -> np.ndarray:
-    scale0 = np.asarray(scale, dtype=float)
-    if scale0.ndim == 0:
-        return np.diag(np.repeat(scale0, dim))
-    if scale0.ndim == 1:
-        return np.diag(scale0)
-    if scale0.shape != (dim, dim):
-        msg = f"Expected scale shape {(dim, dim)}, got {scale0.shape}"
-        raise ValueError(msg)
-    return scale0
-
-
-def _validated_samples(samples: np.ndarray, dim: int) -> np.ndarray:
-    z = np.asarray(samples, dtype=float)
-    if z.ndim != 2:
-        msg = "samples must have shape (dim, n)."
-        raise ValueError(msg)
-    if z.shape[0] != dim:
-        msg = f"Sample shape mismatch, expected {dim} rows, got {z.shape[0]}"
-        raise ValueError(msg)
-    if not np.all(np.isfinite(z)):
-        msg = "samples must be finite."
-        raise ValueError(msg)
-    return z
-
-
-def _default_sample_count(num_samples: int | None, dim: int) -> int:
-    n = int(num_samples) if num_samples is not None else (4 + int(3 * np.log(dim)))
-    if n <= 1:
-        n = 2
-    if n % 2 == 1:
-        n += 1
-    return n
-
-
-def _utility_weights(sample_count: int) -> np.ndarray:
-    w_pos = np.maximum(0.0, np.log(sample_count / 2 + 1) - np.log(np.arange(1, sample_count + 1)))
-    w_sum = float(np.sum(w_pos))
-    if w_sum <= 0.0:
-        msg = "Invalid utility weights: positive weight sum must be > 0."
-        raise ValueError(msg)
-    w_pos /= w_sum
-    return w_pos - (1.0 / sample_count)
-
-
-class XNESStatus(Enum):
-    """Outcome of one `XNES.update_distribution` step."""
-
-    OK = auto()
-    SCALE_GLOBAL_MIN = auto()
-    SCALE_GLOBAL_MAX = auto()
-    SCALE_GLOBAL_INF = auto()
-    MEAN_INF = auto()
-    SCALE_INF = auto()
-    SCALE_COND_INF = auto()
-    SCALE_COND_MAX = auto()
-    MEAN_STEP_MIN = auto()
-    SCALE_NORM_MIN = auto()
-
-
 class XNES:
     """Exponential Natural Evolution Strategies distribution state.
 
@@ -97,10 +29,6 @@ class XNES:
         ValueError: If the supplied shapes are inconsistent, the scale matrix is
             not positive with finite determinant.
     """
-
-    MIN_SIGMA = 1e-20
-    MAX_SIGMA = 1e20
-    MAX_CONDITION = 1e14
 
     def __init__(self, mean0: np.ndarray, scale0: np.ndarray | float) -> None:
         self.mean = np.array(mean0, dtype=float, copy=True)
@@ -193,7 +121,7 @@ class XNES:
 
         return np.hstack([z_half, -z_half])
 
-    def update_distribution(
+    def update(
         self,
         samples: np.ndarray,
         ranking: list[int],
@@ -247,10 +175,9 @@ class XNES:
         if not np.isfinite(self.scale_global):
             return XNESStatus.SCALE_GLOBAL_INF
 
-        min_sigma = max(self.MIN_SIGMA, eps)
-        if self.scale_global < min_sigma:
+        if self.scale_global < eps:
             return XNESStatus.SCALE_GLOBAL_MIN
-        if self.scale_global > self.MAX_SIGMA:
+        if self.scale_global > 1.0 / eps:
             return XNESStatus.SCALE_GLOBAL_MAX
 
         eta_scale_shape_eff = eta_scale_shape * _default_eta_scale_shape(d)
@@ -278,7 +205,100 @@ class XNES:
         if not np.isfinite(cond_scale):
             return XNESStatus.SCALE_COND_INF
 
-        max_condition = min(self.MAX_CONDITION, 1.0 / eps)
-        if cond_scale > max_condition:
+        if cond_scale > 1.0 / eps:
             return XNESStatus.SCALE_COND_MAX
         return XNESStatus.OK
+
+
+class XNESStatus(Enum):
+    """Outcome of one `XNES.update` step."""
+
+    OK = auto()
+    SCALE_GLOBAL_MIN = auto()
+    SCALE_GLOBAL_MAX = auto()
+    SCALE_GLOBAL_INF = auto()
+    MEAN_INF = auto()
+    SCALE_INF = auto()
+    SCALE_COND_INF = auto()
+    SCALE_COND_MAX = auto()
+    MEAN_STEP_MIN = auto()
+    SCALE_NORM_MIN = auto()
+
+    @property
+    def is_ok(self) -> bool:
+        """Whether the update succeeded and sampling can continue."""
+
+        return self is type(self).OK
+
+    @property
+    def is_completion(self) -> bool:
+        """Whether the update reached a non-error stopping condition."""
+
+        return self in (
+            type(self).SCALE_GLOBAL_MIN,
+            type(self).MEAN_STEP_MIN,
+            type(self).SCALE_NORM_MIN,
+        )
+
+    @property
+    def is_error(self) -> bool:
+        """Whether the update hit an error stopping condition."""
+
+        return not self.is_ok and not self.is_completion
+
+    @property
+    def is_terminal(self) -> bool:
+        """Whether the update requested a restart."""
+
+        return not self.is_ok
+
+
+def _default_eta_scale_shape(dim: int) -> float:
+    if dim <= 0:
+        return 1.0
+    return float(0.6 * (3.0 + np.log(dim)) / (dim * np.sqrt(dim)))
+
+
+def _normalize_scale_matrix(scale: np.ndarray | float, dim: int) -> np.ndarray:
+    scale0 = np.asarray(scale, dtype=float)
+    if scale0.ndim == 0:
+        return np.diag(np.repeat(scale0, dim))
+    if scale0.ndim == 1:
+        return np.diag(scale0)
+    if scale0.shape != (dim, dim):
+        msg = f"Expected scale shape {(dim, dim)}, got {scale0.shape}"
+        raise ValueError(msg)
+    return scale0
+
+
+def _validated_samples(samples: np.ndarray, dim: int) -> np.ndarray:
+    z = np.asarray(samples, dtype=float)
+    if z.ndim != 2:
+        msg = "samples must have shape (dim, n)."
+        raise ValueError(msg)
+    if z.shape[0] != dim:
+        msg = f"Sample shape mismatch, expected {dim} rows, got {z.shape[0]}"
+        raise ValueError(msg)
+    if not np.all(np.isfinite(z)):
+        msg = "samples must be finite."
+        raise ValueError(msg)
+    return z
+
+
+def _default_sample_count(num_samples: int | None, dim: int) -> int:
+    n = int(num_samples) if num_samples is not None else (4 + int(3 * np.log(dim)))
+    if n <= 1:
+        n = 2
+    if n % 2 == 1:
+        n += 1
+    return n
+
+
+def _utility_weights(sample_count: int) -> np.ndarray:
+    w_pos = np.maximum(0.0, np.log(sample_count / 2 + 1) - np.log(np.arange(1, sample_count + 1)))
+    w_sum = float(np.sum(w_pos))
+    if w_sum <= 0.0:
+        msg = "Invalid utility weights: positive weight sum must be > 0."
+        raise ValueError(msg)
+    w_pos /= w_sum
+    return w_pos - (1.0 / sample_count)

@@ -7,7 +7,7 @@
   <em>Tune your magic numbers with stochastic optimization.</em>
 </p>
 
-`leitwerk` is a schema-first evolutionary optimizer for long-running evaluation loops.
+`leitwerk` is a schema-based evolutionary optimizer for long-running evaluation loops.
 
 It gives you:
 
@@ -19,7 +19,7 @@ It gives you:
 
 ## Install
 
-Requires: Python 3.11+
+Requires: Python >=3.11,<3.14
 
 Library only:
 
@@ -68,12 +68,12 @@ from leitwerk import Parameter
 @dataclass
 class MyParams:
     attack_threshold: Annotated[float, Parameter()]
-    worker_limit: Annotated[float, Parameter(loc=66, scale=10, min=12)]
+    worker_limit: Annotated[float, Parameter(mean=66, scale=10, min=12)]
 ```
 
-`Parameter(...)` how each value is initialized - the prior distribution:
+`Parameter(...)` defines how each value is initialized, i.e. the prior distribution:
 
-- `loc`: initial best guess
+- `mean`: initial best guess
 - `scale`: initial spread
 - `min` and `max`: optional bounds
 
@@ -96,7 +96,7 @@ Optimizer settings are optional, the available arguments are:
 - `population_size`: number of evaluations per batch
 - `seed`: for reproducible sampling
 - `minimize`: rank lower results as better
-- `eta_mu`, `eta_sigma`, `eta_B`: xNES learning rates
+- `eta_mean`, `eta_scale_global`, `eta_scale_shape`: xNES learning rates
 
 > [!NOTE]
 > These settings are persisted as fallback, runtime values override.
@@ -155,7 +155,7 @@ Result handling is simple:
 
 ## Minimal Example
 
-The core API of `leitwerk` is an ask-and-tell blackbox optimizer:
+The core API of `leitwerk` is an ask-and-tell black-box optimizer:
 
 ```py
 from leitwerk import Optimizer, OptimizerSettings, Parameter
@@ -178,9 +178,9 @@ This is the main reason to use `leitwerk` - it handles the changes so you can ke
 - parameters are identified by flattened names
 - renaming a parameter resets that parameter
 - changing `min` or `max` resets that parameter
-- changing `loc` or `scale` defines the new reset target, but does not trigger one
+- changing `mean` or `scale` defines the new reset target, but does not trigger one
 
-In practice, this means you can add and remove parameters, without resetting the whole state.
+In practice, this means you can add and remove parameters without resetting the whole state.
 
 ## Choosing Objectives
 
@@ -188,10 +188,10 @@ For efficient training, the objective often matters more than the optimizer.
 
 - put win rate first if that is the real target
 - add tie-breakers such as army value, income, or cost efficiency
-- keep objective semantics stable for long term training
+- keep objective semantics stable for long-term training
 - use multiple optimizers if parameters actually belong to separate objectives
 
-This is not multi-objective / pareto optimization.
+This is not multi-objective / Pareto optimization.
 
 ## Context Matching
 

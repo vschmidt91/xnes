@@ -28,7 +28,7 @@ MOVING_AVERAGE_WINDOW = 10
 
 @dataclass(frozen=True, slots=True)
 class BotParams:
-    max_group_distance: Annotated[float, Parameter(loc=3, scale=3, min=1)]
+    max_group_distance: Annotated[float, Parameter(mean=3, scale=3, min=1)]
     attack_threshold: Annotated[float, Parameter(min=0, max=1)]
     group_weighting: Annotated[float, Parameter(min=0, max=1)]
 

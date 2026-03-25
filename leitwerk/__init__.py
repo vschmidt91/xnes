@@ -1,4 +1,4 @@
-"""Public package interface for the schema-first xNES optimizer wrapper.
+"""Public package interface for the schema-based xNES optimizer wrapper.
 
 Schemas may be dataclass trees whose optimized leaves are declared as
 `Annotated[float, Parameter(...)]`, or nested mappings whose leaves are
@@ -13,7 +13,7 @@ Example:
 
     @dataclass(frozen=True)
     class Params:
-        coeff: Annotated[float, Parameter(loc=1.0, scale=0.5, min=0.0)]
+        coeff: Annotated[float, Parameter(mean=1.0, scale=0.5, min=0.0)]
         ratio: Annotated[float, Parameter(min=0.0, max=1.0)]
 
     opt = Optimizer(

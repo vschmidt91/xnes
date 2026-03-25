@@ -24,7 +24,7 @@ def _make_schema(schema_name: str, **parameters: Parameter) -> type[Any]:
 def _make_identity_schema(schema_name: str, **parameters: tuple[float, float]) -> type[Any]:
     return _make_schema(
         schema_name,
-        **{field_name: Parameter(loc=loc, scale=scale) for field_name, (loc, scale) in parameters.items()},
+        **{field_name: Parameter(mean=mean, scale=scale) for field_name, (mean, scale) in parameters.items()},
     )
 
 
@@ -34,7 +34,7 @@ def _make_mapping_schema(**parameters: object) -> dict[str, object]:
 
 def _make_mapping_identity_schema(**parameters: tuple[float, float]) -> dict[str, object]:
     return _make_mapping_schema(
-        **{field_name: Parameter(loc=loc, scale=scale) for field_name, (loc, scale) in parameters.items()},
+        **{field_name: Parameter(mean=mean, scale=scale) for field_name, (mean, scale) in parameters.items()},
     )
 
 
@@ -78,12 +78,12 @@ def _initialized_state(schema: type[Any] | Mapping[str, object], *, population_s
 
 def _parameter_spec(
     *,
-    loc: float | None,
+    mean: float | None,
     scale: float = 1.0,
     min: float | None = None,
     max: float | None = None,
 ) -> dict[str, object]:
-    return {"loc": loc, "scale": scale, "min": min, "max": max}
+    return {"mean": mean, "scale": scale, "min": min, "max": max}
 
 
 def _read_schema(state: object) -> dict[str, dict[str, object]]:
@@ -93,7 +93,7 @@ def _read_schema(state: object) -> dict[str, dict[str, object]]:
     assert all(isinstance(name, str) for name in schema_json)
     for spec in schema_json.values():
         assert isinstance(spec, Mapping)
-        assert list(spec) == ["loc", "scale", "min", "max"]
+        assert list(spec) == ["mean", "scale", "min", "max"]
     return {
         str(name): {str(key): value for key, value in cast(Mapping[str, object], spec).items()}
         for name, spec in schema_json.items()
@@ -106,9 +106,9 @@ def _read_schema_names(state: object) -> list[str]:
 
 def _read_mean(state: object) -> np.ndarray:
     assert isinstance(state, dict)
-    loc_json = state["mean"]
-    assert isinstance(loc_json, list)
-    return np.asarray(loc_json, dtype=float)
+    mean_json = state["mean"]
+    assert isinstance(mean_json, list)
+    return np.asarray(mean_json, dtype=float)
 
 
 def _read_scale(state: object) -> np.ndarray:
@@ -126,10 +126,10 @@ def _read_batch(state: object) -> np.ndarray:
 
 
 def _read_batch_latent_points(state: object) -> np.ndarray:
-    loc = _read_mean(state)
+    mean = _read_mean(state)
     scale = _read_scale(state)
     batch = _read_batch(state)
-    return loc[:, None] + scale @ batch
+    return mean[:, None] + scale @ batch
 
 
 def _read_results(state: object) -> list[tuple[float, ...] | None]:
@@ -231,7 +231,7 @@ def _softplus_inverse(value: float) -> float:
 def _run_function_optimization(
     objective: Callable[[np.ndarray], float],
     *,
-    init_loc: float,
+    init_mean: float,
     init_scale: float,
     dim: int,
     population_size: int,
@@ -240,12 +240,12 @@ def _run_function_optimization(
 ) -> tuple[float, float]:
     schema = _make_identity_schema(
         "SphereParams",
-        **{f"x{i}": (init_loc, init_scale) for i in range(dim)},
+        **{f"x{i}": (init_mean, init_scale) for i in range(dim)},
     )
     optimizer: Optimizer[Any] = _optimizer(schema, population_size=population_size, minimize=minimize)
 
-    initial_loc = _read_mean(optimizer.save())
-    initial_value = objective(initial_loc)
+    initial_mean = _read_mean(optimizer.save())
+    initial_value = objective(initial_mean)
 
     for _ in range(evaluations):
         params = optimizer.ask()
@@ -253,8 +253,8 @@ def _run_function_optimization(
         result = objective(point) if minimize else -objective(point)
         optimizer.tell(result)
 
-    final_loc = _read_mean(optimizer.save())
-    final_value = objective(final_loc)
+    final_mean = _read_mean(optimizer.save())
+    final_value = objective(final_mean)
     return initial_value, final_value
 
 
@@ -264,7 +264,7 @@ def test_optimizer_improves_sphere() -> None:
 
     initial, final = _run_function_optimization(
         sphere,
-        init_loc=3.0,
+        init_mean=3.0,
         init_scale=2.0,
         dim=4,
         population_size=28,
@@ -279,7 +279,7 @@ def test_optimizer_improves_sphere_in_minimization_mode() -> None:
 
     initial, final = _run_function_optimization(
         sphere,
-        init_loc=3.0,
+        init_mean=3.0,
         init_scale=2.0,
         dim=4,
         population_size=28,
@@ -366,8 +366,8 @@ def test_status_block_exposes_basic_diagnostics_and_roundtrips() -> None:
     _assert_same_settings(_read_settings(restored.save()), _read_settings(progressed_state))
 
 
-def test_load_rejects_nonfinite_loc() -> None:
-    schema = _make_identity_schema("BadLocCheckpoint", x=(0.0, 1.0))
+def test_load_rejects_nonfinite_mean() -> None:
+    schema = _make_identity_schema("BadMeanCheckpoint", x=(0.0, 1.0))
     state = _initialized_state(schema, population_size=4)
     state["mean"] = [float("nan")]
 
@@ -405,16 +405,16 @@ def test_load_rejects_bad_pending_context_matches_shape() -> None:
 def test_schema_state_is_human_readable_parameter_specs() -> None:
     schema = _make_schema(
         "ReadableState",
-        alpha=Parameter(loc=1.5, scale=0.25, max=3.0),
-        beta=Parameter(loc=2.0, scale=3.0, min=0.0),
+        alpha=Parameter(mean=1.5, scale=0.25, max=3.0),
+        beta=Parameter(mean=2.0, scale=3.0, min=0.0),
         gamma=Parameter(scale=1.0, min=0.0, max=1.0),
     )
     state = _initialized_state(schema, population_size=4)
 
     assert _read_schema(state) == {
-        "alpha": _parameter_spec(loc=1.5, scale=0.25, max=3.0),
-        "beta": _parameter_spec(loc=2.0, scale=3.0, min=0.0),
-        "gamma": _parameter_spec(loc=None, scale=1.0, min=0.0, max=1.0),
+        "alpha": _parameter_spec(mean=1.5, scale=0.25, max=3.0),
+        "beta": _parameter_spec(mean=2.0, scale=3.0, min=0.0),
+        "gamma": _parameter_spec(mean=None, scale=1.0, min=0.0, max=1.0),
     }
 
 
@@ -429,7 +429,7 @@ def test_load_reconciles_added_and_removed_parameters() -> None:
         base.tell(-(x**2 + 0.5 * y**2))
 
     base_state = base.save()
-    base_loc = _read_mean(base_state)
+    base_mean = _read_mean(base_state)
     base_scale = _read_scale(base_state)
     base_batch = _read_batch(base_state)
     base_batch_latent_points = _read_batch_latent_points(base_state)
@@ -443,7 +443,7 @@ def test_load_reconciles_added_and_removed_parameters() -> None:
     added_state = added.save()
 
     assert _read_schema_names(added_state) == ["x", "y", "z"]
-    assert np.allclose(_read_mean(added_state), np.array([base_loc[0], base_loc[1], 3.0]))
+    assert np.allclose(_read_mean(added_state), np.array([base_mean[0], base_mean[1], 3.0]))
     assert np.allclose(
         _read_scale(added_state),
         np.array(
@@ -464,7 +464,7 @@ def test_load_reconciles_added_and_removed_parameters() -> None:
     added.ask()
     added.tell(-1.0)
     added_partial_state = added.save()
-    added_loc = _read_mean(added_partial_state)
+    added_mean = _read_mean(added_partial_state)
     added_scale = _read_scale(added_partial_state)
     added_batch = _read_batch(added_partial_state)
     added_batch_latent_points = _read_batch_latent_points(added_partial_state)
@@ -478,7 +478,7 @@ def test_load_reconciles_added_and_removed_parameters() -> None:
     removed_state = removed.save()
 
     assert _read_schema_names(removed_state) == ["x", "y"]
-    assert np.allclose(_read_mean(removed_state), added_loc[:2])
+    assert np.allclose(_read_mean(removed_state), added_mean[:2])
     assert np.allclose(_read_scale(removed_state), added_scale[:2, :2])
     assert np.allclose(_read_batch(removed_state), added_batch[:2, :])
     assert np.allclose(_read_batch_latent_points(removed_state), added_batch_latent_points[:2, :])
@@ -488,8 +488,8 @@ def test_load_reconciles_added_and_removed_parameters() -> None:
 def test_load_reconciles_bounds_changes_and_selectively_preserves_batch() -> None:
     base_schema = _make_schema(
         "BaseChangedSchema",
-        x=Parameter(loc=0.25, scale=1.0, min=0.0),
-        y=Parameter(loc=-1.0, scale=0.7),
+        x=Parameter(mean=0.25, scale=1.0, min=0.0),
+        y=Parameter(mean=-1.0, scale=0.7),
     )
     base = _optimizer(base_schema, population_size=4)
 
@@ -500,7 +500,7 @@ def test_load_reconciles_bounds_changes_and_selectively_preserves_batch() -> Non
         base.tell(-((x - 0.2) ** 2 + 0.5 * y**2))
 
     base_state = base.save()
-    base_loc = _read_mean(base_state)
+    base_mean = _read_mean(base_state)
     base_scale = _read_scale(base_state)
     base_batch = _read_batch(base_state)
     base_results = _read_results(base_state)
@@ -516,8 +516,8 @@ def test_load_reconciles_bounds_changes_and_selectively_preserves_batch() -> Non
 
     changed_schema = _make_schema(
         "ChangedSchema",
-        x=Parameter(loc=0.25, scale=1.0, min=0.0, max=1.0),
-        y=Parameter(loc=-1.0, scale=0.7),
+        x=Parameter(mean=0.25, scale=1.0, min=0.0, max=1.0),
+        y=Parameter(mean=-1.0, scale=0.7),
     )
     changed = _optimizer(changed_schema, population_size=4)
     load_result = changed.load(base_state)
@@ -525,11 +525,11 @@ def test_load_reconciles_bounds_changes_and_selectively_preserves_batch() -> Non
     changed_state = changed.save()
     fresh_state = _initialized_state(changed_schema, population_size=4)
 
-    changed_loc = _read_mean(changed_state)
+    changed_mean = _read_mean(changed_state)
     changed_scale = _read_scale(changed_state)
     changed_batch = _read_batch(changed_state)
 
-    assert np.allclose(changed_loc, np.array([_read_mean(fresh_state)[0], base_loc[1]]))
+    assert np.allclose(changed_mean, np.array([_read_mean(fresh_state)[0], base_mean[1]]))
     assert np.allclose(
         changed_scale,
         np.array(
@@ -547,14 +547,14 @@ def test_load_reconciles_bounds_changes_and_selectively_preserves_batch() -> Non
     assert _read_pending_context_matches(changed_state) == _read_pending_context_matches(base_state)
 
 
-def test_loc_and_scale_changes_do_not_trigger_schema_changeover() -> None:
+def test_mean_and_scale_changes_do_not_trigger_schema_changeover() -> None:
     base_schema = _make_identity_schema("StrictBase", x=(2.0, 1.5), y=(-1.0, 0.5))
     base_state = _initialized_state(base_schema, population_size=4)
 
     changed_schema = _make_schema(
         "StrictChanged",
-        x=Parameter(loc=4.0, scale=1.5),
-        y=Parameter(loc=-1.0, scale=2.0),
+        x=Parameter(mean=4.0, scale=1.5),
+        y=Parameter(mean=-1.0, scale=2.0),
     )
     changed = _optimizer(changed_schema, population_size=4)
     load_result = changed.load(base_state)
@@ -562,8 +562,8 @@ def test_loc_and_scale_changes_do_not_trigger_schema_changeover() -> None:
 
     changed_state = changed.save()
     assert _read_schema(changed_state) == {
-        "x": _parameter_spec(loc=4.0, scale=1.5),
-        "y": _parameter_spec(loc=-1.0, scale=2.0),
+        "x": _parameter_spec(mean=4.0, scale=1.5),
+        "y": _parameter_spec(mean=-1.0, scale=2.0),
     }
     assert np.allclose(_read_mean(changed_state), _read_mean(base_state))
     assert np.allclose(_read_scale(changed_state), _read_scale(base_state))
@@ -574,24 +574,24 @@ def test_loc_and_scale_changes_do_not_trigger_schema_changeover() -> None:
 def test_schema_order_is_lexicographic() -> None:
     first_schema = _make_schema(
         "FirstSchema",
-        zeta=Parameter(loc=3.0, scale=1.0, min=0.0),
-        alpha=Parameter(loc=1.0, scale=2.0),
-        mu=Parameter(loc=2.0, scale=3.0, min=-1.0, max=5.0),
+        zeta=Parameter(mean=3.0, scale=1.0, min=0.0),
+        alpha=Parameter(mean=1.0, scale=2.0),
+        mean=Parameter(mean=2.0, scale=3.0, min=-1.0, max=5.0),
     )
     first = _initialized_optimizer(first_schema, population_size=18)
     state_first = first.save()
 
     second_schema = _make_schema(
         "SecondSchema",
-        mu=Parameter(loc=2.0, scale=3.0, min=-1.0, max=5.0),
-        zeta=Parameter(loc=3.0, scale=1.0, min=0.0),
-        alpha=Parameter(loc=1.0, scale=2.0),
+        mean=Parameter(mean=2.0, scale=3.0, min=-1.0, max=5.0),
+        zeta=Parameter(mean=3.0, scale=1.0, min=0.0),
+        alpha=Parameter(mean=1.0, scale=2.0),
     )
     second = _initialized_optimizer(second_schema, population_size=18)
     state_second = second.save()
 
-    assert _read_schema_names(state_first) == ["alpha", "mu", "zeta"]
-    assert _read_schema_names(state_second) == ["alpha", "mu", "zeta"]
+    assert _read_schema_names(state_first) == ["alpha", "mean", "zeta"]
+    assert _read_schema_names(state_second) == ["alpha", "mean", "zeta"]
     assert np.allclose(_read_mean(state_first), _read_mean(state_second))
 
 
@@ -599,15 +599,15 @@ def test_nested_schema_flattens_leaf_names_and_rebuilds_dataclasses() -> None:
     combat = make_dataclass(
         "CombatParameters",
         [
-            ("retreat_threshold", Annotated[float, Parameter(loc=-1.0, scale=2.0)]),
-            ("attack_threshold", Annotated[float, Parameter(loc=2.0, scale=3.0, min=0.0)]),
+            ("retreat_threshold", Annotated[float, Parameter(mean=-1.0, scale=2.0)]),
+            ("attack_threshold", Annotated[float, Parameter(mean=2.0, scale=3.0, min=0.0)]),
         ],
         frozen=True,
         slots=True,
     )
     mining = make_dataclass(
         "MiningParameters",
-        [("gas_priority", Annotated[float, Parameter(loc=0.5, scale=1.0, min=0.0, max=1.0)])],
+        [("gas_priority", Annotated[float, Parameter(mean=0.5, scale=1.0, min=0.0, max=1.0)])],
         frozen=True,
         slots=True,
     )
@@ -615,7 +615,7 @@ def test_nested_schema_flattens_leaf_names_and_rebuilds_dataclasses() -> None:
         "NestedParameters",
         [
             ("mining", mining),
-            ("alpha", Annotated[float, Parameter(loc=1.5, scale=0.25, max=3.0)]),
+            ("alpha", Annotated[float, Parameter(mean=1.5, scale=0.25, max=3.0)]),
             ("combat", combat),
         ],
         frozen=True,
@@ -660,12 +660,12 @@ def test_nested_schema_flattens_leaf_names_and_rebuilds_dataclasses() -> None:
 def test_nested_mapping_schema_flattens_leaf_names_and_rebuilds_plain_dicts() -> None:
     schema = {
         "mining": {
-            "gas_priority": Parameter(loc=0.5, scale=1.0, min=0.0, max=1.0),
+            "gas_priority": Parameter(mean=0.5, scale=1.0, min=0.0, max=1.0),
         },
-        "alpha": Parameter(loc=1.5, scale=0.25, max=3.0),
+        "alpha": Parameter(mean=1.5, scale=0.25, max=3.0),
         "combat": {
-            "retreat_threshold": Parameter(loc=-1.0, scale=2.0),
-            "attack_threshold": Parameter(loc=2.0, scale=3.0, min=0.0),
+            "retreat_threshold": Parameter(mean=-1.0, scale=2.0),
+            "attack_threshold": Parameter(mean=2.0, scale=3.0, min=0.0),
         },
     }
 
@@ -706,10 +706,10 @@ def test_nested_mapping_schema_flattens_leaf_names_and_rebuilds_plain_dicts() ->
 
 def test_mapping_schema_order_is_lexicographic_and_independent_of_insertion_order() -> None:
     first_schema = _make_mapping_schema(
-        zeta=Parameter(loc=3.0, scale=1.0, min=0.0),
-        alpha=Parameter(loc=1.0, scale=2.0),
+        zeta=Parameter(mean=3.0, scale=1.0, min=0.0),
+        alpha=Parameter(mean=1.0, scale=2.0),
         branch={
-            "mu": Parameter(loc=2.0, scale=3.0, min=-1.0, max=5.0),
+            "mean": Parameter(mean=2.0, scale=3.0, min=-1.0, max=5.0),
         },
     )
     first = _initialized_optimizer(first_schema, population_size=18)
@@ -717,24 +717,24 @@ def test_mapping_schema_order_is_lexicographic_and_independent_of_insertion_orde
 
     second_schema = _make_mapping_schema(
         branch={
-            "mu": Parameter(loc=2.0, scale=3.0, min=-1.0, max=5.0),
+            "mean": Parameter(mean=2.0, scale=3.0, min=-1.0, max=5.0),
         },
-        zeta=Parameter(loc=3.0, scale=1.0, min=0.0),
-        alpha=Parameter(loc=1.0, scale=2.0),
+        zeta=Parameter(mean=3.0, scale=1.0, min=0.0),
+        alpha=Parameter(mean=1.0, scale=2.0),
     )
     second = _initialized_optimizer(second_schema, population_size=18)
     state_second = second.save()
 
-    assert _read_schema_names(state_first) == ["alpha", "branch.mu", "zeta"]
-    assert _read_schema_names(state_second) == ["alpha", "branch.mu", "zeta"]
+    assert _read_schema_names(state_first) == ["alpha", "branch.mean", "zeta"]
+    assert _read_schema_names(state_second) == ["alpha", "branch.mean", "zeta"]
     assert np.allclose(_read_mean(state_first), _read_mean(state_second))
 
 
 def test_mapping_schema_state_save_load_roundtrip() -> None:
     schema_a = {
-        "beta": Parameter(loc=-1.0, scale=2.0),
+        "beta": Parameter(mean=-1.0, scale=2.0),
         "block": {
-            "alpha": Parameter(loc=2.0, scale=1.5),
+            "alpha": Parameter(mean=2.0, scale=1.5),
         },
     }
     opt_a: Optimizer[Any] = _optimizer(schema_a, population_size=20)
@@ -751,9 +751,9 @@ def test_mapping_schema_state_save_load_roundtrip() -> None:
 
     schema_b = {
         "block": {
-            "alpha": Parameter(loc=2.0, scale=1.5),
+            "alpha": Parameter(mean=2.0, scale=1.5),
         },
-        "beta": Parameter(loc=-1.0, scale=2.0),
+        "beta": Parameter(mean=-1.0, scale=2.0),
     }
     opt_b: Optimizer[Any] = _optimizer(schema_b, population_size=20)
     load_result = opt_b.load(state)
@@ -780,11 +780,11 @@ def test_schema_requires_parameter_annotated_float_fields() -> None:
 @pytest.mark.parametrize(
     ("parameter", "message"),
     [
-        (Parameter(loc=0.0, scale=0.0), r"scale must be a positive finite float"),
-        (Parameter(loc=1.0, min=1.0, max=1.0), r"min < max"),
-        (Parameter(loc=2.0, min=1.0, max=2.0), r"min < loc < max"),
-        (Parameter(loc=1.0, min=1.0), r"loc > min"),
-        (Parameter(loc=1.0, max=1.0), r"loc < max"),
+        (Parameter(mean=0.0, scale=0.0), r"scale must be a positive finite float"),
+        (Parameter(mean=1.0, min=1.0, max=1.0), r"min < max"),
+        (Parameter(mean=2.0, min=1.0, max=2.0), r"min < mean < max"),
+        (Parameter(mean=1.0, min=1.0), r"mean > min"),
+        (Parameter(mean=1.0, max=1.0), r"mean < max"),
     ],
 )
 def test_schema_rejects_invalid_parameter_domains(parameter: Parameter, message: str) -> None:
@@ -794,9 +794,9 @@ def test_schema_rejects_invalid_parameter_domains(parameter: Parameter, message:
         Optimizer(schema)
 
 
-def test_omitted_loc_uses_canonical_latent_zero_center() -> None:
+def test_omitted_mean_uses_canonical_latent_zero_center() -> None:
     schema = _make_schema(
-        "CanonicalLocs",
+        "CanonicalMeans",
         unbounded=Parameter(),
         lower=Parameter(min=2.0),
         upper=Parameter(max=5.0),
@@ -806,10 +806,10 @@ def test_omitted_loc_uses_canonical_latent_zero_center() -> None:
 
     state = optimizer.save()
     assert _read_schema(state) == {
-        "interval": _parameter_spec(loc=None, scale=1.0, min=2.0, max=6.0),
-        "lower": _parameter_spec(loc=None, scale=1.0, min=2.0),
-        "unbounded": _parameter_spec(loc=None, scale=1.0),
-        "upper": _parameter_spec(loc=None, scale=1.0, max=5.0),
+        "interval": _parameter_spec(mean=None, scale=1.0, min=2.0, max=6.0),
+        "lower": _parameter_spec(mean=None, scale=1.0, min=2.0),
+        "unbounded": _parameter_spec(mean=None, scale=1.0),
+        "upper": _parameter_spec(mean=None, scale=1.0, max=5.0),
     }
     assert np.allclose(_read_mean(state), np.zeros(4))
 
@@ -840,7 +840,7 @@ def test_ask_returns_typed_sample() -> None:
     assert isinstance(params.b, float)
 
 
-def test_mean_returns_current_user_space_locs_without_context() -> None:
+def test_mean_returns_current_user_space_means_without_context() -> None:
     schema = _make_schema(
         "BestParams",
         b=Parameter(scale=1.0, min=0.0, max=1.0),
@@ -857,7 +857,7 @@ def test_mean_returns_current_user_space_locs_without_context() -> None:
 def test_expectation_aliases_mean() -> None:
     schema = _make_schema(
         "ExpectationParams",
-        x=Parameter(loc=1.25, scale=0.75),
+        x=Parameter(mean=1.25, scale=0.75),
         y=Parameter(scale=1.0, min=0.0, max=1.0),
     )
     optimizer = _initialized_optimizer(schema, population_size=6)
@@ -1181,20 +1181,20 @@ def test_restart_on_conditioning_failure() -> None:
     assert cond < 1e14
 
 
-def test_successful_termination_restarts_from_final_mu_with_fresh_scale(
+def test_successful_termination_restarts_from_final_mean_with_fresh_scale(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     schema = _make_identity_schema("RestartSuccess", x=(2.0, 1.5), y=(-1.0, 0.7))
     optimizer = _initialized_optimizer(schema, population_size=4)
-    final_mu = np.array([4.25, -3.5])
+    final_mean = np.array([4.25, -3.5])
 
-    def fake_update_distribution(samples: np.ndarray, ranking: list[int]) -> XNESStatus:
-        optimizer._xnes.mean = final_mu.copy()
+    def fake_update(samples: np.ndarray, ranking: list[int]) -> XNESStatus:
+        optimizer._xnes.mean = final_mean.copy()
         optimizer._xnes.scale_global = 6.0
         optimizer._xnes.scale_shape = np.array([[1.5, 0.2], [0.0, 0.5]])
         return XNESStatus.MEAN_STEP_MIN
 
-    monkeypatch.setattr(optimizer._xnes, "update_distribution", fake_update_distribution)
+    monkeypatch.setattr(optimizer._xnes, "update", fake_update)
 
     for _ in range(3):
         optimizer.ask()
@@ -1209,7 +1209,7 @@ def test_successful_termination_restarts_from_final_mu_with_fresh_scale(
     assert report.restarted is True
 
     state = optimizer.save()
-    assert np.allclose(_read_mean(state), final_mu)
+    assert np.allclose(_read_mean(state), final_mean)
     assert np.allclose(_read_scale(state), np.diag([1.5, 0.7]))
     assert _read_status(state)["total_samples"] == 4
     assert _read_status(state)["num_batches"] == 1
@@ -1217,17 +1217,17 @@ def test_successful_termination_restarts_from_final_mu_with_fresh_scale(
     assert _read_status(state)["batch_progress"] == 0.0
 
 
-def test_failed_termination_restarts_from_schema_loc_with_fresh_scale(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_failed_termination_restarts_from_schema_mean_with_fresh_scale(monkeypatch: pytest.MonkeyPatch) -> None:
     schema = _make_identity_schema("RestartFailure", x=(2.0, 1.5), y=(-1.0, 0.7))
     optimizer = _initialized_optimizer(schema, population_size=4)
 
-    def fake_update_distribution(samples: np.ndarray, ranking: list[int]) -> XNESStatus:
+    def fake_update(samples: np.ndarray, ranking: list[int]) -> XNESStatus:
         optimizer._xnes.mean = np.array([4.25, -3.5])
         optimizer._xnes.scale_global = 6.0
         optimizer._xnes.scale_shape = np.array([[1.5, 0.2], [0.0, 0.5]])
         return XNESStatus.SCALE_COND_MAX
 
-    monkeypatch.setattr(optimizer._xnes, "update_distribution", fake_update_distribution)
+    monkeypatch.setattr(optimizer._xnes, "update", fake_update)
 
     for _ in range(3):
         optimizer.ask()
@@ -1280,15 +1280,15 @@ def test_save_load_preserves_optimizer_state() -> None:
 def test_transformed_parameters_use_latent_state_but_emit_user_space_values() -> None:
     schema = _make_schema(
         "TransformedParams",
-        a=Parameter(loc=1.2, scale=3.4),
-        b=Parameter(loc=2.9, scale=1.0, min=2.3, max=3.4),
-        c=Parameter(loc=3.0, scale=1.0, min=0.0),
-        d=Parameter(loc=3.0, scale=1.0, max=4.0),
+        a=Parameter(mean=1.2, scale=3.4),
+        b=Parameter(mean=2.9, scale=1.0, min=2.3, max=3.4),
+        c=Parameter(mean=3.0, scale=1.0, min=0.0),
+        d=Parameter(mean=3.0, scale=1.0, max=4.0),
     )
     optimizer = _optimizer(schema, population_size=6)
 
     state = optimizer.save()
-    expected_latent_loc = np.array(
+    expected_latent_mean = np.array(
         [
             1.2,
             np.log((2.9 - 2.3) / (3.4 - 2.9)),
@@ -1296,7 +1296,7 @@ def test_transformed_parameters_use_latent_state_but_emit_user_space_values() ->
             -_softplus_inverse(1.0),
         ]
     )
-    assert np.allclose(_read_mean(state), expected_latent_loc)
+    assert np.allclose(_read_mean(state), expected_latent_mean)
     assert np.allclose(np.diag(_read_scale(state)), np.array([3.4, 1.0, 1.0, 1.0]))
 
     mean = optimizer.mean

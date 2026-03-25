@@ -14,18 +14,18 @@ from .transforms import _softplus, _softplus_to_latent
 class Parameter:
     """User-facing metadata for one optimized scalar schema field.
 
-    `loc` is the user-space center value. `scale` is the latent-space standard
+    `mean` is the user-space center value. `scale` is the latent-space standard
     deviation. `min` and `max`, when provided, are asymptotic user-space
     bounds applied through monotone coordinate transforms.
     """
 
-    loc: float | None = None
+    mean: float | None = None
     scale: float = 1.0
     min: float | None = None
     max: float | None = None
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "loc", None if self.loc is None else float(self.loc))
+        object.__setattr__(self, "mean", None if self.mean is None else float(self.mean))
         object.__setattr__(self, "scale", float(self.scale))
         object.__setattr__(self, "min", None if self.min is None else float(self.min))
         object.__setattr__(self, "max", None if self.max is None else float(self.max))
@@ -41,8 +41,8 @@ class Parameter:
         values = np.asarray(value, dtype=float)
         return float(self.min) + (float(self.max) - float(self.min)) * expit(values)
 
-    def loc_to_latent(self, value: float) -> float:
-        """Map a user-space center value into latent coordinates."""
+    def mean_to_latent(self, value: float) -> float:
+        """Map a user-space mean value into latent coordinates."""
         if self.min is None:
             if self.max is None:
                 return float(value)
@@ -53,7 +53,7 @@ class Parameter:
 
     def validate(self, name: str) -> None:
         """Validate the parameter specification for one schema field."""
-        self._validate_loc_and_scale(name)
+        self._validate_mean_and_scale(name)
         min_value = None if self.min is None else _coerce_finite(self.min, _field_component_name(name, "min"))
         max_value = None if self.max is None else _coerce_finite(self.max, _field_component_name(name, "max"))
 
@@ -61,22 +61,22 @@ class Parameter:
             if not min_value < max_value:
                 msg = f"leitwerk schema field '{name}' must satisfy min < max for Parameter(...)"
                 raise ValueError(msg)
-            if self.loc is None:
+            if self.mean is None:
                 return
-            if not min_value < float(self.loc) < max_value:
-                msg = f"leitwerk schema field '{name}' must satisfy min < loc < max for Parameter(...)"
+            if not min_value < float(self.mean) < max_value:
+                msg = f"leitwerk schema field '{name}' must satisfy min < mean < max for Parameter(...)"
                 raise ValueError(msg)
             return
 
-        if self.loc is None:
+        if self.mean is None:
             return
 
-        if min_value is not None and not float(self.loc) > min_value:
-            msg = f"leitwerk schema field '{name}' must satisfy loc > min for Parameter(...)"
+        if min_value is not None and not float(self.mean) > min_value:
+            msg = f"leitwerk schema field '{name}' must satisfy mean > min for Parameter(...)"
             raise ValueError(msg)
 
-        if max_value is not None and not float(self.loc) < max_value:
-            msg = f"leitwerk schema field '{name}' must satisfy loc < max for Parameter(...)"
+        if max_value is not None and not float(self.mean) < max_value:
+            msg = f"leitwerk schema field '{name}' must satisfy mean < max for Parameter(...)"
             raise ValueError(msg)
 
     def state_spec(self) -> dict[str, object]:
@@ -90,18 +90,18 @@ class Parameter:
         self.validate(name)
         mean0 = (
             0.0
-            if self.loc is None
+            if self.mean is None
             else _coerce_finite(
-                self.loc_to_latent(float(self.loc)),
+                self.mean_to_latent(float(self.mean)),
                 _field_component_name(name, "latent mean"),
             )
         )
         scale0 = _coerce_positive(self.scale, _field_component_name(name, "scale"))
         return mean0, scale0
 
-    def _validate_loc_and_scale(self, name: str) -> None:
-        if self.loc is not None:
-            _coerce_finite(self.loc, _field_component_name(name, "loc"))
+    def _validate_mean_and_scale(self, name: str) -> None:
+        if self.mean is not None:
+            _coerce_finite(self.mean, _field_component_name(name, "mean"))
         _coerce_positive(self.scale, _field_component_name(name, "scale"))
 
 

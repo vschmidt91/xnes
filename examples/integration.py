@@ -9,7 +9,7 @@ from leitwerk import Optimizer, Parameter
 @dataclass(frozen=True, slots=True)
 class Params:
     attack_threshold: Annotated[float, Parameter()]
-    worker_limit: Annotated[float, Parameter(loc=66, scale=10, min=12)]
+    worker_limit: Annotated[float, Parameter(mean=66, scale=10, min=12)]
 
 
 params_file = Path("data/params.json")

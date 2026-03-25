@@ -1,4 +1,4 @@
-"""Schema-first optimizer wrapper built on top of the xNES update rule."""
+"""Schema-based optimizer wrapper built on top of the xNES update rule."""
 
 from __future__ import annotations
 
@@ -16,13 +16,6 @@ from .state import JSONLike, JSONObject, merge_settings, restore_optimizer_state
 from .xnes import XNES, XNESStatus
 
 T = TypeVar("T")
-_SUCCESSFUL_TERMINATION_STATUSES = frozenset(
-    {
-        XNESStatus.SCALE_GLOBAL_MIN,
-        XNESStatus.MEAN_STEP_MIN,
-        XNESStatus.SCALE_NORM_MIN,
-    }
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,7 +149,7 @@ class _BatchState:
 
 
 class Optimizer(Generic[T]):
-    """Schema-first xNES optimizer over dataclass or mapping schemas."""
+    """Schema-based xNES optimizer over dataclass or mapping schemas."""
 
     def __init__(
         self,
@@ -291,11 +284,11 @@ class Optimizer(Generic[T]):
             tell_kwargs["eta_scale_global"] = settings.eta_scale_global
         if settings.eta_scale_shape is not None:
             tell_kwargs["eta_scale_shape"] = settings.eta_scale_shape
-        status = self._xnes.update_distribution(self._batch_state.batch, self._ranking(), **tell_kwargs)
-        restarted = status is not XNESStatus.OK
+        status = self._xnes.update(self._batch_state.batch, self._ranking(), **tell_kwargs)
+        restarted = status.is_terminal
         if restarted:
             self._num_restarts += 1
-            restart_mean = self._xnes.mean if status in _SUCCESSFUL_TERMINATION_STATUSES else None
+            restart_mean = self._xnes.mean if status.is_completion else None
             self._reset_distribution(restart_mean)
         else:
             self._sample_batch()

@@ -131,12 +131,12 @@ def _deserialize_schema(schema_json: Mapping[str, object]) -> dict[str, Paramete
             raise TypeError(msg)
         try:
             spec_obj = _require_object(spec, f"checkpoint schema entry {name!r}")
-            loc = spec_obj["loc"]
+            mean = spec_obj["mean"]
             scale = spec_obj["scale"]
             min_value = spec_obj["min"]
             max_value = spec_obj["max"]
             schema[name] = Parameter(
-                loc=None if loc is None else _coerce_float_like(loc, f"checkpoint schema entry {name!r}.loc"),
+                mean=None if mean is None else _coerce_float_like(mean, f"checkpoint schema entry {name!r}.mean"),
                 scale=_coerce_float_like(scale, f"checkpoint schema entry {name!r}.scale"),
                 min=None
                 if min_value is None

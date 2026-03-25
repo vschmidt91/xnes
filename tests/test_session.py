@@ -16,8 +16,8 @@ def _make_schema(schema_name: str, **parameters: tuple[float, float]) -> type[An
     return make_dataclass(
         schema_name,
         [
-            (field_name, Annotated[float, Parameter(loc=loc, scale=scale)])
-            for field_name, (loc, scale) in parameters.items()
+            (field_name, Annotated[float, Parameter(mean=mean, scale=scale)])
+            for field_name, (mean, scale) in parameters.items()
         ],
         frozen=True,
         slots=True,
