@@ -213,13 +213,24 @@ def plot_metric(
 def save_plot(history: list[dict[str, float]]) -> None:
     DATA_PATH.mkdir(exist_ok=True)
     metrics = metric_names(history)
-    fig, axes = plt.subplots(len(metrics), 1, figsize=(8, 3 * len(metrics)), sharex=True)
-    if len(metrics) == 1:
-        axes = [axes]
-    for ax, metric in zip(axes, metrics, strict=True):
-        plot_metric(ax, history, metric, metric, ylim=(0, 1) if metric == "outcome" else None)
-        ax.set_title(metric)
-    axes[-1].set_xlabel("game")
+    result_metrics = [metric for metric in metrics if metric in {"outcome", "efficiency"}]
+    parameter_metrics = [metric for metric in metrics if metric not in {"outcome", "efficiency"}]
+    rows = max(len(result_metrics), len(parameter_metrics), 1)
+    fig, axes = plt.subplots(rows, 2, figsize=(12, 3 * rows), sharex=True, squeeze=False)
+
+    columns = [result_metrics, parameter_metrics]
+    for column, column_metrics in enumerate(columns):
+        for row, ax in enumerate(axes[:, column]):
+            if row >= len(column_metrics):
+                ax.set_visible(False)
+                continue
+            metric = column_metrics[row]
+            plot_metric(ax, history, metric)
+            ax.set_title(metric)
+
+    for ax in axes[-1, :]:
+        if ax.get_visible():
+            ax.set_xlabel("game")
     fig.tight_layout()
     fig.savefig(PLOT_FILE)
     plt.close(fig)
