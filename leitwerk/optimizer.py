@@ -4,25 +4,22 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass
-from typing import Generic, TypeAlias, TypeVar, cast
+from dataclasses import dataclass, field
+from typing import Generic, TypeVar, cast
 
 import numpy as np
 
-from .scheduler import BatchScheduler, Reservation
-from .schema import Parameter, SchemaDiff, SchemaSpec, parse_schema
+from .schema import SchemaDiff
+from .schema.parser import parse_schema
+from .schema.spec import SchemaSpec
+from .state import JSONLike, JSONObject, merge_settings, restore_optimizer_state, serialize_optimizer_state
 from .xnes import XNES, XNESStatus
 
 T = TypeVar("T")
-JSONScalar: TypeAlias = str | int | float | bool | None
-JSONObject: TypeAlias = dict[str, "JSONValue"]
-JSONValue: TypeAlias = JSONObject | list["JSONValue"] | JSONScalar
-JSONLikeObject: TypeAlias = Mapping[str, "JSONLike"]
-JSONLike: TypeAlias = JSONLikeObject | Sequence["JSONLike"] | JSONScalar
 _SUCCESSFUL_TERMINATION_STATUSES = frozenset(
     {
-        XNESStatus.SIGMA_MIN,
-        XNESStatus.LOC_STEP_MIN,
+        XNESStatus.SCALE_GLOBAL_MIN,
+        XNESStatus.MEAN_STEP_MIN,
         XNESStatus.SCALE_NORM_MIN,
     }
 )
@@ -39,32 +36,25 @@ class OptimizerSettings:
             freshly sampled batch.
         minimize: Optional ranking-direction override. `None` keeps the
             persisted baseline and falls back to maximization on fresh runs.
-        eta_mu: Optional mean learning-rate override. `None` keeps the
+        eta_mean: Optional mean learning-rate override. `None` keeps the
             persisted baseline or the xNES default.
-        eta_sigma: Optional global-scale learning-rate override. `None` keeps
+        eta_scale_global: Optional global-scale learning-rate override. `None`
+            keeps the persisted baseline or the xNES default.
+        eta_scale_shape: Optional shape learning-rate override. `None` keeps
             the persisted baseline or the xNES default.
-        eta_B: Optional shape learning-rate override. `None` keeps the
-            persisted baseline or the xNES default.
     """
 
     population_size: int | None = None
     seed: int | None = None
     minimize: bool | None = None
-    eta_mu: float | None = None
-    eta_sigma: float | None = None
-    eta_B: float | None = None
+    eta_mean: float | None = None
+    eta_scale_global: float | None = None
+    eta_scale_shape: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class OptimizerReport:
-    """Outcome of one `Optimizer.tell` call.
-
-    Attributes:
-        completed_batch: Whether this result completed the current batch.
-        matched_context: Whether sample selection used a mirrored context match.
-        status: xNES status returned after the batch update.
-        restarted: Whether the wrapper restarted with a fresh distribution after the update.
-    """
+    """Outcome of one `Optimizer.tell` call."""
 
     completed_batch: bool
     matched_context: bool
@@ -72,37 +62,112 @@ class OptimizerReport:
     restarted: bool
 
 
+@dataclass(frozen=True, slots=True)
+class SampleReservation:
+    sample_index: int
+    context: str | None
+    matched_context: bool
+
+
+@dataclass(slots=True)
+class _BatchState:
+    batch: np.ndarray = field(default_factory=lambda: np.zeros((0, 0), dtype=float))
+    results: list[tuple[float, ...] | None] = field(default_factory=list)
+    pending_context_matches: dict[str, int] = field(default_factory=dict)
+
+    def reset(self, batch: np.ndarray) -> None:
+        self.batch = batch
+        self.results = [None] * self.batch.shape[1]
+        self.pending_context_matches = {}
+
+    def restore(
+        self,
+        batch: np.ndarray,
+        results: list[tuple[float, ...] | None],
+        pending_context_matches: dict[str, int],
+    ) -> None:
+        self.batch = batch
+        sample_count = self.batch.shape[1]
+        self.results = [None] * sample_count
+        for idx, item in enumerate(results[:sample_count]):
+            self.results[idx] = item
+        self.pending_context_matches = {
+            context: sample_index
+            for context, sample_index in pending_context_matches.items()
+            if 0 <= sample_index < sample_count
+            and self.results[sample_index] is not None
+            and self.results[self._mirror_index(sample_index)] is None
+        }
+
+    def reserve(self, context: str | None) -> SampleReservation | None:
+        sample_index, matched_context = self._pick_sample(context)
+        if sample_index is None:
+            return None
+        return SampleReservation(
+            sample_index=sample_index,
+            context=context,
+            matched_context=matched_context,
+        )
+
+    def record_result(self, reservation: SampleReservation, result: tuple[float, ...]) -> bool:
+        sample_index = reservation.sample_index
+        if not 0 <= sample_index < len(self.results):
+            msg = "Sample index out of range."
+            raise RuntimeError(msg)
+        if self.results[sample_index] is not None:
+            msg = "Sample already has a recorded result."
+            raise RuntimeError(msg)
+
+        self.results[sample_index] = result
+        self._update_pending_context_matches(sample_index, reservation.context)
+        return self.is_complete()
+
+    def is_complete(self) -> bool:
+        return all(item is not None for item in self.results)
+
+    def _pick_sample(self, context: str | None) -> tuple[int | None, bool]:
+        if context is not None:
+            pending_index = self.pending_context_matches.get(context)
+            if pending_index is not None:
+                mirror_index = self._mirror_index(pending_index)
+                if self.results[mirror_index] is None:
+                    return mirror_index, True
+
+        sample_index = next((idx for idx, result in enumerate(self.results) if result is None), None)
+        return sample_index, False
+
+    def _mirror_index(self, sample_index: int) -> int:
+        half = self.batch.shape[1] // 2
+        return sample_index + half if sample_index < half else sample_index - half
+
+    def _update_pending_context_matches(self, sample_index: int, context: str | None) -> None:
+        mirror_index = self._mirror_index(sample_index)
+        stale_contexts = [
+            key for key, pending_index in self.pending_context_matches.items() if pending_index == mirror_index
+        ]
+        for key in stale_contexts:
+            del self.pending_context_matches[key]
+
+        if context is None:
+            return
+
+        if self.results[mirror_index] is None:
+            self.pending_context_matches[context] = sample_index
+
+
 class Optimizer(Generic[T]):
-    """Schema-first xNES optimizer over dataclass or mapping schemas.
-
-    Dataclass schemas must be dataclass trees whose optimized leaves are
-    declared as `Annotated[float, Parameter(...)]`.
-    Mapping schemas must be nested mappings with string keys and
-    `Parameter(...)` leaves.
-    The `ask()` / `tell()` interface is strictly sequential and keeps the
-    pending reservation inside the optimizer. `save()` only serializes
-    committed optimizer state and does not persist a pending reservation.
-    `load()` replaces the current optimizer state and cancels any pending
-    reservation. Optimizer state is keyed by stable dotted leaf names plus
-    persisted parameter definitions. Field ordering is lexicographic by leaf
-    name rather than declaration or insertion order.
-
-    Results are ranked for maximization by default. Runtime settings passed at
-    construction act as sparse overrides over any persisted `settings`
-    baseline restored by `load()`. Fresh runs persist their initial settings as
-    that baseline.
-    """
+    """Schema-first xNES optimizer over dataclass or mapping schemas."""
 
     def __init__(
         self,
-        schema_type: type[T] | Mapping[str, object],
+        schema: type[T] | Mapping[str, object],
         settings: OptimizerSettings | None = None,
     ) -> None:
         self._settings_override = settings if settings is not None else OptimizerSettings()
         self._settings_baseline = self._settings_override
-        self._schema: SchemaSpec[T] = cast(SchemaSpec[T], parse_schema(schema_type))
-        self._scheduler = BatchScheduler()
-        self._pending_reservation: Reservation | None = None
+        self._schema: SchemaSpec[T] = cast(SchemaSpec[T], parse_schema(schema))
+        self._batch_state = _BatchState()
+        self._pending_reservation: SampleReservation | None = None
         self._xnes: XNES
         self._total_samples = 0
         self._num_batches = 0
@@ -111,180 +176,103 @@ class Optimizer(Generic[T]):
 
     def save(self) -> JSONObject:
         """Serialize the current optimizer state into a JSON-compatible mapping."""
-        return {
-            "settings": asdict(self._settings_baseline),
-            "status": self._status(),
-            "loc": self._xnes.mu.tolist(),
-            "scale": self._xnes.scale.tolist(),
-            "schema": self._schema.state_schema(),
-            "results": _serialize_results(self._scheduler.results),
-            "context_pending": dict(self._scheduler.context_pending),
-            "batch": self._scheduler.batch.tolist(),
-        }
+        return serialize_optimizer_state(
+            settings=self._settings_baseline,
+            status=self._status(),
+            mean=self._xnes.mean,
+            scale=self._xnes.scale,
+            schema_state=self._schema.schema_state(),
+            batch=self._batch_state.batch,
+            results=self._batch_state.results,
+            pending_context_matches=self._batch_state.pending_context_matches,
+        )
 
     def load(self, state: JSONObject) -> SchemaDiff:
-        """Restore optimizer state from a previous snapshot.
-
-        Loading a previous snapshot reconciles added, removed, and changed
-        schema leaves by persisted transform compatibility while preserving
-        shared learned state. The restored `settings` block becomes the
-        baseline for any fields that were not explicitly overridden at
-        construction time. Any pending `ask()` reservation on the current
-        instance is canceled.
-        """
+        """Restore optimizer state from a previous snapshot."""
         self._pending_reservation = None
-        state_obj = _require_object(state, "checkpoint state")
-        self._settings_baseline = _merge_settings(
-            _deserialize_settings(_require_field(state_obj, "settings")),
-            self._settings_override,
-        )
-        schema_json = _require_object(_require_field(state_obj, "schema"), "checkpoint schema")
-        saved_schema = _deserialize_schema(schema_json)
-        saved_names = sorted(saved_schema)
-        saved_dim = len(saved_names)
-        loc = _as_finite_vector(_require_field(state_obj, "loc"), saved_dim, "checkpoint loc")
-        scale = _as_finite_matrix(_require_field(state_obj, "scale"), (saved_dim, saved_dim), "checkpoint scale")
-        batch = _as_batch_matrix(_require_field(state_obj, "batch"), saved_dim)
-        results = _deserialize_results(_require_field(state_obj, "results"))
-        context_pending = _deserialize_context_pending(_require_field(state_obj, "context_pending"))
-        status = _validate_status(_require_field(state_obj, "status"))
+        restored = restore_optimizer_state(state, cast(SchemaSpec[object], self._schema), self._settings_override)
+        self._settings_baseline = restored.settings
+        self._xnes = XNES(restored.mean, restored.scale)
+        self._total_samples = restored.total_samples
+        self._num_batches = restored.num_batches
+        self._num_restarts = restored.num_restarts
 
-        schema_diff = self._schema.diff(saved_schema)
-        loc, scale = self._reconcile_distribution_state(
-            saved_names,
-            schema_diff.unchanged,
-            loc,
-            scale,
-        )
-
-        self._xnes = XNES(loc, scale)
-        self._restore_status(status)
-        self._pending_reservation = None
-        if batch.shape[1] == 0:
+        if restored.batch.shape[1] == 0:
             self._sample_batch()
         else:
-            batch = self._reconcile_batch_state(saved_names, schema_diff, batch, results)
-            self._scheduler.restore(batch, results, context_pending)
-        return schema_diff
+            self._batch_state.restore(
+                restored.batch,
+                restored.results,
+                restored.pending_context_matches,
+            )
+        return restored.schema_diff
 
-    def _reset_distribution(self, loc: np.ndarray | None = None) -> None:
-        reset_loc, scale = self._schema.initial_distribution()
-        if loc is not None:
-            reset_loc = np.array(loc, dtype=float, copy=True)
-        self._xnes = XNES(reset_loc, scale)
+    def _reset_distribution(self, mean: np.ndarray | None = None) -> None:
+        reset_mean, scale = self._schema.initial_distribution()
+        if mean is not None:
+            reset_mean = np.array(mean, dtype=float, copy=True)
+        self._xnes = XNES(reset_mean, scale)
         self._sample_batch()
 
     def ask(self, context: JSONLike = None) -> T:
-        """Reserve one sampled parameter set for one evaluation.
-
-        Context matching uses exact string equality. Non-string contexts are
-        normalized into canonical JSON text before matching and persistence.
-        """
+        """Reserve one sampled parameter set for one evaluation."""
         self._require_idle("ask")
         self._pending_reservation = self._reserve(_normalize_context(context))
         return self._params_for(self._pending_reservation)
 
     @property
     def mean(self) -> T:
-        """Current mean parameters in the schema's runtime shape."""
-        return self._schema.build_params(self._xnes.mu)
+        """Current mean parameters in the schema's runtime shape.
+
+        For transformed parameters this is the transformed latent mean, used as
+        a convenient center rather than the exact expected value.
+        """
+        return self._schema.build_params(self._xnes.mean)
 
     @property
     def scale_marginal(self) -> T:
         """Current scale-vector parameters in the schema's runtime shape."""
         scale_marginal = self._xnes.scale_marginal
         return self._schema.instantiate(
-            {field.path: float(sigma) for field, sigma in zip(self._schema.fields, scale_marginal, strict=True)},
+            {
+                field_spec.path: float(scale)
+                for field_spec, scale in zip(self._schema.fields, scale_marginal, strict=True)
+            },
         )
 
     @property
     def settings(self) -> OptimizerSettings:
         """Effective runtime optimizer configuration with sparse overrides merged."""
-        return _merge_settings(self._settings_baseline, self._settings_override)
+        return merge_settings(self._settings_baseline, self._settings_override)
 
     def tell(self, result: float | Sequence[float] | np.ndarray) -> OptimizerReport:
         """Submit the objective result for the pending sample."""
         reservation = self._require_pending()
-        tell_result = self._tell_reservation(reservation, result)
+        report = self._tell_reservation(reservation, result)
         self._pending_reservation = None
-        return tell_result
+        return report
 
     def _tell_reservation(
         self,
-        reservation: Reservation,
+        reservation: SampleReservation,
         result: float | Sequence[float] | np.ndarray,
     ) -> OptimizerReport:
-        completed_batch = self._scheduler.record_result(reservation, _normalize_result(result))
+        completed_batch = self._batch_state.record_result(reservation, _normalize_result(result))
         self._total_samples += 1
         if completed_batch:
             status, restarted = self._complete_batch()
             return OptimizerReport(True, reservation.matched_context, status, restarted)
         return OptimizerReport(False, reservation.matched_context, XNESStatus.OK, False)
 
-    def _params_for(self, reservation: Reservation) -> T:
-        latent_sample = self._xnes.transform(self._scheduler.batch[:, [reservation.sample_id]])[:, 0]
-        return self._schema.build_params(latent_sample)
-
-    def _reconcile_distribution_state(
-        self,
-        saved_names: list[str],
-        unchanged_names: list[str],
-        loc: np.ndarray,
-        scale: np.ndarray,
-    ) -> tuple[np.ndarray, np.ndarray]:
-        reconciled_loc, reconciled_scale = self._schema.initial_distribution()
-
-        saved_index = {name: idx for idx, name in enumerate(saved_names)}
-        current_index = self._schema.index_by_name()
-        shared_indices = [(current_index[name], saved_index[name]) for name in unchanged_names]
-        for current_idx, saved_idx in shared_indices:
-            reconciled_loc[current_idx] = float(loc[saved_idx])
-
-        if shared_indices:
-            shared_current_indices, shared_saved_indices = zip(*shared_indices, strict=True)
-            reconciled_scale[np.ix_(shared_current_indices, shared_current_indices)] = scale[
-                np.ix_(shared_saved_indices, shared_saved_indices)
-            ]
-
-        return reconciled_loc, reconciled_scale
-
-    def _reconcile_batch_state(
-        self,
-        saved_names: list[str],
-        schema_diff: SchemaDiff,
-        batch: np.ndarray,
-        results: list[tuple[float, ...] | None],
-    ) -> np.ndarray:
-        sample_count = batch.shape[1]
-        reconciled_batch = np.zeros((self._schema.dim, sample_count), dtype=float)
-        completed_mask = np.zeros(sample_count, dtype=bool)
-        for idx, result in enumerate(results[:sample_count]):
-            completed_mask[idx] = result is not None
-        pending_mask = ~completed_mask
-        mirror_index = _mirror_indices(sample_count)
-        # For changed dimensions, keep exactly those samples whose whole mirror
-        # pair is still pending; zero all others. This keeps each pair either
-        # both old or both zero, so changed coordinates remain exact mirrors.
-        mirror_pending_mask = pending_mask & pending_mask[mirror_index]
-
-        saved_index = {name: idx for idx, name in enumerate(saved_names)}
-        current_index = self._schema.index_by_name()
-        for name in schema_diff.unchanged:
-            current_idx = current_index[name]
-            saved_idx = saved_index[name]
-            reconciled_batch[current_idx, :] = batch[saved_idx, :]
-        for name in schema_diff.changed:
-            current_idx = current_index[name]
-            saved_idx = saved_index[name]
-            reconciled_batch[current_idx, mirror_pending_mask] = batch[saved_idx, mirror_pending_mask]
-
-        return reconciled_batch
+    def _params_for(self, reservation: SampleReservation) -> T:
+        sample = self._xnes.transform(self._batch_state.batch[:, [reservation.sample_index]])[:, 0]
+        return self._schema.build_params(sample)
 
     def _sample_batch(self) -> None:
         settings = self.settings
-        batch = self._xnes.sample_distribution(settings.population_size, self._batch_rng())
+        batch = self._xnes.sample(settings.population_size, self._batch_rng())
         self._pending_reservation = None
-        self._scheduler.reset(batch)
+        self._batch_state.reset(batch)
 
     def _batch_rng(self) -> np.random.Generator:
         seed = self.settings.seed
@@ -297,62 +285,52 @@ class Optimizer(Generic[T]):
         self._num_batches += 1
         settings = self.settings
         tell_kwargs: dict[str, float] = {}
-        if settings.eta_mu is not None:
-            tell_kwargs["eta_mu"] = settings.eta_mu
-        if settings.eta_sigma is not None:
-            tell_kwargs["eta_sigma"] = settings.eta_sigma
-        if settings.eta_B is not None:
-            tell_kwargs["eta_B"] = settings.eta_B
-        try:
-            status = self._xnes.update_distribution(self._scheduler.batch, self._ranking(), **tell_kwargs)
-        except TypeError as exc:
-            if "unexpected keyword argument" not in str(exc):
-                raise
-            status = self._xnes.update_distribution(self._scheduler.batch, self._ranking())
+        if settings.eta_mean is not None:
+            tell_kwargs["eta_mean"] = settings.eta_mean
+        if settings.eta_scale_global is not None:
+            tell_kwargs["eta_scale_global"] = settings.eta_scale_global
+        if settings.eta_scale_shape is not None:
+            tell_kwargs["eta_scale_shape"] = settings.eta_scale_shape
+        status = self._xnes.update_distribution(self._batch_state.batch, self._ranking(), **tell_kwargs)
         restarted = status is not XNESStatus.OK
         if restarted:
             self._num_restarts += 1
-            restart_loc = self._xnes.mu if status in _SUCCESSFUL_TERMINATION_STATUSES else None
-            self._reset_distribution(restart_loc)
+            restart_mean = self._xnes.mean if status in _SUCCESSFUL_TERMINATION_STATUSES else None
+            self._reset_distribution(restart_mean)
         else:
             self._sample_batch()
         return status, restarted
 
-    def _restore_status(self, status: Mapping[str, JSONValue]) -> None:
-        self._total_samples = int(cast(int | float, status["total_samples"]))
-        self._num_batches = int(cast(int | float, status["num_batches"]))
-        self._num_restarts = int(cast(int | float, status["num_restarts"]))
-
     def _status(self) -> JSONObject:
-        batch_size = len(self._scheduler.results)
-        completed = sum(result is not None for result in self._scheduler.results)
+        batch_size = len(self._batch_state.results)
+        completed = sum(result is not None for result in self._batch_state.results)
         return {
             "total_samples": self._total_samples,
             "num_batches": self._num_batches,
             "num_restarts": self._num_restarts,
             "num_parameters": self._xnes.dim,
             "axis_ratio": self._xnes.axis_ratio,
-            "step_size": self._xnes.step_size,
+            "scale_global": self._xnes.scale_global,
             "batch_progress": completed,
             "batch_size": batch_size,
         }
 
-    def _reserve(self, context: str | None) -> Reservation:
-        result = self._scheduler.reserve(context)
-        if result is None:
-            if not self._scheduler.is_complete():
+    def _reserve(self, context: str | None) -> SampleReservation:
+        reservation = self._batch_state.reserve(context)
+        if reservation is None:
+            if not self._batch_state.is_complete():
                 msg = "No sample available."
                 raise RuntimeError(msg)
             self._complete_batch()
-            result = self._scheduler.reserve(context)
-            if result is None:
+            reservation = self._batch_state.reserve(context)
+            if reservation is None:
                 msg = "No sample available."
                 raise RuntimeError(msg)
-        return result
+        return reservation
 
     def _ranking(self) -> list[int]:
-        assert self._scheduler.is_complete()
-        results = [cast(tuple[float, ...], item) for item in self._scheduler.results]
+        assert self._batch_state.is_complete()
+        results = [cast(tuple[float, ...], item) for item in self._batch_state.results]
         settings = self.settings
         minimize = settings.minimize if settings.minimize is not None else False
         return sorted(range(len(results)), key=lambda idx: results[idx], reverse=not minimize)
@@ -362,7 +340,7 @@ class Optimizer(Generic[T]):
             msg = f"Pending ask must be told before calling {action}()."
             raise RuntimeError(msg)
 
-    def _require_pending(self) -> Reservation:
+    def _require_pending(self) -> SampleReservation:
         if self._pending_reservation is None:
             msg = "No pending ask."
             raise RuntimeError(msg)
@@ -396,177 +374,3 @@ def _normalize_context(context: JSONLike) -> str | None:
     except (TypeError, ValueError) as exc:
         msg = "context must be a string or JSON-serializable value."
         raise TypeError(msg) from exc
-
-
-def _deserialize_schema(schema_json: Mapping[str, object]) -> dict[str, Parameter]:
-    schema: dict[str, Parameter] = {}
-    for name, spec in schema_json.items():
-        if not isinstance(name, str):
-            msg = "checkpoint schema keys must be strings."
-            raise TypeError(msg)
-        try:
-            schema[name] = Parameter.from_state(spec)
-        except (KeyError, TypeError, ValueError) as exc:
-            msg = f"checkpoint schema entry {name!r} is invalid."
-            raise ValueError(msg) from exc
-    return schema
-
-
-def _deserialize_settings(settings_json: object) -> OptimizerSettings:
-    settings = cast(Mapping[str, JSONScalar], _require_object(settings_json, "checkpoint settings"))
-    return OptimizerSettings(
-        population_size=cast(int | None, settings.get("population_size")),
-        seed=cast(int | None, settings.get("seed")),
-        minimize=cast(bool | None, settings.get("minimize")),
-        eta_mu=cast(float | None, settings.get("eta_mu")),
-        eta_sigma=cast(float | None, settings.get("eta_sigma")),
-        eta_B=cast(float | None, settings.get("eta_B")),
-    )
-
-
-def _merge_settings(baseline: OptimizerSettings, override: OptimizerSettings) -> OptimizerSettings:
-    merged = asdict(baseline)
-    for key, value in asdict(override).items():
-        if value is not None:
-            merged[key] = value
-    return OptimizerSettings(**merged)
-
-
-def _serialize_results(results: Sequence[tuple[float, ...] | None]) -> list[list[float] | None]:
-    return [None if row is None else list(row) for row in results]
-
-
-def _deserialize_results(result_rows: object) -> list[tuple[float, ...] | None]:
-    if not isinstance(result_rows, Sequence) or isinstance(result_rows, (str, bytes)):
-        msg = "checkpoint results must be a sequence."
-        raise TypeError(msg)
-    rows = cast(Sequence[object], result_rows)
-    results: list[tuple[float, ...] | None] = []
-    for idx, row in enumerate(rows):
-        if row is None:
-            results.append(None)
-            continue
-        if not isinstance(row, Sequence) or isinstance(row, (str, bytes)):
-            msg = f"checkpoint results[{idx}] must be null or a sequence of numbers."
-            raise TypeError(msg)
-        try:
-            values = tuple(float(value) for value in row)
-        except (TypeError, ValueError) as exc:
-            msg = f"checkpoint results[{idx}] must contain only numeric values."
-            raise TypeError(msg) from exc
-        if not values:
-            msg = f"checkpoint results[{idx}] cannot be empty."
-            raise ValueError(msg)
-        if not np.all(np.isfinite(values)):
-            msg = f"checkpoint results[{idx}] must contain only finite values."
-            raise ValueError(msg)
-        results.append(values)
-    return results
-
-
-def _as_batch_matrix(batch_json: object, dim: int) -> np.ndarray:
-    batch = _as_finite_array(batch_json, "checkpoint batch")
-    if batch.ndim == 1 and batch.size == 0:
-        return np.zeros((dim, 0), dtype=float)
-    if batch.ndim != 2 or batch.shape[0] != dim:
-        msg = f"checkpoint batch must have shape ({dim}, n)."
-        raise ValueError(msg)
-    if batch.shape[1] % 2 == 1:
-        msg = "checkpoint batch sample count must be even."
-        raise ValueError(msg)
-    return batch
-
-
-def _mirror_indices(sample_count: int) -> np.ndarray:
-    mirror_index = np.arange(sample_count)
-    half = sample_count // 2
-    if half:
-        mirror_index[:half] += half
-        mirror_index[half:] -= half
-    return mirror_index
-
-
-def _require_field(state: Mapping[str, object], name: str) -> object:
-    if name not in state:
-        msg = f"checkpoint state is missing {name!r}."
-        raise ValueError(msg)
-    return state[name]
-
-
-def _require_object(value: object, name: str) -> Mapping[str, object]:
-    if not isinstance(value, Mapping):
-        msg = f"{name} must be a JSON object."
-        raise TypeError(msg)
-    return cast(Mapping[str, object], value)
-
-
-def _as_finite_array(value: object, name: str) -> np.ndarray:
-    try:
-        array = np.asarray(value, dtype=float)
-    except (TypeError, ValueError) as exc:
-        msg = f"{name} must contain only numeric values."
-        raise TypeError(msg) from exc
-    if not np.all(np.isfinite(array)):
-        msg = f"{name} must contain only finite values."
-        raise ValueError(msg)
-    return array
-
-
-def _as_finite_vector(value: object, size: int, name: str) -> np.ndarray:
-    vector = _as_finite_array(value, name)
-    if vector.ndim != 1 or vector.shape[0] != size:
-        msg = f"{name} must have shape ({size},)."
-        raise ValueError(msg)
-    return vector
-
-
-def _as_finite_matrix(value: object, shape: tuple[int, int], name: str) -> np.ndarray:
-    matrix = _as_finite_array(value, name)
-    if matrix.ndim != 2 or matrix.shape != shape:
-        msg = f"{name} must have shape {shape}."
-        raise ValueError(msg)
-    return matrix
-
-
-def _deserialize_context_pending(context_pending_json: object) -> dict[str, int]:
-    context_pending = _require_object(context_pending_json, "checkpoint context_pending")
-    restored: dict[str, int] = {}
-    for context, sample_idx in context_pending.items():
-        context_name = _require_string(context, "checkpoint context_pending keys")
-        restored[context_name] = _coerce_int_like(sample_idx, f"checkpoint context_pending[{context_name!r}]")
-    return restored
-
-
-def _validate_status(status_json: object) -> Mapping[str, JSONValue]:
-    status = _require_object(status_json, "checkpoint status")
-    _coerce_non_negative_int_like(_require_field(status, "total_samples"), "checkpoint status.total_samples")
-    _coerce_non_negative_int_like(_require_field(status, "num_batches"), "checkpoint status.num_batches")
-    _coerce_non_negative_int_like(_require_field(status, "num_restarts"), "checkpoint status.num_restarts")
-    return cast(Mapping[str, JSONValue], status)
-
-
-def _require_string(value: object, name: str) -> str:
-    if not isinstance(value, str):
-        msg = f"{name} must be strings."
-        raise TypeError(msg)
-    return value
-
-
-def _coerce_int_like(value: object, name: str) -> int:
-    if isinstance(value, bool):
-        msg = f"{name} must be an integer."
-        raise TypeError(msg)
-    if isinstance(value, (int, np.integer)):
-        return int(value)
-    if isinstance(value, (float, np.floating)) and np.isfinite(value) and float(value).is_integer():
-        return int(value)
-    msg = f"{name} must be an integer."
-    raise TypeError(msg)
-
-
-def _coerce_non_negative_int_like(value: object, name: str) -> int:
-    out = _coerce_int_like(value, name)
-    if out < 0:
-        msg = f"{name} must be non-negative."
-        raise ValueError(msg)
-    return out

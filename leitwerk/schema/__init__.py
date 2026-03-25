@@ -1,6 +1,6 @@
-"""Public facade for schema parsing and normalized schema metadata."""
+"""Public schema types."""
 
-from .common import parse_schema
-from .spec import FieldSpec, Parameter, SchemaDiff, SchemaSpec
+from .parameter import Parameter
+from .spec import SchemaDiff
 
-__all__ = ["FieldSpec", "Parameter", "SchemaDiff", "SchemaSpec", "parse_schema"]
+__all__ = ["Parameter", "SchemaDiff"]

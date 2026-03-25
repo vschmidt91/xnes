@@ -159,18 +159,18 @@ def test_session_runtime_settings_override_persisted_baseline(tmp_path: Path) ->
     OptimizerSession(
         path,
         schema,
-        settings=OptimizerSettings(population_size=6, seed=_TEST_SEED, minimize=True, eta_mu=0.9),
+        settings=OptimizerSettings(population_size=6, seed=_TEST_SEED, minimize=True, eta_mean=0.9),
     ).flush()
 
-    restored = OptimizerSession(path, schema, settings=OptimizerSettings(seed=999, eta_sigma=0.3))
+    restored = OptimizerSession(path, schema, settings=OptimizerSettings(seed=999, eta_scale_global=0.3))
 
     assert restored.restored is True
     assert restored.settings == OptimizerSettings(
         population_size=6,
         seed=999,
         minimize=True,
-        eta_mu=0.9,
-        eta_sigma=0.3,
+        eta_mean=0.9,
+        eta_scale_global=0.3,
     )
 
     restored.flush()

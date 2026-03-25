@@ -1,5 +1,12 @@
 .PHONY: fix check docs docs-serve
-PYTHON ?= python
+
+ifeq ($(OS),Windows_NT)
+VENV_PYTHON := .venv/Scripts/python.exe
+else
+VENV_PYTHON := .venv/bin/python
+endif
+
+PYTHON := $(if $(wildcard $(VENV_PYTHON)),$(VENV_PYTHON),python)
 SOURCES = leitwerk tests examples
 
 fix:

@@ -7,7 +7,7 @@ from typing import Annotated, Any, cast
 import numpy as np
 import pytest
 from leitwerk import Optimizer, OptimizerReport, OptimizerSettings, Parameter, SchemaDiff, XNESStatus
-from leitwerk.optimizer import JSONObject
+from leitwerk.state import JSONObject
 
 _TEST_SEED = 12345
 
@@ -53,9 +53,9 @@ def _optimizer(
     population_size: int | None = None,
     seed: int | None = _TEST_SEED,
     minimize: bool | None = None,
-    eta_mu: float | None = None,
-    eta_sigma: float | None = None,
-    eta_B: float | None = None,
+    eta_mean: float | None = None,
+    eta_scale_global: float | None = None,
+    eta_scale_shape: float | None = None,
 ) -> Optimizer[Any]:
     return Optimizer(
         schema,
@@ -63,9 +63,9 @@ def _optimizer(
             population_size=population_size,
             seed=seed,
             minimize=minimize,
-            eta_mu=eta_mu,
-            eta_sigma=eta_sigma,
-            eta_B=eta_B,
+            eta_mean=eta_mean,
+            eta_scale_global=eta_scale_global,
+            eta_scale_shape=eta_scale_shape,
         ),
     )
 
@@ -104,9 +104,9 @@ def _read_schema_names(state: object) -> list[str]:
     return list(_read_schema(state))
 
 
-def _read_loc(state: object) -> np.ndarray:
+def _read_mean(state: object) -> np.ndarray:
     assert isinstance(state, dict)
-    loc_json = state["loc"]
+    loc_json = state["mean"]
     assert isinstance(loc_json, list)
     return np.asarray(loc_json, dtype=float)
 
@@ -126,7 +126,7 @@ def _read_batch(state: object) -> np.ndarray:
 
 
 def _read_batch_latent_points(state: object) -> np.ndarray:
-    loc = _read_loc(state)
+    loc = _read_mean(state)
     scale = _read_scale(state)
     batch = _read_batch(state)
     return loc[:, None] + scale @ batch
@@ -139,32 +139,39 @@ def _read_results(state: object) -> list[tuple[float, ...] | None]:
     return [None if row is None else tuple(float(value) for value in row) for row in results_json]
 
 
-def _read_context_pending(state: object) -> dict[str, int]:
+def _read_pending_context_matches(state: object) -> dict[str, int]:
     assert isinstance(state, dict)
-    context_pending_json = state["context_pending"]
-    assert isinstance(context_pending_json, dict)
-    assert all(isinstance(context, str) for context in context_pending_json)
-    return {str(context): int(sample_idx) for context, sample_idx in context_pending_json.items()}
+    pending_context_matches_json = state["pending_context_matches"]
+    assert isinstance(pending_context_matches_json, dict)
+    assert all(isinstance(context, str) for context in pending_context_matches_json)
+    return {str(context): int(sample_idx) for context, sample_idx in pending_context_matches_json.items()}
 
 
 def _read_settings(state: object) -> dict[str, int | float | bool | None]:
     assert isinstance(state, dict)
     settings_json = state["settings"]
     assert isinstance(settings_json, Mapping)
-    assert set(settings_json) == {"population_size", "seed", "minimize", "eta_mu", "eta_sigma", "eta_B"}
+    assert set(settings_json) == {
+        "population_size",
+        "seed",
+        "minimize",
+        "eta_mean",
+        "eta_scale_global",
+        "eta_scale_shape",
+    }
     population_size = settings_json["population_size"]
     seed = settings_json["seed"]
     minimize = settings_json["minimize"]
-    eta_mu = settings_json["eta_mu"]
-    eta_sigma = settings_json["eta_sigma"]
-    eta_B = settings_json["eta_B"]
+    eta_mean = settings_json["eta_mean"]
+    eta_scale_global = settings_json["eta_scale_global"]
+    eta_scale_shape = settings_json["eta_scale_shape"]
     return {
         "population_size": None if population_size is None else int(population_size),
         "seed": None if seed is None else int(seed),
         "minimize": None if minimize is None else bool(minimize),
-        "eta_mu": None if eta_mu is None else float(eta_mu),
-        "eta_sigma": None if eta_sigma is None else float(eta_sigma),
-        "eta_B": None if eta_B is None else float(eta_B),
+        "eta_mean": None if eta_mean is None else float(eta_mean),
+        "eta_scale_global": None if eta_scale_global is None else float(eta_scale_global),
+        "eta_scale_shape": None if eta_scale_shape is None else float(eta_scale_shape),
     }
 
 
@@ -178,7 +185,7 @@ def _read_status(state: object) -> dict[str, int | float | bool | None]:
         "num_restarts",
         "num_parameters",
         "axis_ratio",
-        "step_size",
+        "scale_global",
         "batch_progress",
         "batch_size",
     ]
@@ -188,7 +195,7 @@ def _read_status(state: object) -> dict[str, int | float | bool | None]:
         "num_restarts": int(status_json["num_restarts"]),
         "num_parameters": int(status_json["num_parameters"]),
         "axis_ratio": float(status_json["axis_ratio"]),
-        "step_size": float(status_json["step_size"]),
+        "scale_global": float(status_json["scale_global"]),
         "batch_progress": float(status_json["batch_progress"]),
     }
 
@@ -199,7 +206,7 @@ def _assert_same_status(
 ) -> None:
     for key in ("total_samples", "num_batches", "num_restarts", "num_parameters"):
         assert actual[key] == expected[key]
-    for key in ("axis_ratio", "step_size", "batch_progress"):
+    for key in ("axis_ratio", "scale_global", "batch_progress"):
         assert actual[key] == pytest.approx(expected[key])
 
 
@@ -210,7 +217,7 @@ def _assert_same_settings(
     assert actual.keys() == expected.keys()
     for key in ("population_size", "seed", "minimize"):
         assert actual[key] == expected[key]
-    for key in ("eta_mu", "eta_sigma", "eta_B"):
+    for key in ("eta_mean", "eta_scale_global", "eta_scale_shape"):
         if expected[key] is None:
             assert actual[key] is None
         else:
@@ -237,7 +244,7 @@ def _run_function_optimization(
     )
     optimizer: Optimizer[Any] = _optimizer(schema, population_size=population_size, minimize=minimize)
 
-    initial_loc = _read_loc(optimizer.save())
+    initial_loc = _read_mean(optimizer.save())
     initial_value = objective(initial_loc)
 
     for _ in range(evaluations):
@@ -246,7 +253,7 @@ def _run_function_optimization(
         result = objective(point) if minimize else -objective(point)
         optimizer.tell(result)
 
-    final_loc = _read_loc(optimizer.save())
+    final_loc = _read_mean(optimizer.save())
     final_value = objective(final_loc)
     return initial_value, final_value
 
@@ -304,7 +311,7 @@ def test_state_save_load_roundtrip() -> None:
     loaded = opt_b.save()
 
     assert _read_schema(loaded) == _read_schema(state)
-    assert np.allclose(_read_loc(loaded), _read_loc(state))
+    assert np.allclose(_read_mean(loaded), _read_mean(state))
     assert np.allclose(_read_scale(loaded), _read_scale(state))
     _assert_same_status(_read_status(loaded), _read_status(state))
     _assert_same_settings(_read_settings(loaded), _read_settings(state))
@@ -321,16 +328,16 @@ def test_status_block_exposes_basic_diagnostics_and_roundtrips() -> None:
         "num_restarts": 0,
         "num_parameters": 2,
         "axis_ratio": 1.0,
-        "step_size": 1.5,
+        "scale_global": 1.5,
         "batch_progress": 0,
     }
     assert _read_settings(optimizer.save()) == {
         "population_size": 4,
         "seed": _TEST_SEED,
         "minimize": None,
-        "eta_mu": None,
-        "eta_sigma": None,
-        "eta_B": None,
+        "eta_mean": None,
+        "eta_scale_global": None,
+        "eta_scale_shape": None,
     }
 
     params = optimizer.ask()
@@ -342,15 +349,15 @@ def test_status_block_exposes_basic_diagnostics_and_roundtrips() -> None:
     assert progressed_status["num_restarts"] == 0
     assert progressed_status["num_parameters"] == 2
     assert progressed_status["axis_ratio"] == pytest.approx(1.0)
-    assert progressed_status["step_size"] == pytest.approx(1.5)
+    assert progressed_status["scale_global"] == pytest.approx(1.5)
     assert progressed_status["batch_progress"] == 1
     assert _read_settings(progressed_state) == {
         "population_size": 4,
         "seed": _TEST_SEED,
         "minimize": None,
-        "eta_mu": None,
-        "eta_sigma": None,
-        "eta_B": None,
+        "eta_mean": None,
+        "eta_scale_global": None,
+        "eta_scale_shape": None,
     }
 
     restored = _initialized_optimizer(schema, population_size=4)
@@ -362,9 +369,9 @@ def test_status_block_exposes_basic_diagnostics_and_roundtrips() -> None:
 def test_load_rejects_nonfinite_loc() -> None:
     schema = _make_identity_schema("BadLocCheckpoint", x=(0.0, 1.0))
     state = _initialized_state(schema, population_size=4)
-    state["loc"] = [float("nan")]
+    state["mean"] = [float("nan")]
 
-    with pytest.raises(ValueError, match="checkpoint loc must contain only finite values"):
+    with pytest.raises(ValueError, match="checkpoint mean must contain only finite values"):
         _optimizer(schema, population_size=4).load(state)
 
 
@@ -386,12 +393,12 @@ def test_load_rejects_nonfinite_results() -> None:
         _optimizer(schema, population_size=4).load(state)
 
 
-def test_load_rejects_bad_context_pending_shape() -> None:
+def test_load_rejects_bad_pending_context_matches_shape() -> None:
     schema = _make_identity_schema("BadContextCheckpoint", x=(0.0, 1.0))
     state = _initialized_state(schema, population_size=4)
-    state["context_pending"] = {1: 0}
+    state["pending_context_matches"] = cast(JSONObject, {1: 0})
 
-    with pytest.raises(TypeError, match="checkpoint context_pending keys must be strings"):
+    with pytest.raises(TypeError, match="checkpoint pending_context_matches keys must be strings"):
         _optimizer(schema, population_size=4).load(state)
 
 
@@ -422,7 +429,7 @@ def test_load_reconciles_added_and_removed_parameters() -> None:
         base.tell(-(x**2 + 0.5 * y**2))
 
     base_state = base.save()
-    base_loc = _read_loc(base_state)
+    base_loc = _read_mean(base_state)
     base_scale = _read_scale(base_state)
     base_batch = _read_batch(base_state)
     base_batch_latent_points = _read_batch_latent_points(base_state)
@@ -436,7 +443,7 @@ def test_load_reconciles_added_and_removed_parameters() -> None:
     added_state = added.save()
 
     assert _read_schema_names(added_state) == ["x", "y", "z"]
-    assert np.allclose(_read_loc(added_state), np.array([base_loc[0], base_loc[1], 3.0]))
+    assert np.allclose(_read_mean(added_state), np.array([base_loc[0], base_loc[1], 3.0]))
     assert np.allclose(
         _read_scale(added_state),
         np.array(
@@ -457,7 +464,7 @@ def test_load_reconciles_added_and_removed_parameters() -> None:
     added.ask()
     added.tell(-1.0)
     added_partial_state = added.save()
-    added_loc = _read_loc(added_partial_state)
+    added_loc = _read_mean(added_partial_state)
     added_scale = _read_scale(added_partial_state)
     added_batch = _read_batch(added_partial_state)
     added_batch_latent_points = _read_batch_latent_points(added_partial_state)
@@ -471,7 +478,7 @@ def test_load_reconciles_added_and_removed_parameters() -> None:
     removed_state = removed.save()
 
     assert _read_schema_names(removed_state) == ["x", "y"]
-    assert np.allclose(_read_loc(removed_state), added_loc[:2])
+    assert np.allclose(_read_mean(removed_state), added_loc[:2])
     assert np.allclose(_read_scale(removed_state), added_scale[:2, :2])
     assert np.allclose(_read_batch(removed_state), added_batch[:2, :])
     assert np.allclose(_read_batch_latent_points(removed_state), added_batch_latent_points[:2, :])
@@ -493,7 +500,7 @@ def test_load_reconciles_bounds_changes_and_selectively_preserves_batch() -> Non
         base.tell(-((x - 0.2) ** 2 + 0.5 * y**2))
 
     base_state = base.save()
-    base_loc = _read_loc(base_state)
+    base_loc = _read_mean(base_state)
     base_scale = _read_scale(base_state)
     base_batch = _read_batch(base_state)
     base_results = _read_results(base_state)
@@ -518,11 +525,11 @@ def test_load_reconciles_bounds_changes_and_selectively_preserves_batch() -> Non
     changed_state = changed.save()
     fresh_state = _initialized_state(changed_schema, population_size=4)
 
-    changed_loc = _read_loc(changed_state)
+    changed_loc = _read_mean(changed_state)
     changed_scale = _read_scale(changed_state)
     changed_batch = _read_batch(changed_state)
 
-    assert np.allclose(changed_loc, np.array([_read_loc(fresh_state)[0], base_loc[1]]))
+    assert np.allclose(changed_loc, np.array([_read_mean(fresh_state)[0], base_loc[1]]))
     assert np.allclose(
         changed_scale,
         np.array(
@@ -537,7 +544,7 @@ def test_load_reconciles_bounds_changes_and_selectively_preserves_batch() -> Non
     assert np.allclose(changed_batch[0, mirror_pending_mask], base_batch[0, mirror_pending_mask])
     assert np.allclose(changed_batch[0, ~mirror_pending_mask], 0.0)
     assert _read_results(changed_state) == base_results
-    assert _read_context_pending(changed_state) == _read_context_pending(base_state)
+    assert _read_pending_context_matches(changed_state) == _read_pending_context_matches(base_state)
 
 
 def test_loc_and_scale_changes_do_not_trigger_schema_changeover() -> None:
@@ -558,7 +565,7 @@ def test_loc_and_scale_changes_do_not_trigger_schema_changeover() -> None:
         "x": _parameter_spec(loc=4.0, scale=1.5),
         "y": _parameter_spec(loc=-1.0, scale=2.0),
     }
-    assert np.allclose(_read_loc(changed_state), _read_loc(base_state))
+    assert np.allclose(_read_mean(changed_state), _read_mean(base_state))
     assert np.allclose(_read_scale(changed_state), _read_scale(base_state))
     assert np.allclose(_read_batch(changed_state), _read_batch(base_state))
     assert _read_results(changed_state) == _read_results(base_state)
@@ -585,7 +592,7 @@ def test_schema_order_is_lexicographic() -> None:
 
     assert _read_schema_names(state_first) == ["alpha", "mu", "zeta"]
     assert _read_schema_names(state_second) == ["alpha", "mu", "zeta"]
-    assert np.allclose(_read_loc(state_first), _read_loc(state_second))
+    assert np.allclose(_read_mean(state_first), _read_mean(state_second))
 
 
 def test_nested_schema_flattens_leaf_names_and_rebuilds_dataclasses() -> None:
@@ -720,7 +727,7 @@ def test_mapping_schema_order_is_lexicographic_and_independent_of_insertion_orde
 
     assert _read_schema_names(state_first) == ["alpha", "branch.mu", "zeta"]
     assert _read_schema_names(state_second) == ["alpha", "branch.mu", "zeta"]
-    assert np.allclose(_read_loc(state_first), _read_loc(state_second))
+    assert np.allclose(_read_mean(state_first), _read_mean(state_second))
 
 
 def test_mapping_schema_state_save_load_roundtrip() -> None:
@@ -754,7 +761,7 @@ def test_mapping_schema_state_save_load_roundtrip() -> None:
     loaded = opt_b.save()
 
     assert _read_schema(loaded) == _read_schema(state)
-    assert np.allclose(_read_loc(loaded), _read_loc(state))
+    assert np.allclose(_read_mean(loaded), _read_mean(state))
     assert np.allclose(_read_scale(loaded), _read_scale(state))
 
 
@@ -804,7 +811,7 @@ def test_omitted_loc_uses_canonical_latent_zero_center() -> None:
         "unbounded": _parameter_spec(loc=None, scale=1.0),
         "upper": _parameter_spec(loc=None, scale=1.0, max=5.0),
     }
-    assert np.allclose(_read_loc(state), np.zeros(4))
+    assert np.allclose(_read_mean(state), np.zeros(4))
 
     mean = optimizer.mean
     assert mean.interval == pytest.approx(4.0)
@@ -907,10 +914,10 @@ def test_json_context_is_saved_as_canonical_string() -> None:
     optimizer.ask(context={"b": 2, "a": 1})
     optimizer.tell(1.0)
 
-    assert _read_context_pending(optimizer.save()) == {'{"a":1,"b":2}': 0}
+    assert _read_pending_context_matches(optimizer.save()) == {'{"a":1,"b":2}': 0}
 
 
-def test_context_pending_is_cleared_when_mirror_is_taken_without_match() -> None:
+def test_pending_context_matches_is_cleared_when_mirror_is_taken_without_match() -> None:
     schema = _make_identity_schema("StaleContextPending", x=(0.0, 1.0), y=(0.0, 1.0))
     optimizer = _initialized_optimizer(schema, population_size=4)
 
@@ -923,7 +930,7 @@ def test_context_pending_is_cleared_when_mirror_is_taken_without_match() -> None
     optimizer.ask(context="arena:protoss")
     optimizer.tell(-1.0)
 
-    assert _read_context_pending(optimizer.save()) == {}
+    assert _read_pending_context_matches(optimizer.save()) == {}
 
 
 def test_ask_rejects_non_json_context() -> None:
@@ -973,7 +980,7 @@ def test_load_cancels_pending_ask_and_replaces_state() -> None:
 
     restored_state = optimizer.save()
     assert _read_results(restored_state) == _read_results(state)
-    assert np.allclose(_read_loc(restored_state), _read_loc(state))
+    assert np.allclose(_read_mean(restored_state), _read_mean(state))
     assert np.allclose(_read_scale(restored_state), _read_scale(state))
     assert np.allclose(_read_batch(restored_state), _read_batch(state))
 
@@ -987,7 +994,7 @@ def test_save_ignores_pending_ask_and_snapshots_committed_state() -> None:
     saved_state = optimizer.save()
 
     assert _read_results(saved_state) == _read_results(initial_state)
-    assert np.allclose(_read_loc(saved_state), _read_loc(initial_state))
+    assert np.allclose(_read_mean(saved_state), _read_mean(initial_state))
     assert np.allclose(_read_scale(saved_state), _read_scale(initial_state))
     assert np.allclose(_read_batch(saved_state), _read_batch(initial_state))
 
@@ -1004,7 +1011,7 @@ def test_save_ignores_pending_ask_and_snapshots_committed_state() -> None:
 
     restored_state = restored.save()
     assert _read_results(restored_state) == _read_results(initial_state)
-    assert np.allclose(_read_loc(restored_state), _read_loc(initial_state))
+    assert np.allclose(_read_mean(restored_state), _read_mean(initial_state))
     assert np.allclose(_read_scale(restored_state), _read_scale(initial_state))
     assert np.allclose(_read_batch(restored_state), _read_batch(initial_state))
 
@@ -1022,14 +1029,22 @@ def test_load_discards_unsaved_local_progress_at_idle_boundary() -> None:
     optimizer.load(initial_state)
     restored_state = optimizer.save()
     assert _read_results(restored_state) == _read_results(initial_state)
-    assert np.allclose(_read_loc(restored_state), _read_loc(initial_state))
+    assert np.allclose(_read_mean(restored_state), _read_mean(initial_state))
     assert np.allclose(_read_scale(restored_state), _read_scale(initial_state))
     assert np.allclose(_read_batch(restored_state), _read_batch(initial_state))
 
 
 def test_persisted_settings_become_baseline_when_no_runtime_override_is_supplied() -> None:
     schema = _make_identity_schema("RuntimeConfig", x=(4.0, 2.0))
-    opt_a = _optimizer(schema, population_size=14, seed=101, minimize=True, eta_mu=0.9, eta_sigma=0.7, eta_B=0.2)
+    opt_a = _optimizer(
+        schema,
+        population_size=14,
+        seed=101,
+        minimize=True,
+        eta_mean=0.9,
+        eta_scale_global=0.7,
+        eta_scale_shape=0.2,
+    )
     for _ in range(20):
         params = opt_a.ask()
         x = params.x
@@ -1037,7 +1052,7 @@ def test_persisted_settings_become_baseline_when_no_runtime_override_is_supplied
 
     state = opt_a.save()
     assert isinstance(state, dict)
-    assert "context_pending" in state
+    assert "pending_context_matches" in state
     assert "settings" in state
     assert "status" in state
     assert "rng_state" not in state
@@ -1047,16 +1062,16 @@ def test_persisted_settings_become_baseline_when_no_runtime_override_is_supplied
         "population_size": 14,
         "seed": 101,
         "minimize": True,
-        "eta_mu": 0.9,
-        "eta_sigma": 0.7,
-        "eta_B": 0.2,
+        "eta_mean": 0.9,
+        "eta_scale_global": 0.7,
+        "eta_scale_shape": 0.2,
     }
 
     opt_b = Optimizer(schema)
     opt_b.load(state)
     loaded = opt_b.save()
     assert isinstance(loaded, dict)
-    assert "context_pending" in loaded
+    assert "pending_context_matches" in loaded
     assert "settings" in loaded
     assert "status" in loaded
     assert "rng_state" not in loaded
@@ -1064,16 +1079,24 @@ def test_persisted_settings_become_baseline_when_no_runtime_override_is_supplied
         population_size=14,
         seed=101,
         minimize=True,
-        eta_mu=0.9,
-        eta_sigma=0.7,
-        eta_B=0.2,
+        eta_mean=0.9,
+        eta_scale_global=0.7,
+        eta_scale_shape=0.2,
     )
     assert _read_settings(loaded) == _read_settings(state)
 
 
 def test_runtime_settings_override_persisted_baseline_and_rewrites_it() -> None:
     schema = _make_identity_schema("RuntimeOverrides", x=(4.0, 2.0))
-    baseline = _optimizer(schema, population_size=14, seed=101, minimize=True, eta_mu=0.9, eta_sigma=0.7, eta_B=0.2)
+    baseline = _optimizer(
+        schema,
+        population_size=14,
+        seed=101,
+        minimize=True,
+        eta_mean=0.9,
+        eta_scale_global=0.7,
+        eta_scale_shape=0.2,
+    )
     state = baseline.save()
 
     overridden = Optimizer(
@@ -1082,7 +1105,7 @@ def test_runtime_settings_override_persisted_baseline_and_rewrites_it() -> None:
             population_size=4,
             seed=202,
             minimize=False,
-            eta_sigma=0.3,
+            eta_scale_global=0.3,
         ),
     )
     overridden.load(state)
@@ -1091,17 +1114,17 @@ def test_runtime_settings_override_persisted_baseline_and_rewrites_it() -> None:
         population_size=4,
         seed=202,
         minimize=False,
-        eta_mu=0.9,
-        eta_sigma=0.3,
-        eta_B=0.2,
+        eta_mean=0.9,
+        eta_scale_global=0.3,
+        eta_scale_shape=0.2,
     )
     assert _read_settings(overridden.save()) == {
         "population_size": 4,
         "seed": 202,
         "minimize": False,
-        "eta_mu": 0.9,
-        "eta_sigma": 0.3,
-        "eta_B": 0.2,
+        "eta_mean": 0.9,
+        "eta_scale_global": 0.3,
+        "eta_scale_shape": 0.2,
     }
 
     restored = Optimizer(schema)
@@ -1153,7 +1176,7 @@ def test_restart_on_conditioning_failure() -> None:
         restored.tell(-(x**2 + y**2))
 
     conditioned = restored.save()
-    assert np.allclose(_read_loc(conditioned), np.array([0.0, 0.0]))
+    assert np.allclose(_read_mean(conditioned), np.array([0.0, 0.0]))
     cond = float(np.linalg.cond(_read_scale(conditioned)))
     assert cond < 1e14
 
@@ -1166,10 +1189,10 @@ def test_successful_termination_restarts_from_final_mu_with_fresh_scale(
     final_mu = np.array([4.25, -3.5])
 
     def fake_update_distribution(samples: np.ndarray, ranking: list[int]) -> XNESStatus:
-        optimizer._xnes.mu = final_mu.copy()
-        optimizer._xnes.sigma = 6.0
-        optimizer._xnes.B = np.array([[1.5, 0.2], [0.0, 0.5]])
-        return XNESStatus.LOC_STEP_MIN
+        optimizer._xnes.mean = final_mu.copy()
+        optimizer._xnes.scale_global = 6.0
+        optimizer._xnes.scale_shape = np.array([[1.5, 0.2], [0.0, 0.5]])
+        return XNESStatus.MEAN_STEP_MIN
 
     monkeypatch.setattr(optimizer._xnes, "update_distribution", fake_update_distribution)
 
@@ -1182,11 +1205,11 @@ def test_successful_termination_restarts_from_final_mu_with_fresh_scale(
     report = optimizer.tell(0.0)
 
     assert report.completed_batch is True
-    assert report.status is XNESStatus.LOC_STEP_MIN
+    assert report.status is XNESStatus.MEAN_STEP_MIN
     assert report.restarted is True
 
     state = optimizer.save()
-    assert np.allclose(_read_loc(state), final_mu)
+    assert np.allclose(_read_mean(state), final_mu)
     assert np.allclose(_read_scale(state), np.diag([1.5, 0.7]))
     assert _read_status(state)["total_samples"] == 4
     assert _read_status(state)["num_batches"] == 1
@@ -1199,9 +1222,9 @@ def test_failed_termination_restarts_from_schema_loc_with_fresh_scale(monkeypatc
     optimizer = _initialized_optimizer(schema, population_size=4)
 
     def fake_update_distribution(samples: np.ndarray, ranking: list[int]) -> XNESStatus:
-        optimizer._xnes.mu = np.array([4.25, -3.5])
-        optimizer._xnes.sigma = 6.0
-        optimizer._xnes.B = np.array([[1.5, 0.2], [0.0, 0.5]])
+        optimizer._xnes.mean = np.array([4.25, -3.5])
+        optimizer._xnes.scale_global = 6.0
+        optimizer._xnes.scale_shape = np.array([[1.5, 0.2], [0.0, 0.5]])
         return XNESStatus.SCALE_COND_MAX
 
     monkeypatch.setattr(optimizer._xnes, "update_distribution", fake_update_distribution)
@@ -1219,7 +1242,7 @@ def test_failed_termination_restarts_from_schema_loc_with_fresh_scale(monkeypatc
     assert report.restarted is True
 
     state = optimizer.save()
-    assert np.allclose(_read_loc(state), np.array([2.0, -1.0]))
+    assert np.allclose(_read_mean(state), np.array([2.0, -1.0]))
     assert np.allclose(_read_scale(state), np.diag([1.5, 0.7]))
     assert _read_status(state)["total_samples"] == 4
     assert _read_status(state)["num_batches"] == 1
@@ -1250,7 +1273,7 @@ def test_save_load_preserves_optimizer_state() -> None:
 
     direct_state = direct.save()
     assert _read_schema(direct_state) == _read_schema(recreated_state)
-    assert np.allclose(_read_loc(direct_state), _read_loc(recreated_state))
+    assert np.allclose(_read_mean(direct_state), _read_mean(recreated_state))
     assert np.allclose(_read_scale(direct_state), _read_scale(recreated_state))
 
 
@@ -1273,7 +1296,7 @@ def test_transformed_parameters_use_latent_state_but_emit_user_space_values() ->
             -_softplus_inverse(1.0),
         ]
     )
-    assert np.allclose(_read_loc(state), expected_latent_loc)
+    assert np.allclose(_read_mean(state), expected_latent_loc)
     assert np.allclose(np.diag(_read_scale(state)), np.array([3.4, 1.0, 1.0, 1.0]))
 
     mean = optimizer.mean

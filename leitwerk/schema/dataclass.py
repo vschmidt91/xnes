@@ -6,8 +6,9 @@ from collections.abc import Callable, Mapping
 from dataclasses import fields, is_dataclass
 from typing import Annotated, Any, cast, get_args, get_origin, get_type_hints
 
-from .common import build_field_spec, build_scalar_builder, field_name, path_name
-from .spec import BuildFn, FieldSpec, Parameter, Path, SchemaSpec, T
+from .parameter import Parameter
+from .parser import build_field_spec, build_scalar_builder, field_name, path_name
+from .spec import BuildFn, FieldSpec, SchemaPath, SchemaSpec, T
 
 
 def parse_dataclass_schema(model_type: type[T]) -> SchemaSpec[T]:
@@ -18,13 +19,12 @@ def parse_dataclass_schema(model_type: type[T]) -> SchemaSpec[T]:
 
     field_specs, instantiate = _parse_dataclass_type(model_type, ())
     return SchemaSpec(
-        model_type=model_type,
         fields=tuple(sorted(field_specs, key=field_name)),
-        instantiate=cast(Callable[[Mapping[Path, float]], T], instantiate),
+        instantiate=cast(Callable[[Mapping[SchemaPath, float]], T], instantiate),
     )
 
 
-def _parse_dataclass_type(model_type: type[Any], prefix: Path) -> tuple[tuple[FieldSpec, ...], BuildFn]:
+def _parse_dataclass_type(model_type: type[Any], prefix: SchemaPath) -> tuple[tuple[FieldSpec, ...], BuildFn]:
     dataclass_fields = tuple(fields(model_type))
     type_hints = get_type_hints(model_type, include_extras=True)
     parsed_fields = tuple(
@@ -41,14 +41,14 @@ def _parse_dataclass_type(model_type: type[Any], prefix: Path) -> tuple[tuple[Fi
         (field.name, build) for field, (_, build) in zip(dataclass_fields, parsed_fields, strict=True)
     )
 
-    def instantiate(values: Mapping[Path, float]) -> Any:
+    def instantiate(values: Mapping[SchemaPath, float]) -> Any:
         kwargs = {name: build(values) for name, build in child_builders}
         return constructor(**kwargs)
 
     return field_specs, instantiate
 
 
-def _parse_dataclass_field(annotation: Any, path: Path, init: bool) -> tuple[tuple[FieldSpec, ...], BuildFn]:
+def _parse_dataclass_field(annotation: Any, path: SchemaPath, init: bool) -> tuple[tuple[FieldSpec, ...], BuildFn]:
     name = path_name(path)
     if not init:
         msg = f"leitwerk schema field '{name}' must be init=True"
@@ -64,7 +64,7 @@ def _parse_dataclass_field(annotation: Any, path: Path, init: bool) -> tuple[tup
     raise TypeError(msg)
 
 
-def _parse_leaf_field(annotation: Any, path: Path) -> tuple[tuple[FieldSpec, ...], BuildFn]:
+def _parse_leaf_field(annotation: Any, path: SchemaPath) -> tuple[tuple[FieldSpec, ...], BuildFn]:
     name = path_name(path)
     runtime_type, *metadata = get_args(annotation)
     if runtime_type is not float:

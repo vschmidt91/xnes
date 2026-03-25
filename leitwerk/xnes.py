@@ -1,6 +1,7 @@
 """Core xNES distribution update implementation.
 
-The class maintains the search distribution in factored form `sigma * B`,
+The class maintains the search distribution in factored form
+`scale_global * scale_shape`,
 generates mirrored orthogonal samples, and applies canonical xNES updates.
 """
 
@@ -13,7 +14,7 @@ from numpy.linalg import cond, norm
 from scipy.linalg import expm, qr
 
 
-def _default_eta_B(dim: int) -> float:
+def _default_eta_scale_shape(dim: int) -> float:
     """Return the built-in dimension-dependent shape learning-rate factor."""
 
     if dim <= 0:
@@ -56,43 +57,41 @@ def _default_sample_count(num_samples: int | None, dim: int) -> int:
     return n
 
 
-def _utility_weights(sample_count: int) -> tuple[np.ndarray, float]:
+def _utility_weights(sample_count: int) -> np.ndarray:
     w_pos = np.maximum(0.0, np.log(sample_count / 2 + 1) - np.log(np.arange(1, sample_count + 1)))
     w_sum = float(np.sum(w_pos))
     if w_sum <= 0.0:
         msg = "Invalid utility weights: positive weight sum must be > 0."
         raise ValueError(msg)
     w_pos /= w_sum
-    w_active = w_pos - (1.0 / sample_count)
-    mu_eff = float(1.0 / np.sum(w_active**2))
-    return w_active, mu_eff
+    return w_pos - (1.0 / sample_count)
 
 
 class XNESStatus(Enum):
-    """Outcome of one `XNES.tell` update step."""
+    """Outcome of one `XNES.update_distribution` step."""
 
     OK = auto()
-    SIGMA_MIN = auto()
-    SIGMA_MAX = auto()
-    SIGMA_INF = auto()
-    LOC_INF = auto()
+    SCALE_GLOBAL_MIN = auto()
+    SCALE_GLOBAL_MAX = auto()
+    SCALE_GLOBAL_INF = auto()
+    MEAN_INF = auto()
     SCALE_INF = auto()
     SCALE_COND_INF = auto()
-    SCALE_COND_ERROR = auto()
     SCALE_COND_MAX = auto()
-    LOC_STEP_MIN = auto()
+    MEAN_STEP_MIN = auto()
     SCALE_NORM_MIN = auto()
 
 
 class XNES:
     """Exponential Natural Evolution Strategies distribution state.
 
-    The distribution is stored in factored form as ``sigma * B`` and updated
+    The distribution is stored in factored form as
+    ``scale_global * scale_shape`` and updated
     from ranked standardized samples.
 
     Args:
-        x0: Initial mean vector.
-        sigma0: Initial scale, either scalar, diagonal vector, or full matrix.
+        mean0: Initial mean vector.
+        scale0: Initial scale, either scalar, diagonal vector, or full matrix.
 
     Raises:
         ValueError: If the supplied shapes are inconsistent, the scale matrix is
@@ -103,37 +102,31 @@ class XNES:
     MAX_SIGMA = 1e20
     MAX_CONDITION = 1e14
 
-    def __init__(self, x0: np.ndarray, sigma0: np.ndarray | float) -> None:
-        self.mu = np.array(x0, dtype=float, copy=True)
-        self.sigma: float
-        self.B: np.ndarray
+    def __init__(self, mean0: np.ndarray, scale0: np.ndarray | float) -> None:
+        self.mean = np.array(mean0, dtype=float, copy=True)
+        self.scale_global: float
+        self.scale_shape: np.ndarray
 
         if self.dim == 0:
-            self.sigma = 1.0
-            self.B = np.eye(0)
+            self.scale_global = 1.0
+            self.scale_shape = np.eye(0)
             return
 
-        scale0 = _normalize_scale_matrix(sigma0, self.dim)
+        scale_matrix0 = _normalize_scale_matrix(scale0, self.dim)
 
-        sign, logdet = np.linalg.slogdet(scale0)
+        sign, logdet = np.linalg.slogdet(scale_matrix0)
         if sign <= 0 or not np.isfinite(logdet):
             msg = "Scale matrix must have a positive finite determinant."
             raise ValueError(msg)
 
-        self.sigma = max(float(np.exp(logdet / self.dim)), 1e-30)
-        self.B = scale0 / self.sigma
+        self.scale_global = max(float(np.exp(logdet / self.dim)), 1e-30)
+        self.scale_shape = scale_matrix0 / self.scale_global
 
     @property
     def dim(self) -> int:
         """Dimension of the search space."""
 
-        return int(self.mu.size)
-
-    @property
-    def step_size(self) -> float:
-        """Current global step size `sigma`."""
-
-        return float(self.sigma)
+        return int(self.mean.size)
 
     @property
     def axis_ratio(self) -> float:
@@ -142,15 +135,15 @@ class XNES:
         if self.dim <= 1:
             return 1.0
         try:
-            return float(cond(self.B))
+            return float(cond(self.scale_shape))
         except np.linalg.LinAlgError:
             return np.inf
 
     @property
     def scale(self) -> np.ndarray:
-        """Current full scale matrix `sigma * B`."""
+        """Current full scale matrix `scale_global * scale_shape`."""
 
-        return self.sigma * self.B
+        return self.scale_global * self.scale_shape
 
     @property
     def scale_marginal(self) -> np.ndarray:
@@ -163,9 +156,9 @@ class XNES:
         """Map standardized samples `z` into current distribution coordinates."""
 
         z = _validated_samples(samples, self.dim)
-        return self.mu[:, None] + self.scale @ z
+        return self.mean[:, None] + self.scale @ z
 
-    def sample_distribution(
+    def sample(
         self,
         num_samples: int | None = None,
         rng: np.random.Generator | None = None,
@@ -189,8 +182,6 @@ class XNES:
         n_half = n // 2
         rng = rng or np.random.default_rng()
 
-        # return rng.standard_normal((self.dim, n))
-
         z_half = np.empty((self.dim, n_half))
         for start in range(0, n_half, self.dim):
             end = min(start + self.dim, n_half)
@@ -206,9 +197,9 @@ class XNES:
         self,
         samples: np.ndarray,
         ranking: list[int],
-        eta_mu: float = 1.0,
-        eta_sigma: float = 0.5,
-        eta_B: float = 0.25,
+        eta_mean: float = 1.0,
+        eta_scale_global: float = 0.5,
+        eta_scale_shape: float = 0.25,
         eps: float = 1e-10,
     ) -> XNESStatus:
         """Apply one xNES update from ranked standardized samples.
@@ -216,9 +207,9 @@ class XNES:
         Args:
             samples: Standardized sample matrix with shape `(dim, n)`.
             ranking: Permutation of sample indices ordered from best to worst.
-            eta_mu: Mean learning-rate override.
-            eta_sigma: Global-scale learning-rate override.
-            eta_B: Shape learning-rate multiplier override.
+            eta_mean: Mean learning-rate override.
+            eta_scale_global: Global-scale learning-rate override.
+            eta_scale_shape: Shape learning-rate multiplier override.
             eps: Numerical stopping threshold.
 
         Returns:
@@ -238,41 +229,41 @@ class XNES:
         if len(ranking) != n or sorted(ranking) != list(range(n)):
             msg = "ranking must be a permutation matching sample count."
             raise ValueError(msg)
-        w_active, mu_eff = _utility_weights(n)
+        w_active = _utility_weights(n)
         z_sorted = samples[:, ranking]
 
-        grad_mu = z_sorted @ w_active
+        grad_mean = z_sorted @ w_active
         grad_M = (z_sorted * w_active) @ z_sorted.T
-        grad_sigma = float(np.trace(grad_M) / d)
-        grad_B_shape = grad_M - grad_sigma * np.eye(d)
+        grad_scale_global = float(np.trace(grad_M) / d)
+        grad_scale_shape = grad_M - grad_scale_global * np.eye(d)
 
-        mu_step = eta_mu * self.sigma * (self.B @ grad_mu)
-        self.mu += mu_step
+        mean_step = eta_mean * self.scale_global * (self.scale_shape @ grad_mean)
+        self.mean += mean_step
 
-        sigma_log_step = 0.5 * eta_sigma * grad_sigma
-        sigma_log_step = float(np.clip(sigma_log_step, -50.0, 50.0))
+        scale_global_log_step = 0.5 * eta_scale_global * grad_scale_global
+        scale_global_log_step = float(np.clip(scale_global_log_step, -50.0, 50.0))
 
-        self.sigma *= float(np.exp(sigma_log_step))
-        if not np.isfinite(self.sigma):
-            return XNESStatus.SIGMA_INF
+        self.scale_global *= float(np.exp(scale_global_log_step))
+        if not np.isfinite(self.scale_global):
+            return XNESStatus.SCALE_GLOBAL_INF
 
         min_sigma = max(self.MIN_SIGMA, eps)
-        if self.sigma < min_sigma:
-            return XNESStatus.SIGMA_MIN
-        if self.sigma > self.MAX_SIGMA:
-            return XNESStatus.SIGMA_MAX
+        if self.scale_global < min_sigma:
+            return XNESStatus.SCALE_GLOBAL_MIN
+        if self.scale_global > self.MAX_SIGMA:
+            return XNESStatus.SCALE_GLOBAL_MAX
 
-        eta_B_eff = eta_B * _default_eta_B(d)
-        self.B = self.B @ expm(0.5 * eta_B_eff * grad_B_shape)
+        eta_scale_shape_eff = eta_scale_shape * _default_eta_scale_shape(d)
+        self.scale_shape = self.scale_shape @ expm(0.5 * eta_scale_shape_eff * grad_scale_shape)
 
-        sign, logdet = np.linalg.slogdet(self.B)
+        sign, logdet = np.linalg.slogdet(self.scale_shape)
         if sign <= 0 or not np.isfinite(logdet):
             return XNESStatus.SCALE_INF
-        self.B *= np.exp(-logdet / d)
+        self.scale_shape *= np.exp(-logdet / d)
 
-        if not np.all(np.isfinite(self.mu)):
-            return XNESStatus.LOC_INF
-        if not np.all(np.isfinite(self.B)):
+        if not np.all(np.isfinite(self.mean)):
+            return XNESStatus.MEAN_INF
+        if not np.all(np.isfinite(self.scale_shape)):
             return XNESStatus.SCALE_INF
 
         scale = self.scale
@@ -280,8 +271,8 @@ class XNES:
             return XNESStatus.SCALE_INF
         if norm(scale, 2) < eps:
             return XNESStatus.SCALE_NORM_MIN
-        if norm(mu_step, 2) < eps:
-            return XNESStatus.LOC_STEP_MIN
+        if norm(mean_step, 2) < eps:
+            return XNESStatus.MEAN_STEP_MIN
 
         cond_scale = self.axis_ratio
         if not np.isfinite(cond_scale):

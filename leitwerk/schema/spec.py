@@ -3,135 +3,16 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import asdict, dataclass
-from typing import Any, Generic, TypeVar, cast
+from dataclasses import dataclass
+from typing import Any, Generic, TypeVar
 
 import numpy as np
-from scipy.special import expit, logit
+
+from .parameter import Parameter
 
 T = TypeVar("T")
-Path = tuple[str, ...]
-BuildFn = Callable[[Mapping[Path, float]], Any]
-
-
-@dataclass(frozen=True, slots=True)
-class Parameter:
-    """User-facing metadata for one optimized scalar schema field.
-
-    `loc` is the user-space center value. `scale` is the latent-space standard
-    deviation. `min` and `max`, when provided, are asymptotic user-space
-    bounds applied through monotone coordinate transforms.
-    """
-
-    loc: float | None = None
-    scale: float = 1.0
-    min: float | None = None
-    max: float | None = None
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "loc", None if self.loc is None else float(self.loc))
-        object.__setattr__(self, "scale", float(self.scale))
-        object.__setattr__(self, "min", None if self.min is None else float(self.min))
-        object.__setattr__(self, "max", None if self.max is None else float(self.max))
-
-    @classmethod
-    def from_state(cls, state: object) -> Parameter:
-        state_obj = cast(Mapping[str, object], state)
-        return cls(
-            loc=None if state_obj["loc"] is None else float(cast(Any, state_obj["loc"])),
-            scale=float(cast(Any, state_obj["scale"])),
-            min=None if state_obj["min"] is None else float(cast(Any, state_obj["min"])),
-            max=None if state_obj["max"] is None else float(cast(Any, state_obj["max"])),
-        )
-
-    def decode_scalar(self, z: float) -> float:
-        return float(self.forward(z))
-
-    def forward(self, z: np.ndarray | float) -> np.ndarray:
-        """Map latent coordinates into user-space values."""
-        if self.min is None:
-            if self.max is None:
-                return np.asarray(z, dtype=float)
-            return float(self.max) - _softplus(-np.asarray(z, dtype=float))
-        if self.max is None:
-            return float(self.min) + _softplus(z)
-        values = np.asarray(z, dtype=float)
-        return float(self.min) + (float(self.max) - float(self.min)) * expit(values)
-
-    def inverse_loc(self, x: float) -> float:
-        """Map a user-space central value into latent coordinates."""
-        if self.min is None:
-            if self.max is None:
-                return float(x)
-            return float(-_softplus_inverse(float(self.max) - float(x)))
-        if self.max is None:
-            return float(_softplus_inverse(float(x) - float(self.min)))
-        return float(logit((float(x) - float(self.min)) / (float(self.max) - float(self.min))))
-
-    def resolved_loc(self) -> float:
-        """Return the effective user-space center value for this parameter."""
-        if self.loc is not None:
-            return float(self.loc)
-        if self.min is None:
-            if self.max is None:
-                return 0.0
-            return float(self.max) - float(_softplus(0.0))
-        if self.max is None:
-            return float(self.min) + float(_softplus(0.0))
-        return float(self.min) + (float(self.max) - float(self.min)) * 0.5
-
-    def validate(self, name: str) -> None:
-        """Validate the parameter specification for one schema field."""
-        self._validate_loc_and_scale(name)
-        min_value = None if self.min is None else _coerce_finite(self.min, _field_component_name(name, "min"))
-        max_value = None if self.max is None else _coerce_finite(self.max, _field_component_name(name, "max"))
-
-        if min_value is not None and max_value is not None:
-            if not min_value < max_value:
-                msg = f"leitwerk schema field '{name}' must satisfy min < max for Parameter(...)"
-                raise ValueError(msg)
-            if self.loc is None:
-                return
-            if not min_value < float(self.loc) < max_value:
-                msg = f"leitwerk schema field '{name}' must satisfy min < loc < max for Parameter(...)"
-                raise ValueError(msg)
-            return
-
-        if self.loc is None:
-            return
-
-        if min_value is not None and not float(self.loc) > min_value:
-            msg = f"leitwerk schema field '{name}' must satisfy loc > min for Parameter(...)"
-            raise ValueError(msg)
-
-        if max_value is not None and not float(self.loc) < max_value:
-            msg = f"leitwerk schema field '{name}' must satisfy loc < max for Parameter(...)"
-            raise ValueError(msg)
-
-    def state_spec(self) -> dict[str, object]:
-        return cast(dict[str, object], _json_normalize(asdict(self)))
-
-    def reconciliation_key(self) -> tuple[float | None, float | None]:
-        """Return the persisted transform data that must match to reuse latent state."""
-        return self.min, self.max
-
-    def initial_state(self, name: str) -> tuple[float, float]:
-        self.validate(name)
-        mu0 = (
-            0.0
-            if self.loc is None
-            else _coerce_finite(
-                self.inverse_loc(float(self.loc)),
-                _field_component_name(name, "latent loc"),
-            )
-        )
-        sigma0 = _coerce_positive(self.scale, _field_component_name(name, "scale"))
-        return mu0, sigma0
-
-    def _validate_loc_and_scale(self, name: str) -> None:
-        if self.loc is not None:
-            _coerce_finite(self.loc, _field_component_name(name, "loc"))
-        _coerce_positive(self.scale, _field_component_name(name, "scale"))
+SchemaPath = tuple[str, ...]
+BuildFn = Callable[[Mapping[SchemaPath, float]], Any]
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,22 +37,18 @@ class FieldSpec:
     """Internal normalized description of one optimized schema leaf."""
 
     name: str
-    path: Path
+    path: SchemaPath
     parameter: Parameter
-    mu0: float
-    sigma0: float
-
-    def decode_scalar(self, z: float) -> float:
-        return self.parameter.decode_scalar(z)
+    mean0: float
+    scale0: float
 
 
 @dataclass(frozen=True, slots=True)
 class SchemaSpec(Generic[T]):
     """Internal parsed schema-tree description used by `Optimizer`."""
 
-    model_type: type[T]
     fields: tuple[FieldSpec, ...]
-    instantiate: Callable[[Mapping[Path, float]], T]
+    instantiate: Callable[[Mapping[SchemaPath, float]], T]
 
     @property
     def names(self) -> tuple[str, ...]:
@@ -181,7 +58,7 @@ class SchemaSpec(Generic[T]):
     def dim(self) -> int:
         return len(self.fields)
 
-    def state_schema(self) -> dict[str, dict[str, object]]:
+    def schema_state(self) -> dict[str, dict[str, object]]:
         return {field_spec.name: field_spec.parameter.state_spec() for field_spec in self.fields}
 
     def diff(self, saved_schema: Mapping[str, Parameter]) -> SchemaDiff:
@@ -208,52 +85,13 @@ class SchemaSpec(Generic[T]):
         return {field_spec.name: idx for idx, field_spec in enumerate(self.fields)}
 
     def initial_distribution(self) -> tuple[np.ndarray, np.ndarray]:
-        loc = np.array([field_spec.mu0 for field_spec in self.fields], dtype=float)
-        scale_diag = np.array([field_spec.sigma0 for field_spec in self.fields], dtype=float)
-        return loc, np.diag(scale_diag)
+        mean = np.array([field_spec.mean0 for field_spec in self.fields], dtype=float)
+        scale_diag = np.array([field_spec.scale0 for field_spec in self.fields], dtype=float)
+        return mean, np.diag(scale_diag)
 
     def build_params(self, values: np.ndarray) -> T:
         leaf_values = {
-            field_spec.path: field_spec.decode_scalar(float(value))
+            field_spec.path: float(field_spec.parameter.to_user_space(float(value)))
             for field_spec, value in zip(self.fields, values, strict=True)
         }
         return self.instantiate(leaf_values)
-
-
-def _field_component_name(field_name: str, component: str) -> str:
-    return f"leitwerk schema field '{field_name}' {component}"
-
-
-def _coerce_finite(value: float, name: str) -> float:
-    out = float(value)
-    if not np.isfinite(out):
-        msg = f"{name} must be a finite float."
-        raise ValueError(msg)
-    return out
-
-
-def _coerce_positive(value: float, name: str) -> float:
-    out = _coerce_finite(value, name)
-    if out <= 0.0:
-        msg = f"{name} must be a positive finite float."
-        raise ValueError(msg)
-    return out
-
-
-def _json_normalize(value: object) -> object:
-    if isinstance(value, np.generic):
-        return value.item()
-    if isinstance(value, Mapping):
-        return {str(key): _json_normalize(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_json_normalize(item) for item in value]
-    return value
-
-
-def _softplus(z: np.ndarray | float) -> np.ndarray:
-    return np.logaddexp(0.0, np.asarray(z, dtype=float))
-
-
-def _softplus_inverse(y: np.ndarray | float) -> np.ndarray:
-    values = np.asarray(y, dtype=float)
-    return values + np.log1p(-np.exp(-values))

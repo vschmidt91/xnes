@@ -11,8 +11,9 @@ from typing import Generic, TypeVar, cast
 
 import numpy as np
 
-from . import SchemaDiff
-from .optimizer import JSONLike, JSONObject, Optimizer, OptimizerReport, OptimizerSettings
+from .optimizer import Optimizer, OptimizerReport, OptimizerSettings
+from .schema import SchemaDiff
+from .state import JSONLike, JSONObject
 
 T = TypeVar("T")
 
@@ -23,15 +24,15 @@ class OptimizerSession(Generic[T]):
     def __init__(
         self,
         path: str | Path,
-        schema_type: type[T] | Mapping[str, object],
+        schema: type[T] | Mapping[str, object],
         settings: OptimizerSettings | None = None,
     ) -> None:
 
         session_path = Path(path)
-        optimizer = Optimizer(schema_type, settings=settings)
+        optimizer = Optimizer(schema, settings=settings)
 
         restored = False
-        schema_diff = _fresh_schema_diff(optimizer)
+        schema_diff = _fresh_schema_diff(cast(Mapping[str, object], optimizer.save()["schema"]))
         if session_path.exists():
             state = json.loads(session_path.read_text(encoding="utf-8"))
             if not isinstance(state, dict):
@@ -100,8 +101,7 @@ class OptimizerSession(Generic[T]):
             raise RuntimeError(msg)
 
 
-def _fresh_schema_diff(optimizer: Optimizer[object]) -> SchemaDiff:
-    schema_json = cast(Mapping[str, object], optimizer.save()["schema"])
+def _fresh_schema_diff(schema_json: Mapping[str, object]) -> SchemaDiff:
     return SchemaDiff(added=list(schema_json), removed=[], changed=[], unchanged=[])
 
 
