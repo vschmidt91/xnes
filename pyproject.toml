@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "leitwerk"
-version = "0.6.10"
+version = "0.6.11"
 description = "Evolutionary strategy with file persistence and schema reconciliation."
 readme = "README.md"
 requires-python = ">=3.11,<3.14"

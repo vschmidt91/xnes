@@ -99,7 +99,7 @@ def test_successful_termination_restarts_from_final_mean_with_fresh_scale(
     assert np.allclose(_read_scale(state), np.diag([1.5, 0.7]))
 
     status = _read_status(state)
-    assert status["total_samples"] == 4
+    assert status["num_samples"] == 4
     assert status["num_batches"] == 1
     assert status["num_restarts"] == 1
     assert status["batch_progress"] == pytest.approx(0.0)
@@ -135,7 +135,7 @@ def test_failed_termination_restarts_from_schema_mean_with_fresh_scale(monkeypat
     assert np.allclose(_read_scale(state), np.diag([1.5, 0.7]))
 
     status = _read_status(state)
-    assert status["total_samples"] == 4
+    assert status["num_samples"] == 4
     assert status["num_batches"] == 1
     assert status["num_restarts"] == 1
     assert status["batch_progress"] == pytest.approx(0.0)

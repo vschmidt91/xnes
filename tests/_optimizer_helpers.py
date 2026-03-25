@@ -165,7 +165,7 @@ def _read_status(state: object) -> dict[str, int | float]:
     status_json = state["status"]
     assert isinstance(status_json, Mapping)
     return {
-        "total_samples": int(status_json["total_samples"]),
+        "num_samples": int(status_json["num_samples"]),
         "num_batches": int(status_json["num_batches"]),
         "num_restarts": int(status_json["num_restarts"]),
         "num_parameters": int(status_json["num_parameters"]),
@@ -177,7 +177,7 @@ def _read_status(state: object) -> dict[str, int | float]:
 
 
 def _assert_same_status(actual: dict[str, int | float], expected: dict[str, int | float]) -> None:
-    for key in ("total_samples", "num_batches", "num_restarts", "num_parameters", "batch_size"):
+    for key in ("num_samples", "num_batches", "num_restarts", "num_parameters", "batch_size"):
         assert actual[key] == expected[key]
     for key in ("axis_ratio", "scale_global", "batch_progress"):
         assert actual[key] == pytest.approx(expected[key])

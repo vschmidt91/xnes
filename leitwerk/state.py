@@ -30,7 +30,7 @@ class RestoredOptimizerState:
     batch: np.ndarray
     results: list[tuple[float, ...] | None]
     pending_context_matches: dict[str, int]
-    total_samples: int
+    num_samples: int
     num_batches: int
     num_restarts: int
 
@@ -79,7 +79,7 @@ def restore_optimizer_state(
     batch = _as_batch_matrix(_require_field(state_obj, "batch"), saved_dim)
     results = _deserialize_results(_require_field(state_obj, "results"))
     pending_context_matches = _deserialize_pending_context_matches(_require_field(state_obj, "pending_context_matches"))
-    total_samples, num_batches, num_restarts = _validate_status(_require_field(state_obj, "status"))
+    num_samples, num_batches, num_restarts = _validate_status(_require_field(state_obj, "status"))
 
     schema_diff = schema.diff(saved_schema)
     mean, scale = _reconcile_distribution_state(saved_names, schema_diff.unchanged, mean, scale, schema)
@@ -94,7 +94,7 @@ def restore_optimizer_state(
         batch=batch,
         results=results,
         pending_context_matches=pending_context_matches,
-        total_samples=total_samples,
+        num_samples=num_samples,
         num_batches=num_batches,
         num_restarts=num_restarts,
     )
@@ -273,9 +273,9 @@ def _deserialize_pending_context_matches(context_json: object) -> dict[str, int]
 
 def _validate_status(status_json: object) -> tuple[int, int, int]:
     status = _require_object(status_json, "checkpoint status")
-    total_samples = _coerce_non_negative_int_like(
-        _require_field(status, "total_samples"),
-        "checkpoint status.total_samples",
+    num_samples = _coerce_non_negative_int_like(
+        _require_field(status, "num_samples"),
+        "checkpoint status.num_samples",
     )
     num_batches = _coerce_non_negative_int_like(
         _require_field(status, "num_batches"),
@@ -285,7 +285,7 @@ def _validate_status(status_json: object) -> tuple[int, int, int]:
         _require_field(status, "num_restarts"),
         "checkpoint status.num_restarts",
     )
-    return total_samples, num_batches, num_restarts
+    return num_samples, num_batches, num_restarts
 
 
 def _require_field(state: Mapping[str, object], name: str) -> object:

@@ -162,7 +162,7 @@ class Optimizer(Generic[T]):
         self._batch_state = _BatchState()
         self._pending_reservation: SampleReservation | None = None
         self._xnes: XNES
-        self._total_samples = 0
+        self._num_samples = 0
         self._num_batches = 0
         self._num_restarts = 0
         self._reset_distribution()
@@ -186,7 +186,7 @@ class Optimizer(Generic[T]):
         restored = restore_optimizer_state(state, cast(SchemaSpec[object], self._schema), self._settings_override)
         self._settings_baseline = restored.settings
         self._xnes = XNES(restored.mean, restored.scale)
-        self._total_samples = restored.total_samples
+        self._num_samples = restored.num_samples
         self._num_batches = restored.num_batches
         self._num_restarts = restored.num_restarts
 
@@ -251,7 +251,7 @@ class Optimizer(Generic[T]):
         result: float | Sequence[float] | np.ndarray,
     ) -> OptimizerReport:
         completed_batch = self._batch_state.record_result(reservation, _normalize_result(result))
-        self._total_samples += 1
+        self._num_samples += 1
         if completed_batch:
             status, restarted = self._complete_batch()
             return OptimizerReport(True, reservation.matched_context, status, restarted)
@@ -298,7 +298,7 @@ class Optimizer(Generic[T]):
         batch_size = len(self._batch_state.results)
         completed = sum(result is not None for result in self._batch_state.results)
         return {
-            "total_samples": self._total_samples,
+            "num_samples": self._num_samples,
             "num_batches": self._num_batches,
             "num_restarts": self._num_restarts,
             "num_parameters": self._xnes.dim,

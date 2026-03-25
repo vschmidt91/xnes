@@ -53,7 +53,7 @@ def test_status_block_exposes_basic_diagnostics_and_roundtrips() -> None:
     optimizer = _initialized_optimizer(schema, population_size=4)
 
     initial_status = _read_status(optimizer.save())
-    assert initial_status["total_samples"] == 0
+    assert initial_status["num_samples"] == 0
     assert initial_status["num_batches"] == 0
     assert initial_status["num_restarts"] == 0
     assert initial_status["num_parameters"] == 2
@@ -75,7 +75,7 @@ def test_status_block_exposes_basic_diagnostics_and_roundtrips() -> None:
     progressed_state = optimizer.save()
     progressed_status = _read_status(progressed_state)
 
-    assert progressed_status["total_samples"] == 1
+    assert progressed_status["num_samples"] == 1
     assert progressed_status["num_batches"] == 0
     assert progressed_status["num_restarts"] == 0
     assert progressed_status["num_parameters"] == 2
