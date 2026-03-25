@@ -1,68 +1,41 @@
 # Quickstart
 
-```python
-import json
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Annotated
+If you want to see `leitwerk` in a real loop, start with the SC2 bot example:
 
-import numpy as np
+- [examples/train_sc2_bot.py](https://github.com/phantomsc2/leitwerk/blob/main/examples/train_sc2_bot.py)
 
-from leitwerk import Optimizer, OptimizerSettings, Parameter
+Run it with:
 
-
-@dataclass(frozen=True)
-class Params:
-    coeff_1: Annotated[float, Parameter(mean=2.0, scale=3.0, min=0.0)]
-    coeff_2: Annotated[float, Parameter()]
-
-
-state_path = Path("optimizer-state.json")
-opt = Optimizer(Params, OptimizerSettings(population_size=32))
-if state_path.exists():
-    state = json.loads(state_path.read_text())
-    load_result = opt.load(state)
-
-for _ in range(500):
-    params = opt.ask(context="validation:shard-0")
-    value = params.coeff_1 + np.exp(params.coeff_2)
-    opt.tell(-value**2)
-    state_path.write_text(json.dumps(opt.save()))
-
-mean = opt.mean
-print(mean.coeff_1, mean.coeff_2)
+```sh
+python examples/train_sc2_bot.py
 ```
 
-`tell` uses maximize semantics. To minimize an objective `f(x)`, pass `-f(x)`.
+What the example does:
 
-Current schema requirements:
+- tunes three scalar bot parameters with `OptimizerSession`
+- samples one parameter set per game
+- scores each game as `(outcome, efficiency)`
+- uses enemy race as `ask(context=...)`
+- writes optimizer state, history, and a rolling plot under `data/`
 
-- the schema must be a dataclass
-- optimized fields must be `Annotated[float, Parameter(...)]`
-- persisted state is ordered lexicographically by field name
+The high-level workflow is always the same:
 
-If you resume with a changed schema, shared learned state is preserved, new
-fields start from parameter defaults, removed fields are dropped, and the current
-unfinished batch is reconciled rather than discarded.
+1. define the search space with `Parameter(...)`
+2. construct an `Optimizer` or `OptimizerSession`
+3. call `ask(context=...)` to reserve one candidate
+4. run exactly one evaluation with that candidate
+5. call `tell(result)` to report the score
+6. inspect `mean` or resume from saved state
 
-Training loop: call `ask`, evaluate `params.field`, then call `tell(result)`.
+Minimal loop:
 
-`ask()` / `tell()` is single-flight: at most one sample may be pending.
-Calling `ask()` twice in a row raises, and `tell()` without a pending `ask()`
-raises.
+```py
+params = opt.ask(context)
+result = evaluate(params)
+report = opt.tell(result)
+```
 
-Persistence edge cases:
+`ask()` / `tell()` is single-flight: one `ask()`, one evaluation, one `tell()`.
 
-- `save()` may be called while an `ask()` is pending, but it snapshots only
-  committed state. The pending reservation is not serialized.
-- `load()` may be called while an `ask()` is pending; it cancels that pending
-  sample and replaces the current state.
-- if you `save()` after `ask()` and later `load()` that snapshot, the in-flight
-  sample is gone and its later `tell()` will fail with `No pending ask`
-- `load()` may intentionally discard unsaved local progress from earlier
-  `tell()` calls
-- for exact restart semantics, checkpoint after `tell()`, not after `ask()`
-
-For deterministic inference, read `mean`. If you want the means from a
-saved run rather than a fresh optimizer, call `load(...)` first.
-For the current per-parameter spread in latent space, use `scale_marginal`.
+For the concrete API and persistence rules, continue with the
+[Integration Guide](integration.md).

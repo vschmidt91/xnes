@@ -26,4 +26,6 @@ markdown_extensions:
 nav:
   - Overview: index.md
   - Quickstart: quickstart.md
+  - Integration Guide: integration.md
   - API Reference: reference/api.md
+  - FAQ: faq.md
