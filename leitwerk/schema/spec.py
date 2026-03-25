@@ -64,7 +64,7 @@ class SchemaSpec(Generic[T]):
     def diff(self, saved_schema: Mapping[str, Parameter]) -> SchemaDiff:
         current_schema = {field_spec.name: field_spec.parameter for field_spec in self.fields}
         current_names = self.names
-        saved_names = sorted(saved_schema)
+        saved_names = list(saved_schema)
         added = [name for name in current_names if name not in saved_schema]
         removed = [name for name in saved_names if name not in current_schema]
         changed = [

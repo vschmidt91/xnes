@@ -192,7 +192,7 @@ def test_mean_and_scale_changes_do_not_trigger_schema_changeover() -> None:
     assert _read_results(changed_state) == _read_results(base_state)
 
 
-def test_schema_order_is_lexicographic() -> None:
+def test_schema_order_follows_dataclass_field_traversal() -> None:
     first_schema = _make_schema(
         "FirstSchema",
         zeta=Parameter(mean=3.0, scale=1.0, min=0.0),
@@ -209,9 +209,14 @@ def test_schema_order_is_lexicographic() -> None:
     state_first = _initialized_optimizer(first_schema, population_size=18).save()
     state_second = _initialized_optimizer(second_schema, population_size=18).save()
 
-    assert _read_schema_names(state_first) == ["alpha", "mean", "zeta"]
-    assert _read_schema_names(state_second) == ["alpha", "mean", "zeta"]
-    assert np.allclose(_read_mean(state_first), _read_mean(state_second))
+    first_names = _read_schema_names(state_first)
+    second_names = _read_schema_names(state_second)
+    assert first_names == ["zeta", "alpha", "mean"]
+    assert second_names == ["mean", "zeta", "alpha"]
+
+    second_index = {name: idx for idx, name in enumerate(second_names)}
+    permutation = [second_index[name] for name in first_names]
+    assert np.allclose(_read_mean(state_first), _read_mean(state_second)[permutation])
 
 
 def test_nested_schema_flattens_leaf_names_and_rebuilds_dataclasses() -> None:
@@ -241,7 +246,7 @@ def test_nested_schema_flattens_leaf_names_and_rebuilds_dataclasses() -> None:
         slots=True,
     )
 
-    expected_names = ["alpha", "combat.attack_threshold", "combat.retreat_threshold", "mining.gas_priority"]
+    expected_names = ["mining.gas_priority", "alpha", "combat.retreat_threshold", "combat.attack_threshold"]
     optimizer = _optimizer(schema, population_size=6)
     assert _read_schema_names(optimizer.save()) == expected_names
 
@@ -287,7 +292,7 @@ def test_nested_mapping_schema_flattens_leaf_names_and_rebuilds_plain_dicts() ->
         },
     }
 
-    expected_names = ["alpha", "combat.attack_threshold", "combat.retreat_threshold", "mining.gas_priority"]
+    expected_names = ["mining.gas_priority", "alpha", "combat.retreat_threshold", "combat.attack_threshold"]
     optimizer = _initialized_optimizer(schema, population_size=6)
     assert _read_schema_names(optimizer.save()) == expected_names
 
@@ -321,7 +326,7 @@ def test_nested_mapping_schema_flattens_leaf_names_and_rebuilds_plain_dicts() ->
     assert params["alpha"] < 3.0
 
 
-def test_mapping_schema_order_is_lexicographic_and_independent_of_insertion_order() -> None:
+def test_mapping_schema_order_follows_traversal_and_respects_insertion_order() -> None:
     first_schema = _make_mapping_schema(
         zeta=Parameter(mean=3.0, scale=1.0, min=0.0),
         alpha=Parameter(mean=1.0, scale=2.0),
@@ -336,9 +341,14 @@ def test_mapping_schema_order_is_lexicographic_and_independent_of_insertion_orde
     state_first = _initialized_optimizer(first_schema, population_size=18).save()
     state_second = _initialized_optimizer(second_schema, population_size=18).save()
 
-    assert _read_schema_names(state_first) == ["alpha", "branch.mean", "zeta"]
-    assert _read_schema_names(state_second) == ["alpha", "branch.mean", "zeta"]
-    assert np.allclose(_read_mean(state_first), _read_mean(state_second))
+    first_names = _read_schema_names(state_first)
+    second_names = _read_schema_names(state_second)
+    assert first_names == ["zeta", "alpha", "branch.mean"]
+    assert second_names == ["branch.mean", "zeta", "alpha"]
+
+    second_index = {name: idx for idx, name in enumerate(second_names)}
+    permutation = [second_index[name] for name in first_names]
+    assert np.allclose(_read_mean(state_first), _read_mean(state_second)[permutation])
 
 
 def test_mapping_schema_state_save_load_roundtrip() -> None:
@@ -366,17 +376,29 @@ def test_mapping_schema_state_save_load_roundtrip() -> None:
     }
     opt_b = _optimizer(schema_b, population_size=20)
     load_result = opt_b.load(state)
-    assert load_result == SchemaDiff(added=[], removed=[], changed=[], unchanged=["beta", "block.alpha"])
+    assert load_result == SchemaDiff(added=[], removed=[], changed=[], unchanged=["block.alpha", "beta"])
 
     loaded = opt_b.save()
-    assert np.allclose(_read_mean(loaded), _read_mean(state))
-    assert np.allclose(_read_scale(loaded), _read_scale(state))
+    state_names = _read_schema_names(state)
+    permutation = [state_names.index(name) for name in _read_schema_names(loaded)]
+    assert np.allclose(_read_mean(loaded), _read_mean(state)[permutation])
+    assert np.allclose(_read_scale(loaded), _read_scale(state)[np.ix_(permutation, permutation)])
     assert _read_results(loaded) == _read_results(state)
 
 
 def test_mapping_schema_rejects_non_parameter_leaf_values() -> None:
     with pytest.raises(TypeError, match=r"must be Parameter\(\.\.\.\) or a nested mapping"):
         Optimizer({"x": 1.0})
+
+
+def test_mapping_schema_rejects_leaf_name_shadowing() -> None:
+    with pytest.raises(ValueError, match=r"shadowed by another key"):
+        Optimizer({"a.b": Parameter(), "a": {"b": Parameter()}})
+
+
+def test_mapping_schema_rejects_branch_name_shadowing() -> None:
+    with pytest.raises(ValueError, match=r"shadowed by another key"):
+        Optimizer({"a.b": {"c": Parameter()}, "a": {"b": {"d": Parameter()}}})
 
 
 def test_schema_requires_parameter_annotated_float_fields() -> None:

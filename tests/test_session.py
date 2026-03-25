@@ -40,7 +40,7 @@ class TestSessionPersistence:
 
         assert session.restored is False
         assert session.dirty is False
-        assert session.schema_diff == SchemaDiff(added=["alpha", "beta"], removed=[], changed=[], unchanged=[])
+        assert session.schema_diff == SchemaDiff(added=["beta", "alpha"], removed=[], changed=[], unchanged=[])
         assert session.settings == settings
         assert session.mean.__class__ is schema
         assert session.scale_marginal.__class__ is schema
@@ -56,7 +56,7 @@ class TestSessionPersistence:
         assert restored.restored is True
         assert restored.dirty is False
         assert restored.settings == settings
-        assert restored.schema_diff == SchemaDiff(added=[], removed=[], changed=[], unchanged=["alpha", "beta"])
+        assert restored.schema_diff == SchemaDiff(added=[], removed=[], changed=[], unchanged=["beta", "alpha"])
         assert restored.mean == session.mean
         assert restored.scale_marginal == session.scale_marginal
 

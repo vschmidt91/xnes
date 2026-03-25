@@ -7,7 +7,7 @@ from dataclasses import fields, is_dataclass
 from typing import Annotated, Any, cast, get_args, get_origin, get_type_hints
 
 from .parameter import Parameter
-from .parser import build_field_spec, build_scalar_builder, field_name, path_name
+from .parser import build_field_spec, build_scalar_builder, path_name
 from .spec import BuildFn, FieldSpec, SchemaPath, SchemaSpec, T
 
 
@@ -19,7 +19,7 @@ def parse_dataclass_schema(model_type: type[T]) -> SchemaSpec[T]:
 
     field_specs, instantiate = _parse_dataclass_type(model_type, ())
     return SchemaSpec(
-        fields=tuple(sorted(field_specs, key=field_name)),
+        fields=field_specs,
         instantiate=cast(Callable[[Mapping[SchemaPath, float]], T], instantiate),
     )
 

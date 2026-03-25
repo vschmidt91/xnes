@@ -72,7 +72,7 @@ def restore_optimizer_state(
     )
     schema_json = _require_object(_require_field(state_obj, "schema"), "checkpoint schema")
     saved_schema = _deserialize_schema(schema_json)
-    saved_names = sorted(saved_schema)
+    saved_names = list(saved_schema)
     saved_dim = len(saved_names)
     mean = _as_finite_vector(_require_field(state_obj, "mean"), saved_dim, "checkpoint mean")
     scale = _as_finite_matrix(_require_field(state_obj, "scale"), (saved_dim, saved_dim), "checkpoint scale")

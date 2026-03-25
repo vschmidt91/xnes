@@ -19,6 +19,7 @@ from ._optimizer_helpers import (
     _read_mean,
     _read_results,
     _read_scale,
+    _read_schema_names,
     _read_settings,
     _read_status,
 )
@@ -38,11 +39,12 @@ def test_state_save_load_roundtrip() -> None:
     schema_b = _make_identity_schema("RoundtripB", beta=(-1.0, 2.0), alpha=(2.0, 1.5))
     opt_b = _optimizer(schema_b, population_size=20)
     load_result = opt_b.load(state)
-    assert load_result == SchemaDiff(added=[], removed=[], changed=[], unchanged=["alpha", "beta"])
+    assert load_result == SchemaDiff(added=[], removed=[], changed=[], unchanged=["beta", "alpha"])
 
     loaded = opt_b.save()
-    assert np.allclose(_read_mean(loaded), _read_mean(state))
-    assert np.allclose(_read_scale(loaded), _read_scale(state))
+    permutation = [_read_schema_names(state).index(name) for name in _read_schema_names(loaded)]
+    assert np.allclose(_read_mean(loaded), _read_mean(state)[permutation])
+    assert np.allclose(_read_scale(loaded), _read_scale(state)[np.ix_(permutation, permutation)])
     assert _read_results(loaded) == _read_results(state)
     _assert_same_status(_read_status(loaded), _read_status(state))
     _assert_same_settings(_read_settings(loaded), _read_settings(state))

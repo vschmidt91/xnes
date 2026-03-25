@@ -1,13 +1,11 @@
 import json
-from collections.abc import Sequence, Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, fields, is_dataclass
 from pathlib import Path
 from typing import Annotated, SupportsFloat, cast
 
 import matplotlib.pyplot as plt
 import numpy as np
-from sc2.unit import Unit
-
 from leitwerk import OptimizerSession, Parameter
 from loguru import logger
 from sc2 import maps
@@ -17,6 +15,7 @@ from sc2.ids.unit_typeid import UnitTypeId
 from sc2.main import run_game
 from sc2.player import Bot, Computer
 from sc2.position import Point2
+from sc2.unit import Unit
 from scipy.spatial.distance import pdist, squareform
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -132,7 +131,7 @@ def _simulate_combat(units: Sequence[Unit], time_horizon: float) -> Mapping[Unit
     attrition = np.sum(fire, axis=1)
     with np.errstate(divide="ignore", invalid="ignore"):
         outcome = np.log(attrition) - np.log(losses)
-    outcome_dict = dict(zip(units, outcome))
+    outcome_dict = dict(zip(units, outcome, strict=False))
     return outcome_dict
 
 
