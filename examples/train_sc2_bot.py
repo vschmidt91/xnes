@@ -195,7 +195,6 @@ def plot_metric(
     ax: plt.Axes,
     history: list[dict[str, float]],
     metric: str,
-    ylabel: str,
     ylim: tuple[float, float] | None = None,
 ) -> None:
     values = np.array([entry.get(metric, np.nan) for entry in history], dtype=float)
@@ -204,7 +203,6 @@ def plot_metric(
     ax.scatter(games[valid], values[valid], s=18, alpha=0.7)
     if np.any(valid):
         ax.plot(games[valid], moving_average(values[valid].tolist()), linewidth=2)
-    ax.set(ylabel=ylabel)
     if ylim is not None:
         ax.set_ylim(*ylim)
     ax.grid(alpha=0.2)
@@ -225,7 +223,11 @@ def save_plot(history: list[dict[str, float]]) -> None:
                 ax.set_visible(False)
                 continue
             metric = column_metrics[row]
-            plot_metric(ax, history, metric)
+            plot_metric(
+                ax,
+                history,
+                metric,
+            )
             ax.set_title(metric)
 
     for ax in axes[-1, :]:
