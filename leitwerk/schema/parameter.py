@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass
-from typing import cast
+from dataclasses import asdict, dataclass, field
+from typing import Any, cast
 
 import numpy as np
 from scipy.special import expit, logit
 
 from .transforms import _softplus, _softplus_to_latent
+
+PARAMETER_METADATA_KEY = "leitwerk_parameter"
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,6 +105,17 @@ class Parameter:
         if self.mean is not None:
             _coerce_finite(self.mean, _field_component_name(name, "mean"))
         _coerce_positive(self.scale, _field_component_name(name, "scale"))
+
+
+def parameter(
+    *,
+    mean: float | None = None,
+    scale: float = 1.0,
+    min: float | None = None,
+    max: float | None = None,
+) -> Any:
+    """Return the canonical dataclass field declaration for one optimized scalar."""
+    return field(metadata={PARAMETER_METADATA_KEY: Parameter(mean=mean, scale=scale, min=min, max=max)})
 
 
 def _field_component_name(field_name: str, component: str) -> str:

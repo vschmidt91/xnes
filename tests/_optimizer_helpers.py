@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import make_dataclass
-from typing import Annotated, Any, cast
+from typing import Any, cast
 
 import numpy as np
 import pytest
-from leitwerk import Optimizer, Parameter
+from leitwerk import Optimizer, Parameter, parameter
 from leitwerk.state import JSONObject
 
 _TEST_SEED = 12345
@@ -15,7 +15,19 @@ _TEST_SEED = 12345
 def _make_schema(schema_name: str, **parameters: Parameter) -> type[Any]:
     return make_dataclass(
         schema_name,
-        [(field_name, Annotated[float, parameter]) for field_name, parameter in parameters.items()],
+        [
+            (
+                field_name,
+                float,
+                parameter(
+                    mean=parameter_spec.mean,
+                    scale=parameter_spec.scale,
+                    min=parameter_spec.min,
+                    max=parameter_spec.max,
+                ),
+            )
+            for field_name, parameter_spec in parameters.items()
+        ],
         frozen=True,
         slots=True,
     )

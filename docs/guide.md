@@ -14,18 +14,17 @@ The intended call flow is sequential:
 
 ```py
 from dataclasses import dataclass
-from typing import Annotated
 
-from leitwerk import Parameter
+from leitwerk import parameter
 
 
 @dataclass
 class MyParams:
-    attack_threshold: Annotated[float, Parameter()]
-    worker_limit: Annotated[float, Parameter(mean=66, scale=10, min=12)]
+    attack_threshold: float = parameter()
+    worker_limit: float = parameter(mean=66, scale=10, min=12)
 ```
 
-`Parameter(...)` defines the prior distribution for each value:
+`parameter(...)` defines the prior distribution for each value:
 
 - `mean`: initial best guess
 - `scale`: initial spread
@@ -34,6 +33,8 @@ class MyParams:
 !!! tip
     Dictionary schemas are supported if you prefer string-based lookup:
     ```py
+    from leitwerk import Parameter
+
     MyParams = {"a": Parameter(), "b": Parameter()}
     ```
 

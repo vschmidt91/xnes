@@ -6,6 +6,8 @@
 
 ::: leitwerk.OptimizerReport
 
+::: leitwerk.parameter
+
 ::: leitwerk.Parameter
 
 ::: leitwerk.SchemaDiff
