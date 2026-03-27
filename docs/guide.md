@@ -53,10 +53,7 @@ from leitwerk import OptimizerSession
 opt = OptimizerSession("params.json", MyParams)
 ```
 
-If the session file already exists, it is loaded and reconciled automatically.
-
-!!! question
-    [What happens when the schema changes?](faq.md#what-happens-when-the-schema-changes)
+If the session file already exists, it is loaded and reconciled automatically:
 
 ```pycon
 >>> opt.restored
@@ -64,6 +61,9 @@ True
 >>> opt.schema_diff
 SchemaDiff(added=[], removed=[], changed=[], unchanged=['attack_threshold', 'worker_limit'])
 ```
+
+!!! question
+    [What happens when the schema changes?](faq.md#what-happens-when-the-schema-changes)
 
 For an in-memory run, use `Optimizer` directly:
 
