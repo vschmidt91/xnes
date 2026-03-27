@@ -50,7 +50,7 @@ Parameters are modeled as a multivariate normal distribution that is updated wit
 The covariance matrix is estimated densely, initialization is diagonal.
 Samples are generated with mirrored-orthogonal sampling for variance reduction.
 
-Bounds are modeled as latent normals with smooth bijective activations:
+Bounds are modeled as unbounded latent normals with smooth bijective activations:
 
 - one-sided (`min` or `max`): affine-transformed softplus
 - two-sided (`min` and `max`): affine-transformed sigmoid
