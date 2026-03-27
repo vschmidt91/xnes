@@ -86,7 +86,7 @@ Afterward, it will run significantly faster than the rendered game on the host.
 The example saves progress in `examples/data` after each game:
 
 - `params.json`: optimizer state
-- `plot.png`: graphs showing parameter samples and result values over time
+- `plot.png`: graphs showing parameter samples and results with a moving average
 - `history.json`: helper file
 
 <p align="center">
