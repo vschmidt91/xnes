@@ -37,7 +37,7 @@ The SC2 example requires the game itself or Docker to be installed.
 
 ## Minimal Example
 
-At base level, `leitwerk` is just a sequential ask/tell function maximizer:
+At base level, `leitwerk` is a sequential ask/tell function maximizer:
 
 ```py
 from leitwerk import Optimizer, Parameter
@@ -54,7 +54,7 @@ for _ in range(100):
 {'x': 1.0007710964577097}
 ```
 
-Everything else is details for easier representation, bounds, typing and persistence.
+Everything else is wrapping for easier representation, bounds, typing and persistence.
 
 ## Example - StarCraft II Bot
 
