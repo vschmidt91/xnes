@@ -27,15 +27,17 @@ Requires: Python >=3.11,<3.14
 pip install .
 ```
 
-For a development setup with tests, docs, benchmarks and `python-sc2`:
+For a development setup with tests, docs, benchmarks and `burnysc2`:
 
 ```sh
 pip install -e .[dev,docs,benchmark]
 ```
 
+The SC2 example requires the game itself or Docker to be installed.
+
 ## Minimal Example
 
-At base level, `leitwerk` is a sequential ask/tell function maximizer:
+At base level, `leitwerk` is just a sequential ask/tell function maximizer:
 
 ```py
 from leitwerk import Optimizer, Parameter
@@ -52,31 +54,31 @@ for _ in range(100):
 {'x': 1.0007710964577097}
 ```
 
-What happens between `ask` and `tell` is a black box for `leitwerk` - it can be a simple one-liner or a complex simulation.
+Everything else is details for easier representation, bounds, typing and persistence.
 
 ## Example - StarCraft II Bot
 
-For a real training loop with file persistence, see: [examples/train_sc2_bot.py](examples/train_sc2_bot.py)
+For a real training loop showcasing most features, see [examples/train_sc2_bot.py](examples/train_sc2_bot.py):
 
-- a simple worker rush bot with parameters `simulation_time` and `retreat_threshold`
+- a simple worker rush bot with two parameters
 - runs games continually against the built-in AI
 - scores each game using win/loss and a combat heuristic
 - persists state with `OptimizerSession` and plot results
 
-Run it directly if you have StarCraft II installed and want to observe the games:
+Run it directly if you want to observe the games:
 
 ```sh
 python examples/train_sc2_bot.py
 ```
 
-Alternatively, use the headless docker setup:
+Alternatively for the headless Docker setup:
 
 ```sh
 cd examples
 docker compose up --build
 ```
 
-On the first run, this will download a 3.8GB installation of SC2 into the container.
+On the first run, this will download and unpack the SC2 Linux installation inside the container.
 Afterward, it will run significantly faster than the rendered game on the host.
 
 ### Training Results
@@ -84,15 +86,12 @@ Afterward, it will run significantly faster than the rendered game on the host.
 The example saves progress in `examples/data` after each game:
 
 - `params.json`: optimizer state
-- `plot.png`: graphs showing parameter samples and result values and over time
+- `plot.png`: graphs showing parameter samples and result values over time
 - `history.json`: helper file
 
 <p align="center">
-  <img src="docs/example_plot.png" alt="Leitwerk">
+  <img src="docs/example_plot.png" alt="Example Plot">
 </p>
-
-Initially, it explores a wide range of values before narrowing the search.
-After about 100 games, it achieves a perfect winrate again the ingame AI.
 
 ## Developer Commands
 

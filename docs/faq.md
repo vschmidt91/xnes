@@ -27,11 +27,10 @@ For SC2 bots, useful contexts include:
 - map name
 - opponent id
 
-`batch_size` should be tuned together with the number of contexts you expect:
+Batch size should be tuned together with the expected number of contexts:
 
 - if batches are too small to encounter repeated contexts, matches will be rare
-- rule of thumb: `batch_size` >= 2 #{distinct contexts per batch}
-
+- rule of thumb: batch size should be at least twice the number of distinct contexts per batch
 
 ## How should I choose the objective?
 
@@ -53,7 +52,7 @@ Samples are generated with mirrored-orthogonal sampling for variance reduction.
 
 Bounds are modeled as latent normals with smooth bijective activations:
 
-- one-sided (`min` or `max`): affine-transformed soft-plus
+- one-sided (`min` or `max`): affine-transformed softplus
 - two-sided (`min` and `max`): affine-transformed sigmoid
 
 Reference Papers:

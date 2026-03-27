@@ -153,7 +153,7 @@ OptimizerReport(completed_batch=False, matched_context=False, status=<XNESStatus
 ```
 
 When using `OptimizerSession`, the JSON file is updated atomically on `tell`.
-An `Optimizer` can serialized with:
+An `Optimizer` can be serialized with:
 
 ```py
 state = opt.save()
