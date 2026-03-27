@@ -8,7 +8,7 @@ The intended call flow is sequential:
 
 ---
 
-## 1. Define a parameter schema
+## 1. Define a Parameter Schema
 
 *~ Preflight Check ~*
 
@@ -41,7 +41,7 @@ class MyParams:
     Use nested schemas to group parameters together.
     `leitwerk` understands tree structures.
 
-## 2. Create the optimizer
+## 2. Create the Optimizer
 
 *~ Engine Ignition ~*
 
@@ -53,7 +53,10 @@ from leitwerk import OptimizerSession
 opt = OptimizerSession("params.json", MyParams)
 ```
 
-If the session file already exists, it is loaded and reconciled automatically, see [What happens when the schema changes?](faq.md#what-happens-when-the-schema-changes)
+If the session file already exists, it is loaded and reconciled automatically.
+
+!!! question
+    [What happens when the schema changes?](faq.md#what-happens-when-the-schema-changes)
 
 ```pycon
 >>> opt.restored
@@ -89,7 +92,7 @@ Available constructor arguments:
 - `batch_size`: number of samples per batch / optimizer step
 - `seed`: root seed used to deterministically derive future batches
 
-## 3. Sample a candidate
+## 3. Sample a Candidate
 
 *~ Liftoff ~*
 
@@ -116,10 +119,10 @@ context = {"opponent_race": "Protoss"}  # optional
 params = opt.ask(context)
 ```
 
-!!! info
+!!! question
     [What context should I provide?](faq.md#what-context-should-i-provide)
 
-## 4. Report the result
+## 4. Report the Result
 
 *~ Landing ~*
 
@@ -144,7 +147,7 @@ Result handling:
 - maximize by default, flip the sign for loss objectives
 
 
-!!! info
+!!! question
     [How should I choose the objective?](faq.md#how-should-i-choose-the-objective)
 
 ```pycon
