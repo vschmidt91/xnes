@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/logo.png" alt="Leitwerk">
+  <img src="https://raw.githubusercontent.com/phantomsc2/leitwerk/main/docs/logo.png" alt="Leitwerk">
 </p>
 
 <h1 align="center">Leitwerk</h1>
@@ -26,16 +26,16 @@ It offers:
 Requires: Python >=3.11,<3.14
 
 ```sh
-pip install .
+pip install leitwerk
 ```
 
-For a development setup with tests, docs, benchmarks and `burnysc2`:
+For a local development setup with testing, linting and `burnysc2`:
 
 ```sh
 pip install -e .[dev,docs,benchmark]
 ```
 
-The SC2 example requires the game itself or Docker to be installed.
+The StarCraft II example also requires the game itself or Docker to be installed.
 
 ## Minimal Example
 
@@ -92,7 +92,7 @@ The example saves progress in `examples/data` after each game:
 - `history.json`: helper file
 
 <p align="center">
-  <img src="docs/example_plot.png" alt="Example Plot">
+  <img src="https://raw.githubusercontent.com/phantomsc2/leitwerk/main/docs/example_plot.png" alt="Example Plot">
 </p>
 
 ## Developer Commands
