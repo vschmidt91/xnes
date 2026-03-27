@@ -27,7 +27,7 @@ from ._optimizer_helpers import (
 
 def test_state_save_load_roundtrip() -> None:
     schema_a = _make_identity_schema("RoundtripA", alpha=(2.0, 1.5), beta=(-1.0, 2.0))
-    opt_a = _optimizer(schema_a, population_size=20)
+    opt_a = _optimizer(schema_a, batch_size=20)
 
     for _ in range(37):
         params = opt_a.ask()
@@ -37,7 +37,7 @@ def test_state_save_load_roundtrip() -> None:
     assert isinstance(state, dict)
 
     schema_b = _make_identity_schema("RoundtripB", beta=(-1.0, 2.0), alpha=(2.0, 1.5))
-    opt_b = _optimizer(schema_b, population_size=20)
+    opt_b = _optimizer(schema_b, batch_size=20)
     load_result = opt_b.load(state)
     assert load_result == SchemaDiff(added=[], removed=[], changed=[], unchanged=["beta", "alpha"])
 
@@ -52,7 +52,7 @@ def test_state_save_load_roundtrip() -> None:
 
 def test_status_block_exposes_basic_diagnostics_and_roundtrips() -> None:
     schema = _make_identity_schema("BasicDiagnostics", alpha=(2.0, 1.5), beta=(-1.0, 1.5))
-    optimizer = _initialized_optimizer(schema, population_size=4)
+    optimizer = _initialized_optimizer(schema, batch_size=4)
 
     initial_status = _read_status(optimizer.save())
     assert initial_status["num_samples"] == 0
@@ -65,7 +65,7 @@ def test_status_block_exposes_basic_diagnostics_and_roundtrips() -> None:
     assert initial_status["batch_size"] == 4
 
     initial_settings = _read_settings(optimizer.save())
-    assert initial_settings["population_size"] == 4
+    assert initial_settings["batch_size"] == 4
     assert initial_settings["seed"] == _TEST_SEED
     assert initial_settings["minimize"] is None
     assert initial_settings["eta_mean"] is None
@@ -86,7 +86,7 @@ def test_status_block_exposes_basic_diagnostics_and_roundtrips() -> None:
     assert progressed_status["batch_progress"] == pytest.approx(1.0)
     assert progressed_status["batch_size"] == 4
 
-    restored = _initialized_optimizer(schema, population_size=4)
+    restored = _initialized_optimizer(schema, batch_size=4)
     restored.load(progressed_state)
     _assert_same_status(_read_status(restored.save()), progressed_status)
     _assert_same_settings(_read_settings(restored.save()), _read_settings(progressed_state))
@@ -94,43 +94,43 @@ def test_status_block_exposes_basic_diagnostics_and_roundtrips() -> None:
 
 def test_load_rejects_nonfinite_mean() -> None:
     schema = _make_identity_schema("BadMeanCheckpoint", x=(0.0, 1.0))
-    state = _initialized_state(schema, population_size=4)
+    state = _initialized_state(schema, batch_size=4)
     state["mean"] = [float("nan")]
 
     with pytest.raises(ValueError, match="checkpoint mean must contain only finite values"):
-        _optimizer(schema, population_size=4).load(state)
+        _optimizer(schema, batch_size=4).load(state)
 
 
 def test_load_rejects_misaligned_batch_shape() -> None:
     schema = _make_identity_schema("BadBatchCheckpoint", x=(0.0, 1.0))
-    state = _initialized_state(schema, population_size=4)
+    state = _initialized_state(schema, batch_size=4)
     state["batch"] = [1.0, -1.0]
 
     with pytest.raises(ValueError, match=r"checkpoint batch must have shape \(1, n\)"):
-        _optimizer(schema, population_size=4).load(state)
+        _optimizer(schema, batch_size=4).load(state)
 
 
 def test_load_rejects_nonfinite_results() -> None:
     schema = _make_identity_schema("BadResultsCheckpoint", x=(0.0, 1.0))
-    state = _initialized_state(schema, population_size=4)
+    state = _initialized_state(schema, batch_size=4)
     state["results"] = [[float("nan")], None, None, None]
 
     with pytest.raises(ValueError, match=r"checkpoint results\[0\] must contain only finite values"):
-        _optimizer(schema, population_size=4).load(state)
+        _optimizer(schema, batch_size=4).load(state)
 
 
 def test_load_rejects_bad_pending_context_matches_shape() -> None:
     schema = _make_identity_schema("BadContextCheckpoint", x=(0.0, 1.0))
-    state = _initialized_state(schema, population_size=4)
+    state = _initialized_state(schema, batch_size=4)
     state["pending_context_matches"] = cast(JSONObject, {1: 0})
 
     with pytest.raises(TypeError, match="checkpoint pending_context_matches keys must be strings"):
-        _optimizer(schema, population_size=4).load(state)
+        _optimizer(schema, batch_size=4).load(state)
 
 
 def test_load_cancels_pending_ask_and_replaces_state() -> None:
     schema = _make_identity_schema("PendingLoad", x=(0.0, 1.0))
-    optimizer = _initialized_optimizer(schema, population_size=4)
+    optimizer = _initialized_optimizer(schema, batch_size=4)
     state = optimizer.save()
 
     params = optimizer.ask()
@@ -148,7 +148,7 @@ def test_load_cancels_pending_ask_and_replaces_state() -> None:
 
 def test_save_ignores_pending_ask_and_snapshots_committed_state() -> None:
     schema = _make_identity_schema("PendingSave", x=(0.0, 1.0))
-    optimizer = _initialized_optimizer(schema, population_size=4)
+    optimizer = _initialized_optimizer(schema, batch_size=4)
     initial_state = optimizer.save()
 
     params = optimizer.ask()
@@ -163,7 +163,7 @@ def test_save_ignores_pending_ask_and_snapshots_committed_state() -> None:
     progressed_state = optimizer.save()
     assert sum(result is not None for result in _read_results(progressed_state)) == 1
 
-    restored = _initialized_optimizer(schema, population_size=4)
+    restored = _initialized_optimizer(schema, batch_size=4)
     restored.load(saved_state)
 
     with pytest.raises(RuntimeError, match="No pending ask"):
@@ -178,7 +178,7 @@ def test_save_ignores_pending_ask_and_snapshots_committed_state() -> None:
 
 def test_load_discards_unsaved_local_progress_at_idle_boundary() -> None:
     schema = _make_identity_schema("DiscardUnsavedProgress", x=(0.0, 1.0))
-    optimizer = _initialized_optimizer(schema, population_size=4)
+    optimizer = _initialized_optimizer(schema, batch_size=4)
     initial_state = optimizer.save()
 
     params = optimizer.ask()
@@ -198,7 +198,7 @@ def test_persisted_settings_become_baseline_when_no_runtime_override_is_supplied
     schema = _make_identity_schema("RuntimeConfig", x=(4.0, 2.0))
     opt_a = _optimizer(
         schema,
-        population_size=14,
+        batch_size=14,
         seed=101,
         minimize=True,
         eta_mean=0.9,
@@ -213,7 +213,7 @@ def test_persisted_settings_become_baseline_when_no_runtime_override_is_supplied
     state = opt_a.save()
     assert isinstance(state, dict)
     assert _read_settings(state) == {
-        "population_size": 14,
+        "batch_size": 14,
         "seed": 101,
         "minimize": True,
         "eta_mean": 0.9,
@@ -224,7 +224,7 @@ def test_persisted_settings_become_baseline_when_no_runtime_override_is_supplied
     opt_b = Optimizer(schema)
     opt_b.load(state)
     assert opt_b.settings == OptimizerSettings(
-        population_size=14,
+        batch_size=14,
         seed=101,
         minimize=True,
         eta_mean=0.9,
@@ -238,7 +238,7 @@ def test_runtime_settings_override_persisted_baseline_and_rewrites_it() -> None:
     schema = _make_identity_schema("RuntimeOverrides", x=(4.0, 2.0))
     baseline = _optimizer(
         schema,
-        population_size=14,
+        batch_size=14,
         seed=101,
         minimize=True,
         eta_mean=0.9,
@@ -250,7 +250,7 @@ def test_runtime_settings_override_persisted_baseline_and_rewrites_it() -> None:
     overridden = Optimizer(
         schema,
         settings=OptimizerSettings(
-            population_size=4,
+            batch_size=4,
             seed=202,
             minimize=False,
             eta_scale_global=0.3,
@@ -259,7 +259,7 @@ def test_runtime_settings_override_persisted_baseline_and_rewrites_it() -> None:
     overridden.load(state)
 
     assert overridden.settings == OptimizerSettings(
-        population_size=4,
+        batch_size=4,
         seed=202,
         minimize=False,
         eta_mean=0.9,
@@ -267,7 +267,7 @@ def test_runtime_settings_override_persisted_baseline_and_rewrites_it() -> None:
         eta_scale_shape=0.2,
     )
     assert _read_settings(overridden.save()) == {
-        "population_size": 4,
+        "batch_size": 4,
         "seed": 202,
         "minimize": False,
         "eta_mean": 0.9,
@@ -282,7 +282,7 @@ def test_runtime_settings_override_persisted_baseline_and_rewrites_it() -> None:
 
 def test_load_allows_switching_optimization_direction_mid_batch() -> None:
     schema = _make_identity_schema("SwitchDirection", x=(0.0, 1.0))
-    base = _optimizer(schema, population_size=4, minimize=True)
+    base = _optimizer(schema, batch_size=4, minimize=True)
 
     first_params = base.ask()
     base.tell(first_params.x)
@@ -291,8 +291,8 @@ def test_load_allows_switching_optimization_direction_mid_batch() -> None:
     assert [idx for idx, result in enumerate(saved_results) if result is not None] == [0]
     assert saved_results[0] == pytest.approx((first_params.x,))
 
-    minimizing = _optimizer(schema, population_size=4, minimize=True)
-    maximizing = _optimizer(schema, population_size=4, minimize=False)
+    minimizing = _optimizer(schema, batch_size=4, minimize=True)
+    maximizing = _optimizer(schema, batch_size=4, minimize=False)
     minimizing.load(state)
     maximizing.load(state)
 
@@ -307,14 +307,14 @@ def test_load_allows_switching_optimization_direction_mid_batch() -> None:
 
 def test_save_load_preserves_optimizer_state() -> None:
     schema = _make_identity_schema("PreserveState", x=(2.0, 1.5), y=(-1.0, 0.7))
-    direct = _initialized_optimizer(schema, population_size=12)
+    direct = _initialized_optimizer(schema, batch_size=12)
 
     recreated_state = direct.save()
     for _ in range(40):
         direct_params = direct.ask()
         direct.tell(-(direct_params.x**2 + 0.5 * direct_params.y**2))
 
-        recreated = _optimizer(schema, population_size=12)
+        recreated = _optimizer(schema, batch_size=12)
         recreated.load(recreated_state)
         recreated_params = recreated.ask()
         recreated.tell(-(recreated_params.x**2 + 0.5 * recreated_params.y**2))

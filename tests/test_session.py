@@ -33,7 +33,7 @@ def _read_state(path: Path) -> dict[str, object]:
 class TestSessionPersistence:
     def test_session_flush_persists_initial_state_and_restores(self, tmp_path: Path) -> None:
         schema = _make_schema("SessionParams", beta=(-1.0, 2.0), alpha=(2.0, 1.5))
-        settings = OptimizerSettings(population_size=6, seed=_TEST_SEED)
+        settings = OptimizerSettings(batch_size=6, seed=_TEST_SEED)
         path = tmp_path / "session.json"
 
         session = OptimizerSession(path, schema, settings=settings)
@@ -62,7 +62,7 @@ class TestSessionPersistence:
 
     def test_session_tell_auto_flushes_committed_progress(self, tmp_path: Path) -> None:
         schema = _make_schema("TellSessionParams", x=(2.0, 1.5), y=(-1.0, 0.7))
-        settings = OptimizerSettings(population_size=4, seed=_TEST_SEED)
+        settings = OptimizerSettings(batch_size=4, seed=_TEST_SEED)
         path = tmp_path / "session.json"
         session = OptimizerSession(path, schema, settings=settings)
 
@@ -79,7 +79,7 @@ class TestSessionPersistence:
     def test_session_reports_schema_diff_on_restore(self, tmp_path: Path) -> None:
         base_schema = _make_schema("BaseSessionParams", y=(-1.0, 0.7), x=(2.0, 1.5))
         path = tmp_path / "session.json"
-        settings = OptimizerSettings(population_size=4, seed=_TEST_SEED)
+        settings = OptimizerSettings(batch_size=4, seed=_TEST_SEED)
 
         OptimizerSession(path, base_schema, settings=settings).flush()
 
@@ -96,14 +96,14 @@ class TestSessionPersistence:
         OptimizerSession(
             path,
             schema,
-            settings=OptimizerSettings(population_size=6, seed=_TEST_SEED, minimize=True, eta_mean=0.9),
+            settings=OptimizerSettings(batch_size=6, seed=_TEST_SEED, minimize=True, eta_mean=0.9),
         ).flush()
 
         restored = OptimizerSession(path, schema, settings=OptimizerSettings(seed=999, eta_scale_global=0.3))
 
         assert restored.restored is True
         assert restored.settings == OptimizerSettings(
-            population_size=6,
+            batch_size=6,
             seed=999,
             minimize=True,
             eta_mean=0.9,
@@ -122,7 +122,7 @@ class TestSessionFailureHandling:
     ) -> None:
         schema = _make_schema("DirtySessionParams", x=(2.0, 1.5))
         path = tmp_path / "session.json"
-        session = OptimizerSession(path, schema, settings=OptimizerSettings(population_size=4, seed=_TEST_SEED))
+        session = OptimizerSession(path, schema, settings=OptimizerSettings(batch_size=4, seed=_TEST_SEED))
 
         def fail_write(path: Path, payload: dict[str, object]) -> None:
             del path, payload
@@ -145,7 +145,7 @@ class TestSessionFailureHandling:
     ) -> None:
         schema = _make_schema("DirtyRecoveryParams", x=(2.0, 1.5))
         path = tmp_path / "session.json"
-        session = OptimizerSession(path, schema, settings=OptimizerSettings(population_size=4, seed=_TEST_SEED))
+        session = OptimizerSession(path, schema, settings=OptimizerSettings(batch_size=4, seed=_TEST_SEED))
         real_write = session_module._write_json_atomically
 
         def fail_write(path: Path, payload: dict[str, object]) -> None:

@@ -1,0 +1,1122 @@
+[
+  {
+    "result": [
+      0.0,
+      2.0638820638820636
+    ],
+    "simulation_time": 0.17353781647551172,
+    "retreat_threshold": -0.9365641669576718
+  },
+  {
+    "result": [
+      1.0,
+      3.930242450021267
+    ],
+    "simulation_time": 0.6929787107735984,
+    "retreat_threshold": 1.2750656528246809
+  },
+  {
+    "result": [
+      1.0,
+      4.825337680484396
+    ],
+    "simulation_time": 0.8663241559747368,
+    "retreat_threshold": 1.062634545756985
+  },
+  {
+    "result": [
+      0.0,
+      1.2539014791694936
+    ],
+    "simulation_time": 2.80819527880533,
+    "retreat_threshold": 0.9365641669576718
+  },
+  {
+    "result": [
+      0.0,
+      1.2980132450331126
+    ],
+    "simulation_time": 1.3745981020354412,
+    "retreat_threshold": -1.2750656528246809
+  },
+  {
+    "result": [
+      0.0,
+      1.4110871130309575
+    ],
+    "simulation_time": 1.1449723732962571,
+    "retreat_threshold": -1.062634545756985
+  },
+  {
+    "result": [
+      1.0,
+      4.6707638279192265
+    ],
+    "simulation_time": 0.28120635449366116,
+    "retreat_threshold": 0.24918100217546024
+  },
+  {
+    "result": [
+      1.0,
+      3.2880733944954126
+    ],
+    "simulation_time": 0.5789745666695691,
+    "retreat_threshold": 1.320676995491247
+  },
+  {
+    "result": [
+      0.0,
+      1.2982998454404944
+    ],
+    "simulation_time": 0.44229338606120033,
+    "retreat_threshold": -0.2759609304133921
+  },
+  {
+    "result": [
+      0.0,
+      2.070465419747716
+    ],
+    "simulation_time": 1.3843054721292876,
+    "retreat_threshold": 1.514562731359725
+  },
+  {
+    "result": [
+      1.0,
+      5.918097754293262
+    ],
+    "simulation_time": 0.8060102044900902,
+    "retreat_threshold": 0.44306673804393837
+  },
+  {
+    "result": [
+      0.0,
+      1.62843295638126
+    ],
+    "simulation_time": 1.0103735145775403,
+    "retreat_threshold": 2.0397046639485774
+  },
+  {
+    "result": [
+      1.0,
+      4.694048616932103
+    ],
+    "simulation_time": 0.3343126973310303,
+    "retreat_threshold": 0.10294042496971267
+  },
+  {
+    "result": [
+      1.0,
+      3.556723609286027
+    ],
+    "simulation_time": 0.4725700113142607,
+    "retreat_threshold": 0.9545093695249727
+  },
+  {
+    "result": [
+      1.0,
+      4.016064257028113
+    ],
+    "simulation_time": 0.38789307679136414,
+    "retreat_threshold": 0.8204956738744271
+  },
+  {
+    "result": [
+      1.0,
+      4.863157894736841
+    ],
+    "simulation_time": 0.9475544362707522,
+    "retreat_threshold": 0.8829608754889879
+  },
+  {
+    "result": [
+      1.0,
+      5.3724604966139955
+    ],
+    "simulation_time": 0.7119038809249087,
+    "retreat_threshold": 0.03139193093372811
+  },
+  {
+    "result": [
+      1.0,
+      5.554259043173862
+    ],
+    "simulation_time": 0.8429091712005758,
+    "retreat_threshold": 0.16540562658427366
+  },
+  {
+    "result": [
+      1.0,
+      4.630113141862489
+    ],
+    "simulation_time": 0.34235063042394676,
+    "retreat_threshold": 0.8000129399999212
+  },
+  {
+    "result": [
+      0.0,
+      2.478468899521531
+    ],
+    "simulation_time": 0.9780510066914435,
+    "retreat_threshold": 1.1779220271255444
+  },
+  {
+    "result": [
+      1.0,
+      4.392156862745098
+    ],
+    "simulation_time": 0.734578461364054,
+    "retreat_threshold": 0.8456903544262362
+  },
+  {
+    "result": [
+      1.0,
+      4.148148148148148
+    ],
+    "simulation_time": 1.5858108095204009,
+    "retreat_threshold": -0.3732738145993035
+  },
+  {
+    "result": [
+      0.0,
+      0.979020979020979
+    ],
+    "simulation_time": 0.6706215987159748,
+    "retreat_threshold": -0.7511829017249265
+  },
+  {
+    "result": [
+      1.0,
+      3.4146341463414633
+    ],
+    "simulation_time": 0.9008475432962612,
+    "retreat_threshold": -0.4189512290256184
+  },
+  {
+    "result": [
+      1.0,
+      3.006499011020062
+    ],
+    "simulation_time": 0.4738790278494957,
+    "retreat_threshold": 1.3557552136747564
+  },
+  {
+    "result": [
+      1.0,
+      3.9690721649484533
+    ],
+    "simulation_time": 0.766940904816086,
+    "retreat_threshold": 0.6442434047868839
+  },
+  {
+    "result": [
+      0.0,
+      3.6793692509855456
+    ],
+    "simulation_time": 0.17415903148314413,
+    "retreat_threshold": -0.46983714458223647
+  },
+  {
+    "result": [
+      1.0,
+      4.788478847884788
+    ],
+    "simulation_time": 0.6110817091960825,
+    "retreat_threshold": -0.01416314954529474
+  },
+  {
+    "result": [
+      1.0,
+      3.9853076216712577
+    ],
+    "simulation_time": 0.3666242861169635,
+    "retreat_threshold": 0.6973486593425777
+  },
+  {
+    "result": [
+      0.0,
+      2.241793434747798
+    ],
+    "simulation_time": 1.3040997407738313,
+    "retreat_threshold": 1.811429208711698
+  },
+  {
+    "result": [
+      1.0,
+      2.8789386401326698
+    ],
+    "simulation_time": 0.3776845851931147,
+    "retreat_threshold": 0.7166758666574833
+  },
+  {
+    "result": [
+      1.0,
+      5.336322869955156
+    ],
+    "simulation_time": 0.6585617250449398,
+    "retreat_threshold": 0.5626620860671155
+  },
+  {
+    "result": [
+      0.0,
+      2.4599937245058046
+    ],
+    "simulation_time": 0.4095329484538239,
+    "retreat_threshold": 1.4897589123455424
+  },
+  {
+    "result": [
+      1.0,
+      5.047720042417815
+    ],
+    "simulation_time": 0.7632963805900537,
+    "retreat_threshold": -0.16827337790041036
+  },
+  {
+    "result": [
+      1.0,
+      5.239085239085238
+    ],
+    "simulation_time": 0.4472078554112139,
+    "retreat_threshold": -0.014259597310042671
+  },
+  {
+    "result": [
+      0.0,
+      1.144191476941039
+    ],
+    "simulation_time": 0.7122126974309748,
+    "retreat_threshold": -0.9413564235884695
+  },
+  {
+    "result": [
+      1.0,
+      5.008517887563883
+    ],
+    "simulation_time": 0.2584466635905368,
+    "retreat_threshold": -0.025923520415437384
+  },
+  {
+    "result": [
+      1.0,
+      3.0094582975064488
+    ],
+    "simulation_time": 0.35881206103506325,
+    "retreat_threshold": 1.2038987411768445
+  },
+  {
+    "result": [
+      1.0,
+      4.5528455284552845
+    ],
+    "simulation_time": 0.5326582086973519,
+    "retreat_threshold": -0.08113780322593045
+  },
+  {
+    "result": [
+      1.0,
+      4.569993722536095
+    ],
+    "simulation_time": 1.1961554299805388,
+    "retreat_threshold": 0.6357117368464866
+  },
+  {
+    "result": [
+      0.0,
+      1.634439985406786
+    ],
+    "simulation_time": 0.9464532864504991,
+    "retreat_threshold": -0.5941105247457954
+  },
+  {
+    "result": [
+      1.0,
+      4.1930116472545755
+    ],
+    "simulation_time": 0.676686193215123,
+    "retreat_threshold": 0.6909260196569796
+  },
+  {
+    "result": [
+      1.0,
+      5.361702127659575
+    ],
+    "simulation_time": 0.2736783831319272,
+    "retreat_threshold": 0.27157279175726134
+  },
+  {
+    "result": [
+      1.0,
+      5.269461077844311
+    ],
+    "simulation_time": 0.4781180995720154,
+    "retreat_threshold": 0.9915251479483793
+  },
+  {
+    "result": [
+      1.0,
+      2.134831460674157
+    ],
+    "simulation_time": 0.43029438768249395,
+    "retreat_threshold": -0.37979633830120696
+  },
+  {
+    "result": [
+      1.0,
+      5.623678646934461
+    ],
+    "simulation_time": 0.760147841684366,
+    "retreat_threshold": 0.05064297611288751
+  },
+  {
+    "result": [
+      0.0,
+      1.2851897184822523
+    ],
+    "simulation_time": 0.4603719487920541,
+    "retreat_threshold": -0.6693093800782304
+  },
+  {
+    "result": [
+      1.0,
+      3.526044647967945
+    ],
+    "simulation_time": 0.510765590182788,
+    "retreat_threshold": 0.7020121061713559
+  },
+  {
+    "result": [
+      1.0,
+      3.0085959885386817
+    ],
+    "simulation_time": 0.29078436984638345,
+    "retreat_threshold": 0.5321273192392731
+  },
+  {
+    "result": [
+      1.0,
+      3.753808653260207
+    ],
+    "simulation_time": 0.6803083734020792,
+    "retreat_threshold": 0.7760944617455281
+  },
+  {
+    "result": [
+      0.0,
+      1.4873837981407703
+    ],
+    "simulation_time": 0.48936036997817,
+    "retreat_threshold": -0.7652532207104721
+  },
+  {
+    "result": [
+      1.0,
+      5.1795429815016325
+    ],
+    "simulation_time": 0.9386344499132134,
+    "retreat_threshold": -0.07275967714148934
+  },
+  {
+    "result": [
+      0.0,
+      1.8453427065026362
+    ],
+    "simulation_time": 0.43115242889361466,
+    "retreat_threshold": -0.31672681964774424
+  },
+  {
+    "result": [
+      1.0,
+      4.4974093264248705
+    ],
+    "simulation_time": 0.6054591858751655,
+    "retreat_threshold": 1.224620862808256
+  },
+  {
+    "result": [
+      1.0,
+      3.6023391812865495
+    ],
+    "simulation_time": 0.22906124432492386,
+    "retreat_threshold": 0.843477841953427
+  },
+  {
+    "result": [
+      1.0,
+      4.858447488584474
+    ],
+    "simulation_time": 0.8211810479521198,
+    "retreat_threshold": 0.5805994238081456
+  },
+  {
+    "result": [
+      0.0,
+      0.6833435021354484
+    ],
+    "simulation_time": 0.321571269445949,
+    "retreat_threshold": 1.5654030801413361
+  },
+  {
+    "result": [
+      1.0,
+      5.811965811965812
+    ],
+    "simulation_time": 1.9198904160889418,
+    "retreat_threshold": -0.022866171699032323
+  },
+  {
+    "result": [
+      1.0,
+      4.333619948409286
+    ],
+    "simulation_time": 0.777838384405478,
+    "retreat_threshold": 0.24001224644624905
+  },
+  {
+    "result": [
+      1.0,
+      2.4489795918367347
+    ],
+    "simulation_time": 1.599400692825886,
+    "retreat_threshold": -0.7447914098869415
+  },
+  {
+    "result": [
+      1.0,
+      4.094232331437855
+    ],
+    "simulation_time": 0.7190319482248495,
+    "retreat_threshold": -0.19224000175539985
+  },
+  {
+    "result": [
+      1.0,
+      5.307050796057619
+    ],
+    "simulation_time": 0.9497256652644006,
+    "retreat_threshold": 0.7213853341546002
+  },
+  {
+    "result": [
+      1.0,
+      5.639810426540284
+    ],
+    "simulation_time": 0.6912237943948113,
+    "retreat_threshold": 0.40948861006430604
+  },
+  {
+    "result": [
+      1.0,
+      4.788598574821853
+    ],
+    "simulation_time": 2.298718704934989,
+    "retreat_threshold": 0.5638207900222423
+  },
+  {
+    "result": [
+      0.0,
+      1.96053469127944
+    ],
+    "simulation_time": 1.9388000196556046,
+    "retreat_threshold": -0.34980454588775783
+  },
+  {
+    "result": [
+      1.0,
+      5.058448459086078
+    ],
+    "simulation_time": 2.34830203608132,
+    "retreat_threshold": -0.03790782179746363
+  },
+  {
+    "result": [
+      1.0,
+      4.876260311640697
+    ],
+    "simulation_time": 0.9060379930772976,
+    "retreat_threshold": 0.19771488664085496
+  },
+  {
+    "result": [
+      1.0,
+      4.719101123595506
+    ],
+    "simulation_time": 0.5459349416008222,
+    "retreat_threshold": 0.5813754157498732
+  },
+  {
+    "result": [
+      1.0,
+      4.2678279804028305
+    ],
+    "simulation_time": 0.5181916782700746,
+    "retreat_threshold": 0.8898514358340204
+  },
+  {
+    "result": [
+      1.0,
+      5.150846210448859
+    ],
+    "simulation_time": 0.9270264984384905,
+    "retreat_threshold": 0.6951768529334497
+  },
+  {
+    "result": [
+      1.0,
+      5.253863134657836
+    ],
+    "simulation_time": 1.4110708514810033,
+    "retreat_threshold": 0.31151632382443145
+  },
+  {
+    "result": [
+      1.0,
+      5.788900979325353
+    ],
+    "simulation_time": 1.4623324074566397,
+    "retreat_threshold": 0.0030403037402842448
+  },
+  {
+    "result": [
+      1.0,
+      2.7510917030567685
+    ],
+    "simulation_time": 1.2628136795362837,
+    "retreat_threshold": -0.3191472456525583
+  },
+  {
+    "result": [
+      1.0,
+      5.833333333333333
+    ],
+    "simulation_time": 1.0740317343727224,
+    "retreat_threshold": 0.29208531927322645
+  },
+  {
+    "result": [
+      1.0,
+      5.7272727272727275
+    ],
+    "simulation_time": 0.8000707411300375,
+    "retreat_threshold": -0.17950400970847086
+  },
+  {
+    "result": [
+      1.0,
+      4.824813325674899
+    ],
+    "simulation_time": 1.4936370270377246,
+    "retreat_threshold": 0.6741192739427486
+  },
+  {
+    "result": [
+      1.0,
+      4.860173577627772
+    ],
+    "simulation_time": 1.7125518809502565,
+    "retreat_threshold": 0.06288670901696382
+  },
+  {
+    "result": [
+      1.0,
+      4.639898024219248
+    ],
+    "simulation_time": 2.0971669788588105,
+    "retreat_threshold": 0.5344760379986611
+  },
+  {
+    "result": [
+      1.0,
+      4.159702878365831
+    ],
+    "simulation_time": 0.68290059326616,
+    "retreat_threshold": -0.4714177361372376
+  },
+  {
+    "result": [
+      0.0,
+      0.5181986428130784
+    ],
+    "simulation_time": 0.1210961304450762,
+    "retreat_threshold": 1.2518235320906619
+  },
+  {
+    "result": [
+      1.0,
+      5.069222577209797
+    ],
+    "simulation_time": 1.030312693961289,
+    "retreat_threshold": 0.05076145211516789
+  },
+  {
+    "result": [
+      1.0,
+      3.6639118457300275
+    ],
+    "simulation_time": 1.5222823457399788,
+    "retreat_threshold": 0.7236943049170677
+  },
+  {
+    "result": [
+      0.0,
+      1.552810688177464
+    ],
+    "simulation_time": 3.341544738434086,
+    "retreat_threshold": -0.9995469633108318
+  },
+  {
+    "result": [
+      1.0,
+      5.538461538461538
+    ],
+    "simulation_time": 1.0810223648934023,
+    "retreat_threshold": 0.20151511666466213
+  },
+  {
+    "result": [
+      0.0,
+      1.5068059512503955
+    ],
+    "simulation_time": 0.6816387204268881,
+    "retreat_threshold": -0.3069853007059902
+  },
+  {
+    "result": [
+      1.0,
+      5.2719665271966525
+    ],
+    "simulation_time": 0.8550648529530824,
+    "retreat_threshold": 0.2235175282740065
+  },
+  {
+    "result": [
+      1.0,
+      5.213581599123767
+    ],
+    "simulation_time": 0.9619020571472761,
+    "retreat_threshold": 0.18576467296117233
+  },
+  {
+    "result": [
+      1.0,
+      4.432717678100263
+    ],
+    "simulation_time": 1.420408826976275,
+    "retreat_threshold": 0.4581611792589549
+  },
+  {
+    "result": [
+      1.0,
+      5.185185185185185
+    ],
+    "simulation_time": 1.1845669653633124,
+    "retreat_threshold": -0.07234164972104185
+  },
+  {
+    "result": [
+      1.0,
+      4.2232277526395166
+    ],
+    "simulation_time": 1.0637098348229763,
+    "retreat_threshold": -0.03458879440820768
+  },
+  {
+    "result": [
+      1.0,
+      5.653206650831354
+    ],
+    "simulation_time": 0.7274658978284625,
+    "retreat_threshold": 0.059940577467580566
+  },
+  {
+    "result": [
+      1.0,
+      5.050100200400801
+    ],
+    "simulation_time": 0.8541781002331426,
+    "retreat_threshold": 0.2745719833505298
+  },
+  {
+    "result": [
+      1.0,
+      4.8789932236205225
+    ],
+    "simulation_time": 0.7519756510646689,
+    "retreat_threshold": -0.09768288420286697
+  },
+  {
+    "result": [
+      1.0,
+      5.09090909090909
+    ],
+    "simulation_time": 1.1476574269900663,
+    "retreat_threshold": 0.2930717875460081
+  },
+  {
+    "result": [
+      1.0,
+      5.1072961373390555
+    ],
+    "simulation_time": 0.9951544223658956,
+    "retreat_threshold": 0.0784403816630589
+  },
+  {
+    "result": [
+      1.0,
+      5.27306967984934
+    ],
+    "simulation_time": 1.1158895639188127,
+    "retreat_threshold": 0.45069524921645565
+  },
+  {
+    "result": [
+      1.0,
+      5.219298245614035
+    ],
+    "simulation_time": 0.607438751669352,
+    "retreat_threshold": 0.046758521457699515
+  },
+  {
+    "result": [
+      1.0,
+      3.4793982995421846
+    ],
+    "simulation_time": 0.6811966763628519,
+    "retreat_threshold": 0.4974422969982978
+  },
+  {
+    "result": [
+      1.0,
+      5.626477541371158
+    ],
+    "simulation_time": 0.6099056104719284,
+    "retreat_threshold": 0.21578736469461862
+  },
+  {
+    "result": [
+      1.0,
+      5.454545454545454
+    ],
+    "simulation_time": 1.1775127266238046,
+    "retreat_threshold": 0.30646284382856437
+  },
+  {
+    "result": [
+      1.0,
+      4.460176991150442
+    ],
+    "simulation_time": 1.072598400013894,
+    "retreat_threshold": -0.14422093171203387
+  },
+  {
+    "result": [
+      1.0,
+      5.550660792951541
+    ],
+    "simulation_time": 1.1737719185773388,
+    "retreat_threshold": 0.1374340005916453
+  },
+  {
+    "result": [
+      1.0,
+      4.4799999999999995
+    ],
+    "simulation_time": 0.533950417947351,
+    "retreat_threshold": 0.020073942436701492
+  },
+  {
+    "result": [
+      1.0,
+      5.026929982046679
+    ],
+    "simulation_time": 0.6472868289581278,
+    "retreat_threshold": 0.4285409492108735
+  },
+  {
+    "result": [
+      1.0,
+      5.373134328358209
+    ],
+    "simulation_time": 0.5515352685979026,
+    "retreat_threshold": 0.26442818121551886
+  },
+  {
+    "result": [
+      1.0,
+      5.255474452554744
+    ],
+    "simulation_time": 1.1795731392749755,
+    "retreat_threshold": 0.3876535290492722
+  },
+  {
+    "result": [
+      1.0,
+      5.185185185185185
+    ],
+    "simulation_time": 1.0102904068588656,
+    "retreat_threshold": -0.02081347772489983
+  },
+  {
+    "result": [
+      1.0,
+      5.653560042507969
+    ],
+    "simulation_time": 1.1506822474819072,
+    "retreat_threshold": 0.1432992902704548
+  },
+  {
+    "result": [
+      1.0,
+      5.1795429815016325
+    ],
+    "simulation_time": 0.9141772966271731,
+    "retreat_threshold": 0.049433118418619415
+  },
+  {
+    "result": [
+      1.0,
+      4.720496894409938
+    ],
+    "simulation_time": 0.8510611782865478,
+    "retreat_threshold": 0.2393994193016405
+  },
+  {
+    "result": [
+      1.0,
+      5.3907134767836915
+    ],
+    "simulation_time": 0.8355024390079114,
+    "retreat_threshold": 0.26675973343899917
+  },
+  {
+    "result": [
+      1.0,
+      5.477560414269274
+    ],
+    "simulation_time": 0.9853931471998375,
+    "retreat_threshold": 0.3674978893316575
+  },
+  {
+    "result": [
+      1.0,
+      4.666666666666667
+    ],
+    "simulation_time": 1.054221513415109,
+    "retreat_threshold": 0.17753158844863642
+  },
+  {
+    "result": [
+      1.0,
+      5.203252032520325
+    ],
+    "simulation_time": 1.0720998905464096,
+    "retreat_threshold": 0.15017127431127775
+  },
+  {
+    "result": [
+      1.0,
+      5.402951191827468
+    ],
+    "simulation_time": 0.8562962301205059,
+    "retreat_threshold": 0.3922624545646539
+  },
+  {
+    "result": [
+      1.0,
+      5.369127516778524
+    ],
+    "simulation_time": 1.1763906465564091,
+    "retreat_threshold": 0.44700238593170405
+  },
+  {
+    "result": [
+      1.0,
+      5.0587172538392045
+    ],
+    "simulation_time": 0.8540511622534226,
+    "retreat_threshold": 0.33992337666963907
+  },
+  {
+    "result": [
+      1.0,
+      4.99009900990099
+    ],
+    "simulation_time": 1.04952020866623,
+    "retreat_threshold": 0.2309120918235994
+  },
+  {
+    "result": [
+      1.0,
+      4.792792792792793
+    ],
+    "simulation_time": 0.7519258239736339,
+    "retreat_threshold": 0.17617216045654924
+  },
+  {
+    "result": [
+      1.0,
+      4.932642487046632
+    ],
+    "simulation_time": 1.052060358835166,
+    "retreat_threshold": 0.28325116971861425
+  },
+  {
+    "result": [
+      1.0,
+      4.8144796380090495
+    ],
+    "simulation_time": 0.8569052654908456,
+    "retreat_threshold": 0.5618788067675597
+  },
+  {
+    "result": [
+      1.0,
+      5.448648648648648
+    ],
+    "simulation_time": 1.182559309142401,
+    "retreat_threshold": 0.4321030956460928
+  },
+  {
+    "result": [
+      1.0,
+      4.455051710421639
+    ],
+    "simulation_time": 0.8055249865519316,
+    "retreat_threshold": 0.5718400801340737
+  },
+  {
+    "result": [
+      1.0,
+      5.067873303167421
+    ],
+    "simulation_time": 1.0353575927189473,
+    "retreat_threshold": 0.24198249405285827
+  },
+  {
+    "result": [
+      1.0,
+      5.293532338308458
+    ],
+    "simulation_time": 0.7363251880885558,
+    "retreat_threshold": 0.3717582051743253
+  },
+  {
+    "result": [
+      1.0,
+      5.361702127659575
+    ],
+    "simulation_time": 1.0950110724826958,
+    "retreat_threshold": 0.23202122068634434
+  },
+  {
+    "result": [
+      1.0,
+      5.8397365532381995
+    ],
+    "simulation_time": 0.9043288231112878,
+    "retreat_threshold": 0.352155344342444
+  },
+  {
+    "result": [
+      1.0,
+      4.783180026281209
+    ],
+    "simulation_time": 0.9439742739026268,
+    "retreat_threshold": 0.6914485305993245
+  },
+  {
+    "result": [
+      1.0,
+      5.228215767634854
+    ],
+    "simulation_time": 1.0421675060309825,
+    "retreat_threshold": 0.3088320160656826
+  },
+  {
+    "result": [
+      1.0,
+      5.915492957746479
+    ],
+    "simulation_time": 1.3091077801649713,
+    "retreat_threshold": 0.3802061644577064
+  },
+  {
+    "result": [
+      1.0,
+      5.085470085470085
+    ],
+    "simulation_time": 1.2615523971933402,
+    "retreat_threshold": 0.040912978200825845
+  },
+  {
+    "result": [
+      1.0,
+      5.372217958557175
+    ],
+    "simulation_time": 1.1522235968854866,
+    "retreat_threshold": 0.42352949273446777
+  },
+  {
+    "result": [
+      1.0,
+      5.450819672131147
+    ],
+    "simulation_time": 1.0209778055441134,
+    "retreat_threshold": 0.34600633727320956
+  },
+  {
+    "result": [
+      1.0,
+      5.41586073500967
+    ],
+    "simulation_time": 0.9937209916923038,
+    "retreat_threshold": 0.555440864371672
+  },
+  {
+    "result": [
+      1.0,
+      5.631284916201117
+    ],
+    "simulation_time": 1.158784331651546,
+    "retreat_threshold": 0.4020285651042789
+  },
+  {
+    "result": [
+      1.0,
+      5.828274067649609
+    ],
+    "simulation_time": 1.3160610457097666,
+    "retreat_threshold": 0.4085085370526326
+  },
+  {
+    "result": [
+      1.0,
+      5.6599286563614735
+    ],
+    "simulation_time": 1.347663470786954,
+    "retreat_threshold": 0.19907400995417024
+  },
+  {
+    "result": [
+      1.0,
+      4.749787955894826
+    ],
+    "simulation_time": 1.168369431339192,
+    "retreat_threshold": 0.35248630922156327
+  },
+  {
+    "result": [
+      1.0,
+      5.460455037919826
+    ],
+    "simulation_time": 1.100666184539454,
+    "retreat_threshold": 0.2813835328057722
+  },
+  {
+    "result": [
+      1.0,
+      4.784688995215311
+    ],
+    "simulation_time": 0.9116471101580889,
+    "retreat_threshold": 0.6459503751291071
+  }
+]

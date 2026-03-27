@@ -18,7 +18,7 @@ Example:
 
     opt = Optimizer(
         Params,
-        OptimizerSettings(population_size=32, minimize=True),
+        OptimizerSettings(batch_size=32, minimize=True),
     )
 
     for _ in range(100):

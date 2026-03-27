@@ -34,7 +34,7 @@ def test_schema_state_is_human_readable_parameter_specs() -> None:
         beta=Parameter(mean=2.0, scale=3.0, min=0.0),
         gamma=Parameter(scale=1.0, min=0.0, max=1.0),
     )
-    state = _initialized_state(schema, population_size=4)
+    state = _initialized_state(schema, batch_size=4)
 
     assert _read_schema(state) == {
         "alpha": _parameter_spec(mean=1.5, scale=0.25, max=3.0),
@@ -45,7 +45,7 @@ def test_schema_state_is_human_readable_parameter_specs() -> None:
 
 def test_load_reconciles_added_and_removed_parameters() -> None:
     base_schema = _make_identity_schema("BaseSchema", x=(2.0, 1.5), y=(-1.0, 0.7))
-    base = _optimizer(base_schema, population_size=4)
+    base = _optimizer(base_schema, batch_size=4)
 
     for _ in range(5):
         params = base.ask()
@@ -60,7 +60,7 @@ def test_load_reconciles_added_and_removed_parameters() -> None:
     assert any(result is not None for result in base_results)
 
     added_schema = _make_identity_schema("AddedSchema", x=(2.0, 1.5), y=(-1.0, 0.7), z=(3.0, 2.0))
-    added = _optimizer(added_schema, population_size=4)
+    added = _optimizer(added_schema, batch_size=4)
     load_result = added.load(base_state)
     assert load_result == SchemaDiff(added=["z"], removed=[], changed=[], unchanged=["x", "y"])
 
@@ -95,7 +95,7 @@ def test_load_reconciles_added_and_removed_parameters() -> None:
     assert any(result is not None for result in added_results)
 
     removed_schema = _make_identity_schema("RemovedSchema", x=(2.0, 1.5), y=(-1.0, 0.7))
-    removed = _optimizer(removed_schema, population_size=4)
+    removed = _optimizer(removed_schema, batch_size=4)
     load_result = removed.load(added_partial_state)
     assert load_result == SchemaDiff(added=[], removed=["z"], changed=[], unchanged=["x", "y"])
 
@@ -114,7 +114,7 @@ def test_load_reconciles_bounds_changes_and_selectively_preserves_batch() -> Non
         x=Parameter(mean=0.25, scale=1.0, min=0.0),
         y=Parameter(mean=-1.0, scale=0.7),
     )
-    base = _optimizer(base_schema, population_size=4)
+    base = _optimizer(base_schema, batch_size=4)
 
     for _ in range(5):
         params = base.ask()
@@ -140,12 +140,12 @@ def test_load_reconciles_bounds_changes_and_selectively_preserves_batch() -> Non
         x=Parameter(mean=0.25, scale=1.0, min=0.0, max=1.0),
         y=Parameter(mean=-1.0, scale=0.7),
     )
-    changed = _optimizer(changed_schema, population_size=4)
+    changed = _optimizer(changed_schema, batch_size=4)
     load_result = changed.load(base_state)
     assert load_result == SchemaDiff(added=[], removed=[], changed=["x"], unchanged=["y"])
 
     changed_state = changed.save()
-    fresh_state = _initialized_state(changed_schema, population_size=4)
+    fresh_state = _initialized_state(changed_schema, batch_size=4)
     changed_mean = _read_mean(changed_state)
     changed_scale = _read_scale(changed_state)
     changed_batch = _read_batch(changed_state)
@@ -170,14 +170,14 @@ def test_load_reconciles_bounds_changes_and_selectively_preserves_batch() -> Non
 
 def test_mean_and_scale_changes_do_not_trigger_schema_changeover() -> None:
     base_schema = _make_identity_schema("StrictBase", x=(2.0, 1.5), y=(-1.0, 0.5))
-    base_state = _initialized_state(base_schema, population_size=4)
+    base_state = _initialized_state(base_schema, batch_size=4)
 
     changed_schema = _make_schema(
         "StrictChanged",
         x=Parameter(mean=4.0, scale=1.5),
         y=Parameter(mean=-1.0, scale=2.0),
     )
-    changed = _optimizer(changed_schema, population_size=4)
+    changed = _optimizer(changed_schema, batch_size=4)
     load_result = changed.load(base_state)
     assert load_result == SchemaDiff(added=[], removed=[], changed=[], unchanged=["x", "y"])
 
@@ -206,8 +206,8 @@ def test_schema_order_follows_dataclass_field_traversal() -> None:
         alpha=Parameter(mean=1.0, scale=2.0),
     )
 
-    state_first = _initialized_optimizer(first_schema, population_size=18).save()
-    state_second = _initialized_optimizer(second_schema, population_size=18).save()
+    state_first = _initialized_optimizer(first_schema, batch_size=18).save()
+    state_second = _initialized_optimizer(second_schema, batch_size=18).save()
 
     first_names = _read_schema_names(state_first)
     second_names = _read_schema_names(state_second)
@@ -247,7 +247,7 @@ def test_nested_schema_flattens_leaf_names_and_rebuilds_dataclasses() -> None:
     )
 
     expected_names = ["mining.gas_priority", "alpha", "combat.retreat_threshold", "combat.attack_threshold"]
-    optimizer = _optimizer(schema, population_size=6)
+    optimizer = _optimizer(schema, batch_size=6)
     assert _read_schema_names(optimizer.save()) == expected_names
 
     mean = optimizer.mean
@@ -273,7 +273,7 @@ def test_nested_schema_flattens_leaf_names_and_rebuilds_dataclasses() -> None:
     assert params.combat.__class__ is combat
     assert params.mining.__class__ is mining
     assert isinstance(params.alpha, float)
-    assert isinstance(params.combat.attack_threshold, float)
+    assert isinstance(params.combat.retreat_threshold, float)
     assert isinstance(params.mining.gas_priority, float)
     assert params.combat.attack_threshold > 0.0
     assert 0.0 < params.mining.gas_priority < 1.0
@@ -293,7 +293,7 @@ def test_nested_mapping_schema_flattens_leaf_names_and_rebuilds_plain_dicts() ->
     }
 
     expected_names = ["mining.gas_priority", "alpha", "combat.retreat_threshold", "combat.attack_threshold"]
-    optimizer = _initialized_optimizer(schema, population_size=6)
+    optimizer = _initialized_optimizer(schema, batch_size=6)
     assert _read_schema_names(optimizer.save()) == expected_names
 
     mean = optimizer.mean
@@ -338,8 +338,8 @@ def test_mapping_schema_order_follows_traversal_and_respects_insertion_order() -
         alpha=Parameter(mean=1.0, scale=2.0),
     )
 
-    state_first = _initialized_optimizer(first_schema, population_size=18).save()
-    state_second = _initialized_optimizer(second_schema, population_size=18).save()
+    state_first = _initialized_optimizer(first_schema, batch_size=18).save()
+    state_second = _initialized_optimizer(second_schema, batch_size=18).save()
 
     first_names = _read_schema_names(state_first)
     second_names = _read_schema_names(state_second)
@@ -358,7 +358,7 @@ def test_mapping_schema_state_save_load_roundtrip() -> None:
             "alpha": Parameter(mean=2.0, scale=1.5),
         },
     }
-    opt_a = _optimizer(schema_a, population_size=20)
+    opt_a = _optimizer(schema_a, batch_size=20)
 
     for _ in range(37):
         params = opt_a.ask()
@@ -374,7 +374,7 @@ def test_mapping_schema_state_save_load_roundtrip() -> None:
         },
         "beta": Parameter(mean=-1.0, scale=2.0),
     }
-    opt_b = _optimizer(schema_b, population_size=20)
+    opt_b = _optimizer(schema_b, batch_size=20)
     load_result = opt_b.load(state)
     assert load_result == SchemaDiff(added=[], removed=[], changed=[], unchanged=["block.alpha", "beta"])
 
@@ -433,7 +433,7 @@ def test_omitted_mean_uses_canonical_latent_zero_center() -> None:
         upper=Parameter(max=5.0),
         interval=Parameter(min=2.0, max=6.0),
     )
-    optimizer = _initialized_optimizer(schema, population_size=6)
+    optimizer = _initialized_optimizer(schema, batch_size=6)
 
     state = optimizer.save()
     assert _read_schema(state) == {
@@ -462,7 +462,7 @@ def test_legacy_parameter_constructors_are_not_exposed() -> None:
 
 def test_ask_returns_typed_sample() -> None:
     schema = _make_identity_schema("TypedSample", b=(2.0, 1.0), a=(-1.0, 1.0))
-    params = _initialized_optimizer(schema, population_size=6).ask()
+    params = _initialized_optimizer(schema, batch_size=6).ask()
 
     assert params.__class__ is schema
     assert isinstance(params.a, float)
@@ -475,7 +475,7 @@ def test_mean_returns_current_user_space_means_without_context() -> None:
         b=Parameter(scale=1.0, min=0.0, max=1.0),
         a=Parameter(scale=1.0, min=-2.0),
     )
-    optimizer = _initialized_optimizer(schema, population_size=6)
+    optimizer = _initialized_optimizer(schema, batch_size=6)
 
     mean = optimizer.mean
     assert mean.__class__ is schema
@@ -491,7 +491,7 @@ def test_transformed_parameters_use_latent_state_but_emit_user_space_values() ->
         c=Parameter(mean=3.0, scale=1.0, min=0.0),
         d=Parameter(mean=3.0, scale=1.0, max=4.0),
     )
-    optimizer = _optimizer(schema, population_size=6)
+    optimizer = _optimizer(schema, batch_size=6)
 
     state = optimizer.save()
     expected_latent_mean = np.array(
@@ -518,7 +518,7 @@ def test_transformed_parameters_use_latent_state_but_emit_user_space_values() ->
         assert params.d < 4.0
         optimizer.tell(0.0)
 
-    reloaded = _optimizer(schema, population_size=6)
+    reloaded = _optimizer(schema, batch_size=6)
     reloaded.load(state)
     reloaded_mean = reloaded.mean
     assert reloaded_mean.a == pytest.approx(mean.a)

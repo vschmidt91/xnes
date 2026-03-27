@@ -16,7 +16,7 @@ from ._optimizer_helpers import (
 
 def test_context_reuses_mirror_on_repeat() -> None:
     schema = _make_identity_schema("ContextParams", x=(0.0, 1.0), y=(0.0, 1.0))
-    optimizer = _initialized_optimizer(schema, population_size=4)
+    optimizer = _initialized_optimizer(schema, batch_size=4)
     context = "arena:zerg"
 
     first_params = optimizer.ask(context=context)
@@ -34,7 +34,7 @@ def test_context_reuses_mirror_on_repeat() -> None:
 
 def test_json_context_reuses_mirror_on_canonical_repeat() -> None:
     schema = _make_identity_schema("JsonContextParams", x=(0.0, 1.0), y=(0.0, 1.0))
-    optimizer = _initialized_optimizer(schema, population_size=4)
+    optimizer = _initialized_optimizer(schema, batch_size=4)
 
     first_params = optimizer.ask(context={"b": 2, "a": 1})
     first = np.array([first_params.x, first_params.y], dtype=float)
@@ -51,7 +51,7 @@ def test_json_context_reuses_mirror_on_canonical_repeat() -> None:
 
 def test_json_context_is_persisted_as_a_json_string_key() -> None:
     schema = _make_identity_schema("SavedJsonContext", x=(0.0, 1.0))
-    optimizer = _initialized_optimizer(schema, population_size=4)
+    optimizer = _initialized_optimizer(schema, batch_size=4)
 
     optimizer.ask(context={"b": 2, "a": 1})
     optimizer.tell(1.0)
@@ -64,7 +64,7 @@ def test_json_context_is_persisted_as_a_json_string_key() -> None:
 
 def test_pending_context_matches_is_cleared_when_mirror_is_taken_without_match() -> None:
     schema = _make_identity_schema("StaleContextPending", x=(0.0, 1.0), y=(0.0, 1.0))
-    optimizer = _initialized_optimizer(schema, population_size=4)
+    optimizer = _initialized_optimizer(schema, batch_size=4)
 
     optimizer.ask(context="arena:zerg")
     optimizer.tell(1.0)
@@ -83,7 +83,7 @@ def test_ask_rejects_non_json_context() -> None:
         pass
 
     schema = _make_identity_schema("OpaqueContext", x=(0.0, 1.0))
-    optimizer = _initialized_optimizer(schema, population_size=4)
+    optimizer = _initialized_optimizer(schema, batch_size=4)
 
     with pytest.raises(TypeError, match="JSON-serializable"):
         optimizer.ask(context=cast(Any, Opaque()))
@@ -94,7 +94,7 @@ def test_ask_rejects_non_json_context() -> None:
 
 def test_serial_ask_raises_when_a_sample_is_pending() -> None:
     schema = _make_identity_schema("PendingSerialAsk", x=(0.0, 1.0))
-    optimizer = _initialized_optimizer(schema, population_size=4)
+    optimizer = _initialized_optimizer(schema, batch_size=4)
 
     optimizer.ask()
 
@@ -104,7 +104,7 @@ def test_serial_ask_raises_when_a_sample_is_pending() -> None:
 
 def test_tell_raises_without_pending_ask() -> None:
     schema = _make_identity_schema("NoPendingTell", x=(0.0, 1.0))
-    optimizer = _initialized_optimizer(schema, population_size=4)
+    optimizer = _initialized_optimizer(schema, batch_size=4)
 
     with pytest.raises(RuntimeError, match="No pending ask"):
         optimizer.tell(0.0)

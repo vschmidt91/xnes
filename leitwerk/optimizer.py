@@ -23,7 +23,7 @@ class OptimizerSettings:
     """Runtime optimizer configuration.
 
     Attributes:
-        population_size: Optional batch-size override. `None` keeps the persisted
+        batch_size: Optional batch-size override. `None` keeps the persisted
             baseline or the built-in xNES sample-count default.
         seed: Optional root seed override used to deterministically derive each
             freshly sampled batch.
@@ -37,7 +37,7 @@ class OptimizerSettings:
             the persisted baseline or the xNES default.
     """
 
-    population_size: int | None = None
+    batch_size: int | None = None
     seed: int | None = None
     minimize: bool | None = None
     eta_mean: float | None = None
@@ -263,7 +263,7 @@ class Optimizer(Generic[T]):
 
     def _sample_batch(self) -> None:
         settings = self.settings
-        batch = self._xnes.sample(settings.population_size, self._batch_rng())
+        batch = self._xnes.sample(settings.batch_size, self._batch_rng())
         self._pending_reservation = None
         self._batch_state.reset(batch)
 

@@ -1,0 +1,9 @@
+services:
+  train-sc2-bot:
+    build:
+      context: ..
+      dockerfile: examples/Dockerfile
+    volumes:
+      - ..:/workspace
+      - ./data:/workspace/examples/data
+      - ./maps:/workspace/examples/maps

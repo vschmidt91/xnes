@@ -24,7 +24,7 @@ def test_optimizer_improves_sphere() -> None:
         init_mean=3.0,
         init_scale=2.0,
         dim=4,
-        population_size=28,
+        batch_size=28,
         evaluations=1400,
     )
     assert final < 0.15 * initial
@@ -39,7 +39,7 @@ def test_optimizer_improves_sphere_in_minimization_mode() -> None:
         init_mean=3.0,
         init_scale=2.0,
         dim=4,
-        population_size=28,
+        batch_size=28,
         evaluations=1400,
         minimize=True,
     )
@@ -48,13 +48,13 @@ def test_optimizer_improves_sphere_in_minimization_mode() -> None:
 
 def test_restart_on_conditioning_failure() -> None:
     schema = _make_identity_schema("RestartSchema", x=(0.0, 1.0), y=(0.0, 1.0))
-    optimizer = _initialized_optimizer(schema, population_size=10)
+    optimizer = _initialized_optimizer(schema, batch_size=10)
 
     state = optimizer.save()
     assert isinstance(state, dict)
     state["scale"] = [[1e-10, 0.0], [0.0, 1e10]]
 
-    restored = _optimizer(schema, population_size=10)
+    restored = _optimizer(schema, batch_size=10)
     restored.load(state)
 
     for _ in range(10):
@@ -70,7 +70,7 @@ def test_successful_termination_restarts_from_final_mean_with_fresh_scale(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     schema = _make_identity_schema("RestartSuccess", x=(2.0, 1.5), y=(-1.0, 0.7))
-    optimizer = _initialized_optimizer(schema, population_size=4)
+    optimizer = _initialized_optimizer(schema, batch_size=4)
     final_mean = np.array([4.25, -3.5])
 
     def fake_update(samples: np.ndarray, ranking: list[int]) -> XNESStatus:
@@ -107,7 +107,7 @@ def test_successful_termination_restarts_from_final_mean_with_fresh_scale(
 
 def test_failed_termination_restarts_from_schema_mean_with_fresh_scale(monkeypatch: pytest.MonkeyPatch) -> None:
     schema = _make_identity_schema("RestartFailure", x=(2.0, 1.5), y=(-1.0, 0.7))
-    optimizer = _initialized_optimizer(schema, population_size=4)
+    optimizer = _initialized_optimizer(schema, batch_size=4)
 
     def fake_update(samples: np.ndarray, ranking: list[int]) -> XNESStatus:
         del samples, ranking

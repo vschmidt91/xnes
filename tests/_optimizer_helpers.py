@@ -35,16 +35,16 @@ def _make_mapping_schema(**parameters: object) -> dict[str, object]:
 def _initialized_optimizer(
     schema: type[Any] | Mapping[str, object],
     *,
-    population_size: int,
+    batch_size: int,
     minimize: bool | None = None,
 ) -> Optimizer[Any]:
-    return _optimizer(schema, population_size=population_size, minimize=minimize)
+    return _optimizer(schema, batch_size=batch_size, minimize=minimize)
 
 
 def _optimizer(
     schema: type[Any] | Mapping[str, object],
     *,
-    population_size: int | None = None,
+    batch_size: int | None = None,
     seed: int | None = _TEST_SEED,
     minimize: bool | None = None,
     eta_mean: float | None = None,
@@ -54,7 +54,7 @@ def _optimizer(
     return Optimizer(
         schema,
         settings=OptimizerSettings(
-            population_size=population_size,
+            batch_size=batch_size,
             seed=seed,
             minimize=minimize,
             eta_mean=eta_mean,
@@ -64,8 +64,8 @@ def _optimizer(
     )
 
 
-def _initialized_state(schema: type[Any] | Mapping[str, object], *, population_size: int) -> JSONObject:
-    state = _initialized_optimizer(schema, population_size=population_size).save()
+def _initialized_state(schema: type[Any] | Mapping[str, object], *, batch_size: int) -> JSONObject:
+    state = _initialized_optimizer(schema, batch_size=batch_size).save()
     assert isinstance(state, dict)
     return state
 
@@ -144,14 +144,14 @@ def _read_settings(state: object) -> dict[str, int | float | bool | None]:
     assert isinstance(state, dict)
     settings_json = state["settings"]
     assert isinstance(settings_json, Mapping)
-    population_size = settings_json["population_size"]
+    batch_size = settings_json["batch_size"]
     seed = settings_json["seed"]
     minimize = settings_json["minimize"]
     eta_mean = settings_json["eta_mean"]
     eta_scale_global = settings_json["eta_scale_global"]
     eta_scale_shape = settings_json["eta_scale_shape"]
     return {
-        "population_size": None if population_size is None else int(population_size),
+        "batch_size": None if batch_size is None else int(batch_size),
         "seed": None if seed is None else int(seed),
         "minimize": None if minimize is None else bool(minimize),
         "eta_mean": None if eta_mean is None else float(eta_mean),
@@ -188,7 +188,7 @@ def _assert_same_settings(
     expected: dict[str, int | float | bool | None],
 ) -> None:
     assert actual.keys() == expected.keys()
-    for key in ("population_size", "seed", "minimize"):
+    for key in ("batch_size", "seed", "minimize"):
         assert actual[key] == expected[key]
     for key in ("eta_mean", "eta_scale_global", "eta_scale_shape"):
         if expected[key] is None:
@@ -207,7 +207,7 @@ def _run_function_optimization(
     init_mean: float,
     init_scale: float,
     dim: int,
-    population_size: int,
+    batch_size: int,
     evaluations: int,
     minimize: bool = False,
 ) -> tuple[float, float]:
@@ -215,7 +215,7 @@ def _run_function_optimization(
         "SphereParams",
         **{f"x{i}": (init_mean, init_scale) for i in range(dim)},
     )
-    optimizer = _optimizer(schema, population_size=population_size, minimize=minimize)
+    optimizer = _optimizer(schema, batch_size=batch_size, minimize=minimize)
 
     initial_mean = _read_mean(optimizer.save())
     initial_value = objective(initial_mean)

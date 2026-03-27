@@ -2,38 +2,61 @@
 
 ## What happens when the schema changes?
 
-`leitwerk` keeps learned state for parameters that still match and resets only
-what changed.
+`leitwerk` keeps learned state for parameters that still match and resets only what changed:
 
 - parameters are identified by flattened names
 - renaming a parameter resets that parameter
 - changing `min` or `max` resets that parameter
 - changing `mean` or `scale` changes the reset target, but does not force a reset
-- adding or removing parameters does not reset the whole optimizer
+- adding or removing parameters does not reset the others
 
-If you use `OptimizerSession`, inspect `schema_diff` after loading to see what
-changed.
+`Optimizer.load()` and `OptimizerSession.schema_diff` report what changed as a `SchemaDiff`.
+
+## What context should I provide?
+
+If you are unsure what this does, provide none.
+
+`leitwerk` creates samples in mirrored pairs, which is a stabilizing technique to keep the gradient estimate centered.
+`ask(context=...)` lets both sides of the pair get evaluated in the same environment when possible.
+Context values are matched by exact equality after JSON normalization.
+
+For SC2 bots, useful contexts include:
+
+- opponent race (consider delaying `ask` until scouting)
+- own race (for random bots)
+- map name
+- opponent id
+
+`batch_size` should be tuned together with the number of contexts you expect:
+
+- if batches are too small to encounter repeated contexts, matches will be rare
+- rule of thumb: `batch_size` >= 2 #{distinct contexts per batch}
+
 
 ## How should I choose the objective?
 
-The objective usually matters more than the optimizer.
+For effective training, defining the objective matters more than the optimizer.
 
-- put the real target first
-- use later tuple items as deterministic tie-breakers
-- keep objective semantics stable across long runs
+- put the primary objective first
+- add tie-breakers for additional gradient information
+- this is an encoding helper, not multi-objective / pareto optimization
+- only relative ranking matters, not absolute numeric values
+- changing objectives mid-flight will leave the current batch with mixed signals
 - split genuinely different goals into separate optimizers
-
-This is lexicographic ranking, not Pareto optimization.
 
 ## How does the optimizer work?
 
-`leitwerk` uses a canonical xNES update underneath the schema wrapper. It
-samples candidates from a multivariate normal, ranks them by result, and updates
-the mean and scale with a natural-gradient step. Sampling is mirrored to reduce
-noise, and `ask(context=...)` helps mirrored pairs stay aligned in stateful
-environments.
+`leitwerk` provides a canonical xNES implementation.
+Parameters are modeled as a multivariate normal distribution that is updated with natural-gradient steps.
+The covariance matrix is estimated densely, initialization is diagonal.
+Samples are generated with mirrored-orthogonal sampling for variance reduction.
 
-For background on the update rule and the variance-reduction ideas, see:
+Bounds are modeled as latent normals with smooth bijective activations:
+
+- one-sided (`min` or `max`): affine-transformed soft-plus
+- two-sided (`min` and `max`): affine-transformed sigmoid
+
+Reference Papers:
 
 - [Exponential Natural Evolution Strategies](https://people.idsia.ch/~tom/publications/xnes.pdf)
 - [Mirrored Orthogonal Sampling with Pairwise Selection in Evolution Strategies](https://www.researchgate.net/publication/266087889_Mirrored_Orthogonal_Sampling_with_Pairwise_Selection_in_Evolution_Strategies)

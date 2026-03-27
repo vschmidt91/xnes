@@ -114,7 +114,7 @@ def _deserialize_settings(settings_json: object) -> OptimizerSettings:
 
     settings = cast(Mapping[str, JSONScalar], _require_object(settings_json, "checkpoint settings"))
     return OptimizerSettings(
-        population_size=cast(int | None, settings.get("population_size")),
+        batch_size=cast(int | None, settings.get("batch_size")),
         seed=cast(int | None, settings.get("seed")),
         minimize=cast(bool | None, settings.get("minimize")),
         eta_mean=cast(float | None, settings.get("eta_mean")),
