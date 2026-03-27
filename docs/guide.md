@@ -144,7 +144,7 @@ Result handling:
 
 - `opt.tell((a, b, c))` ranks results lexicographically with higher = better
 - the first item is the main objective, later items are tie-breakers
-- maximize by default, flip the sign for loss objectives
+- default is maximization, flip the sign for loss objectives
 
 
 !!! question
