@@ -42,16 +42,13 @@ class LearningBot(BotAI):
         logger.info(self.optimizer.schema_diff)
 
     async def on_step(self, iteration: int) -> None:
-
-        # early resign for faster training
         if self.supply_used == 0:
+            # resign for faster training
             logger.info("Resigning")
             await self.client.leave()
             return
-
         mineral_patch = self.mineral_field.closest_to(self.start_location)
         simulation = simulate_combat(self.workers | self.enemy_units, self.params.simulation_time)
-
         for worker in self.workers:
             if simulation[worker] < self.params.retreat_threshold:
                 worker.gather(mineral_patch)
