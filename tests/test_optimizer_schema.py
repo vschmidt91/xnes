@@ -5,7 +5,7 @@ from typing import Annotated, cast
 
 import numpy as np
 import pytest
-from leitwerk import Optimizer, Parameter, SchemaDiff
+from leitwerk import Optimizer, Parameter, SchemaDiff, parameter
 
 from ._optimizer_helpers import (
     _initialized_optimizer,
@@ -280,6 +280,21 @@ def test_nested_schema_flattens_leaf_names_and_rebuilds_dataclasses() -> None:
     assert params.alpha < 3.0
 
 
+def test_parameter_helper_builds_dataclass_fields() -> None:
+    schema = make_dataclass(
+        "HelperParameters",
+        [
+            ("x", float, parameter(mean=1.0, scale=0.5, min=0.0)),
+            ("y", float, parameter(max=2.0)),
+        ],
+        frozen=True,
+        slots=True,
+    )
+
+    optimizer = _optimizer(schema, batch_size=4)
+    assert _read_schema_names(optimizer.save()) == ["x", "y"]
+
+
 def test_nested_mapping_schema_flattens_leaf_names_and_rebuilds_plain_dicts() -> None:
     schema = {
         "mining": {
@@ -404,7 +419,14 @@ def test_mapping_schema_rejects_branch_name_shadowing() -> None:
 def test_schema_requires_parameter_annotated_float_fields() -> None:
     bad_schema = make_dataclass("BadSchema", [("x", float)], frozen=True, slots=True)
 
-    with pytest.raises(TypeError, match=r"Annotated\[float, Parameter"):
+    with pytest.raises(TypeError, match=r"float = parameter\(\.\.\.\)|Annotated\[float, Parameter"):
+        Optimizer(bad_schema)
+
+
+def test_schema_requires_float_fields_for_parameter_helper() -> None:
+    bad_schema = make_dataclass("BadHelperSchema", [("x", int, parameter())], frozen=True, slots=True)
+
+    with pytest.raises(TypeError, match=r"annotated as float when using parameter\(\.\.\.\)"):
         Optimizer(bad_schema)
 
 
