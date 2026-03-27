@@ -60,7 +60,7 @@ Everything else is wrapping for easier representation, bounds, typing and persis
 
 ## Example - StarCraft II Bot
 
-For a real training loop showcasing most features, see [examples/train_sc2_bot.py](https://raw.githubusercontent.com/phantomsc2/leitwerk/main/examples/train_sc2_bot.py):
+For a real training loop showcasing most features, see [examples/train_sc2_bot.py](https://github.com/phantomsc2/leitwerk/blob/main/examples/train_sc2_bot.py):
 
 - a simple worker rush bot with two parameters
 - runs games continually against the built-in AI
