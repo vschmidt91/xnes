@@ -2,7 +2,7 @@
 
 ## 1. Generality
 
-Black box optimization is fundamentally domain-agnostic:
+Black-box optimization is fundamentally domain-agnostic:
 numbers go in, results come out, with no assumptions about what happens in between.
 Evolutionary strategies are specifically designed for settings that are:
 

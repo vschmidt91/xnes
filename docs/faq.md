@@ -38,7 +38,7 @@ For effective training, defining the objective matters more than the optimizer.
 
 - put the primary objective first
 - add tie-breakers for additional gradient information
-- this is an encoding helper, not multi-objective / pareto optimization
+- this is an encoding helper, not multi-objective / Pareto optimization
 - only relative ranking matters, not absolute numeric values
 - changing objectives mid-flight will leave the current batch with mixed signals
 - split genuinely different goals into separate optimizers

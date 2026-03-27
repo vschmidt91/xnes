@@ -71,7 +71,7 @@ Run it directly if you want to observe the games:
 python examples/train_sc2_bot.py
 ```
 
-Alternatively for the headless Docker setup:
+Alternatively, use the headless Docker setup:
 
 ```sh
 cd examples
