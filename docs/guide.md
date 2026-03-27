@@ -126,25 +126,25 @@ params = opt.ask(context)
 
 *~ Landing ~*
 
-After evaluation, encode the outcome as a scalar or tuple:
+After evaluation, encode the outcome as one or more scalars:
 
 ```py
 result = +1 if win else 0
 report = opt.tell(result)
 ```
 
-Binary results carry little information and can slow down training.
-It is usually better to provide additional tie-breakers:
+Binary win/loss alone tends to have little gradient to learn from.
+Add smooth tie-breakers when possible:
 
 ```py
-report = opt.tell((result, calc_heuristic()))
+report = opt.tell((result, get_efficiency()))
 ```
 
 Result handling:
 
 - `opt.tell((a, b, c))` ranks results lexicographically with higher = better
 - the first item is the main objective, later items are tie-breakers
-- default is maximization, flip the sign for loss objectives
+- maximization is the default, flip the sign for loss objectives
 
 
 !!! question
