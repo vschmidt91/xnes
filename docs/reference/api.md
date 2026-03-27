@@ -4,8 +4,6 @@
 
 ::: leitwerk.OptimizerSession
 
-::: leitwerk.OptimizerSettings
-
 ::: leitwerk.OptimizerReport
 
 ::: leitwerk.Parameter

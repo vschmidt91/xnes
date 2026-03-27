@@ -30,22 +30,6 @@ def test_optimizer_improves_sphere() -> None:
     assert final < 0.15 * initial
 
 
-def test_optimizer_improves_sphere_in_minimization_mode() -> None:
-    def sphere(x: np.ndarray) -> float:
-        return float(np.sum(x**2))
-
-    initial, final = _run_function_optimization(
-        sphere,
-        init_mean=3.0,
-        init_scale=2.0,
-        dim=4,
-        batch_size=28,
-        evaluations=1400,
-        minimize=True,
-    )
-    assert final < 0.15 * initial
-
-
 def test_restart_on_conditioning_failure() -> None:
     schema = _make_identity_schema("RestartSchema", x=(0.0, 1.0), y=(0.0, 1.0))
     optimizer = _initialized_optimizer(schema, batch_size=10)

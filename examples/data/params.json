@@ -1,12 +1,4 @@
 {
-  "settings": {
-    "batch_size": null,
-    "seed": null,
-    "minimize": null,
-    "eta_mean": null,
-    "eta_scale_global": null,
-    "eta_scale_shape": null
-  },
   "status": {
     "num_samples": 140,
     "num_batches": 23,

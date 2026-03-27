@@ -6,7 +6,7 @@ from typing import Annotated, Any, cast
 
 import numpy as np
 import pytest
-from leitwerk import Optimizer, OptimizerSettings, Parameter
+from leitwerk import Optimizer, Parameter
 from leitwerk.state import JSONObject
 
 _TEST_SEED = 12345
@@ -36,9 +36,8 @@ def _initialized_optimizer(
     schema: type[Any] | Mapping[str, object],
     *,
     batch_size: int,
-    minimize: bool | None = None,
 ) -> Optimizer[Any]:
-    return _optimizer(schema, batch_size=batch_size, minimize=minimize)
+    return _optimizer(schema, batch_size=batch_size)
 
 
 def _optimizer(
@@ -46,22 +45,8 @@ def _optimizer(
     *,
     batch_size: int | None = None,
     seed: int | None = _TEST_SEED,
-    minimize: bool | None = None,
-    eta_mean: float | None = None,
-    eta_scale_global: float | None = None,
-    eta_scale_shape: float | None = None,
 ) -> Optimizer[Any]:
-    return Optimizer(
-        schema,
-        settings=OptimizerSettings(
-            batch_size=batch_size,
-            seed=seed,
-            minimize=minimize,
-            eta_mean=eta_mean,
-            eta_scale_global=eta_scale_global,
-            eta_scale_shape=eta_scale_shape,
-        ),
-    )
+    return Optimizer(schema, batch_size=batch_size, seed=seed)
 
 
 def _initialized_state(schema: type[Any] | Mapping[str, object], *, batch_size: int) -> JSONObject:
@@ -140,26 +125,6 @@ def _read_pending_context_matches(state: object) -> dict[str, int]:
     return {str(context): int(sample_idx) for context, sample_idx in pending_context_matches_json.items()}
 
 
-def _read_settings(state: object) -> dict[str, int | float | bool | None]:
-    assert isinstance(state, dict)
-    settings_json = state["settings"]
-    assert isinstance(settings_json, Mapping)
-    batch_size = settings_json["batch_size"]
-    seed = settings_json["seed"]
-    minimize = settings_json["minimize"]
-    eta_mean = settings_json["eta_mean"]
-    eta_scale_global = settings_json["eta_scale_global"]
-    eta_scale_shape = settings_json["eta_scale_shape"]
-    return {
-        "batch_size": None if batch_size is None else int(batch_size),
-        "seed": None if seed is None else int(seed),
-        "minimize": None if minimize is None else bool(minimize),
-        "eta_mean": None if eta_mean is None else float(eta_mean),
-        "eta_scale_global": None if eta_scale_global is None else float(eta_scale_global),
-        "eta_scale_shape": None if eta_scale_shape is None else float(eta_scale_shape),
-    }
-
-
 def _read_status(state: object) -> dict[str, int | float]:
     assert isinstance(state, dict)
     status_json = state["status"]
@@ -183,20 +148,6 @@ def _assert_same_status(actual: dict[str, int | float], expected: dict[str, int 
         assert actual[key] == pytest.approx(expected[key])
 
 
-def _assert_same_settings(
-    actual: dict[str, int | float | bool | None],
-    expected: dict[str, int | float | bool | None],
-) -> None:
-    assert actual.keys() == expected.keys()
-    for key in ("batch_size", "seed", "minimize"):
-        assert actual[key] == expected[key]
-    for key in ("eta_mean", "eta_scale_global", "eta_scale_shape"):
-        if expected[key] is None:
-            assert actual[key] is None
-        else:
-            assert actual[key] == pytest.approx(expected[key])
-
-
 def _softplus_inverse(value: float) -> float:
     return float(value + np.log1p(-np.exp(-value)))
 
@@ -209,13 +160,12 @@ def _run_function_optimization(
     dim: int,
     batch_size: int,
     evaluations: int,
-    minimize: bool = False,
 ) -> tuple[float, float]:
     schema = _make_identity_schema(
         "SphereParams",
         **{f"x{i}": (init_mean, init_scale) for i in range(dim)},
     )
-    optimizer = _optimizer(schema, batch_size=batch_size, minimize=minimize)
+    optimizer = _optimizer(schema, batch_size=batch_size)
 
     initial_mean = _read_mean(optimizer.save())
     initial_value = objective(initial_mean)
@@ -223,8 +173,7 @@ def _run_function_optimization(
     for _ in range(evaluations):
         params = optimizer.ask()
         point = np.array([getattr(params, f"x{i}") for i in range(dim)], dtype=float)
-        result = objective(point) if minimize else -objective(point)
-        optimizer.tell(result)
+        optimizer.tell(-objective(point))
 
     final_mean = _read_mean(optimizer.save())
     final_value = objective(final_mean)

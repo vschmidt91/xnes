@@ -12,37 +12,10 @@ import numpy as np
 from .schema import SchemaDiff
 from .schema.parser import parse_schema
 from .schema.spec import SchemaSpec
-from .state import JSONLike, JSONObject, merge_settings, restore_optimizer_state, serialize_optimizer_state
+from .state import JSONLike, JSONObject, restore_optimizer_state, serialize_optimizer_state
 from .xnes import XNES, XNESStatus
 
 T = TypeVar("T")
-
-
-@dataclass(frozen=True, slots=True)
-class OptimizerSettings:
-    """Runtime optimizer configuration.
-
-    Attributes:
-        batch_size: Optional batch-size override. `None` keeps the persisted
-            baseline or the built-in xNES sample-count default.
-        seed: Optional root seed override used to deterministically derive each
-            freshly sampled batch.
-        minimize: Optional ranking-direction override. `None` keeps the
-            persisted baseline and falls back to maximization on fresh runs.
-        eta_mean: Optional mean learning-rate override. `None` keeps the
-            persisted baseline or the xNES default.
-        eta_scale_global: Optional global-scale learning-rate override. `None`
-            keeps the persisted baseline or the xNES default.
-        eta_scale_shape: Optional shape learning-rate override. `None` keeps
-            the persisted baseline or the xNES default.
-    """
-
-    batch_size: int | None = None
-    seed: int | None = None
-    minimize: bool | None = None
-    eta_mean: float | None = None
-    eta_scale_global: float | None = None
-    eta_scale_shape: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,10 +127,11 @@ class Optimizer(Generic[T]):
     def __init__(
         self,
         schema: type[T] | Mapping[str, object],
-        settings: OptimizerSettings | None = None,
+        batch_size: int | None = None,
+        seed: int | None = None,
     ) -> None:
-        self._settings_override = settings if settings is not None else OptimizerSettings()
-        self._settings_baseline = self._settings_override
+        self._batch_size = batch_size
+        self._seed = seed
         self._schema: SchemaSpec[T] = cast(SchemaSpec[T], parse_schema(schema))
         self._batch_state = _BatchState()
         self._pending_reservation: SampleReservation | None = None
@@ -170,7 +144,6 @@ class Optimizer(Generic[T]):
     def save(self) -> JSONObject:
         """Serialize the current optimizer state into a JSON-compatible mapping."""
         return serialize_optimizer_state(
-            settings=self._settings_baseline,
             status=self._status(),
             mean=self._xnes.mean,
             scale=self._xnes.scale,
@@ -183,8 +156,7 @@ class Optimizer(Generic[T]):
     def load(self, state: JSONObject) -> SchemaDiff:
         """Restore optimizer state from a previous snapshot."""
         self._pending_reservation = None
-        restored = restore_optimizer_state(state, cast(SchemaSpec[object], self._schema), self._settings_override)
-        self._settings_baseline = restored.settings
+        restored = restore_optimizer_state(state, cast(SchemaSpec[object], self._schema))
         self._xnes = XNES(restored.mean, restored.scale)
         self._num_samples = restored.num_samples
         self._num_batches = restored.num_batches
@@ -234,9 +206,14 @@ class Optimizer(Generic[T]):
         )
 
     @property
-    def settings(self) -> OptimizerSettings:
-        """Effective runtime optimizer configuration with sparse overrides merged."""
-        return merge_settings(self._settings_baseline, self._settings_override)
+    def batch_size(self) -> int | None:
+        """Configured sample count for the next freshly drawn batch."""
+        return self._batch_size
+
+    @property
+    def seed(self) -> int | None:
+        """Configured root seed used for future batch sampling."""
+        return self._seed
 
     def tell(self, result: float | Sequence[float] | np.ndarray) -> OptimizerReport:
         """Submit the objective result for the pending sample."""
@@ -262,29 +239,19 @@ class Optimizer(Generic[T]):
         return self._schema.build_params(sample)
 
     def _sample_batch(self) -> None:
-        settings = self.settings
-        batch = self._xnes.sample(settings.batch_size, self._batch_rng())
+        batch = self._xnes.sample(self._batch_size, self._batch_rng())
         self._pending_reservation = None
         self._batch_state.reset(batch)
 
     def _batch_rng(self) -> np.random.Generator:
-        seed = self.settings.seed
-        if seed is None:
+        if self._seed is None:
             return np.random.Generator(np.random.PCG64())
-        batch_seed = np.random.SeedSequence(int(seed), spawn_key=(self._num_batches,))
+        batch_seed = np.random.SeedSequence(int(self._seed), spawn_key=(self._num_batches,))
         return np.random.Generator(np.random.PCG64(batch_seed))
 
     def _complete_batch(self) -> tuple[XNESStatus, bool]:
         self._num_batches += 1
-        settings = self.settings
-        tell_kwargs: dict[str, float] = {}
-        if settings.eta_mean is not None:
-            tell_kwargs["eta_mean"] = settings.eta_mean
-        if settings.eta_scale_global is not None:
-            tell_kwargs["eta_scale_global"] = settings.eta_scale_global
-        if settings.eta_scale_shape is not None:
-            tell_kwargs["eta_scale_shape"] = settings.eta_scale_shape
-        status = self._xnes.update(self._batch_state.batch, self._ranking(), **tell_kwargs)
+        status = self._xnes.update(self._batch_state.batch, self._ranking())
         restarted = status.is_terminal
         if restarted:
             self._num_restarts += 1
@@ -324,9 +291,7 @@ class Optimizer(Generic[T]):
     def _ranking(self) -> list[int]:
         assert self._batch_state.is_complete()
         results = [cast(tuple[float, ...], item) for item in self._batch_state.results]
-        settings = self.settings
-        minimize = settings.minimize if settings.minimize is not None else False
-        return sorted(range(len(results)), key=lambda idx: results[idx], reverse=not minimize)
+        return sorted(range(len(results)), key=lambda idx: results[idx], reverse=True)
 
     def _require_idle(self, action: str) -> None:
         if self._pending_reservation is not None:

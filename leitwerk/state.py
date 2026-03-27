@@ -3,16 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass
-from typing import TYPE_CHECKING, cast
+from dataclasses import dataclass
+from typing import cast
 
 import numpy as np
 
 from .schema.parameter import Parameter
 from .schema.spec import SchemaDiff, SchemaSpec
-
-if TYPE_CHECKING:
-    from .optimizer import OptimizerSettings
 
 JSONScalar = str | int | float | bool | None
 JSONObject = dict[str, "JSONValue"]
@@ -23,7 +20,6 @@ JSONLike = JSONLikeObject | Sequence["JSONLike"] | JSONScalar
 
 @dataclass(frozen=True, slots=True)
 class RestoredOptimizerState:
-    settings: OptimizerSettings
     schema_diff: SchemaDiff
     mean: np.ndarray
     scale: np.ndarray
@@ -37,7 +33,6 @@ class RestoredOptimizerState:
 
 def serialize_optimizer_state(
     *,
-    settings: OptimizerSettings,
     status: Mapping[str, JSONValue],
     mean: np.ndarray,
     scale: np.ndarray,
@@ -48,7 +43,6 @@ def serialize_optimizer_state(
 ) -> JSONObject:
     """Serialize optimizer state into a JSON-compatible mapping."""
     return {
-        "settings": asdict(settings),
         "status": dict(status),
         "mean": mean.tolist(),
         "scale": scale.tolist(),
@@ -62,14 +56,9 @@ def serialize_optimizer_state(
 def restore_optimizer_state(
     state: JSONObject,
     schema: SchemaSpec[object],
-    settings_override: OptimizerSettings,
 ) -> RestoredOptimizerState:
     """Deserialize and reconcile optimizer state against the current schema."""
     state_obj = _require_object(state, "checkpoint state")
-    settings = merge_settings(
-        _deserialize_settings(_require_field(state_obj, "settings")),
-        settings_override,
-    )
     schema_json = _require_object(_require_field(state_obj, "schema"), "checkpoint schema")
     saved_schema = _deserialize_schema(schema_json)
     saved_names = list(saved_schema)
@@ -87,7 +76,6 @@ def restore_optimizer_state(
         batch = _reconcile_batch_state(saved_names, schema_diff, batch, results, schema)
 
     return RestoredOptimizerState(
-        settings=settings,
         schema_diff=schema_diff,
         mean=mean,
         scale=scale,
@@ -97,29 +85,6 @@ def restore_optimizer_state(
         num_samples=num_samples,
         num_batches=num_batches,
         num_restarts=num_restarts,
-    )
-
-
-def merge_settings(baseline: OptimizerSettings, override: OptimizerSettings) -> OptimizerSettings:
-    """Merge sparse runtime overrides into a persisted baseline."""
-    merged = asdict(baseline)
-    for key, value in asdict(override).items():
-        if value is not None:
-            merged[key] = value
-    return type(baseline)(**merged)
-
-
-def _deserialize_settings(settings_json: object) -> OptimizerSettings:
-    from .optimizer import OptimizerSettings
-
-    settings = cast(Mapping[str, JSONScalar], _require_object(settings_json, "checkpoint settings"))
-    return OptimizerSettings(
-        batch_size=cast(int | None, settings.get("batch_size")),
-        seed=cast(int | None, settings.get("seed")),
-        minimize=cast(bool | None, settings.get("minimize")),
-        eta_mean=cast(float | None, settings.get("eta_mean")),
-        eta_scale_global=cast(float | None, settings.get("eta_scale_global")),
-        eta_scale_shape=cast(float | None, settings.get("eta_scale_shape")),
     )
 
 

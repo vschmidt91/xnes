@@ -11,7 +11,7 @@ from typing import Generic, TypeVar, cast
 
 import numpy as np
 
-from .optimizer import Optimizer, OptimizerReport, OptimizerSettings
+from .optimizer import Optimizer, OptimizerReport
 from .schema import SchemaDiff
 from .state import JSONLike, JSONObject
 
@@ -25,11 +25,12 @@ class OptimizerSession(Generic[T]):
         self,
         path: str | Path,
         schema: type[T] | Mapping[str, object],
-        settings: OptimizerSettings | None = None,
+        batch_size: int | None = None,
+        seed: int | None = None,
     ) -> None:
 
         session_path = Path(path)
-        optimizer = Optimizer(schema, settings=settings)
+        optimizer = Optimizer(schema, batch_size=batch_size, seed=seed)
 
         restored = False
         schema_diff = _fresh_schema_diff(cast(Mapping[str, object], optimizer.save()["schema"]))
@@ -58,9 +59,14 @@ class OptimizerSession(Generic[T]):
         return self._dirty
 
     @property
-    def settings(self) -> OptimizerSettings:
-        """Effective runtime optimizer configuration."""
-        return self._optimizer.settings
+    def batch_size(self) -> int | None:
+        """Configured sample count for the next freshly drawn batch."""
+        return self._optimizer.batch_size
+
+    @property
+    def seed(self) -> int | None:
+        """Configured root seed used for future batch sampling."""
+        return self._optimizer.seed
 
     @property
     def schema_diff(self) -> SchemaDiff:

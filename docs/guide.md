@@ -76,23 +76,18 @@ If you are using other means of persistence, you can optionally restore it from 
 schema_diff = opt.load(state)
 ```
 
-Both `Optimizer` and `OptimizerSession` can be configured with `OptimizerSettings`:
+Both `Optimizer` and `OptimizerSession` accept `batch_size` and `seed` directly:
 
 ```py
-from leitwerk import Optimizer, OptimizerSettings
+from leitwerk import Optimizer
 
-settings = OptimizerSettings(batch_size=10)
-opt = Optimizer(MyParams, settings)
+opt = Optimizer(MyParams, batch_size=10, seed=1234)
 ```
 
-Available settings:
+Available constructor arguments:
 
 - `batch_size`: number of samples per batch / optimizer step
-- `minimize`: rank lower results as better
-- `seed`
-- `eta_mean`, `eta_scale_global`, `eta_scale_shape`: xNES learning rates
-
-If provided, settings are persisted as future fallback.
+- `seed`: root seed used to deterministically derive future batches
 
 ## 3. Sample a candidate
 
@@ -146,7 +141,7 @@ Result handling:
 
 - `opt.tell((a, b, c))` ranks results lexicographically with higher = better
 - the first item is the main objective, later items are tie-breakers
-- for loss objectives, either set `OptimizerSettings(minimize=True)` or flip the sign for those items
+- maximize by default, flip the sign for loss objectives
 
 
 !!! info

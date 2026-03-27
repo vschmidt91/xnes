@@ -43,7 +43,7 @@ The core API of `leitwerk` is an ask/tell black-box optimizer:
 from dataclasses import dataclass
 from typing import Annotated
 
-from leitwerk import Optimizer, OptimizerSettings, Parameter
+from leitwerk import Optimizer, Parameter
 
 @dataclass
 class Params:

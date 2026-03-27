@@ -4,12 +4,10 @@ from typing import cast
 
 import numpy as np
 import pytest
-from leitwerk import Optimizer, OptimizerSettings, SchemaDiff
+from leitwerk import Optimizer, SchemaDiff
 from leitwerk.state import JSONObject
 
 from ._optimizer_helpers import (
-    _TEST_SEED,
-    _assert_same_settings,
     _assert_same_status,
     _initialized_optimizer,
     _initialized_state,
@@ -20,7 +18,6 @@ from ._optimizer_helpers import (
     _read_results,
     _read_scale,
     _read_schema_names,
-    _read_settings,
     _read_status,
 )
 
@@ -47,7 +44,6 @@ def test_state_save_load_roundtrip() -> None:
     assert np.allclose(_read_scale(loaded), _read_scale(state)[np.ix_(permutation, permutation)])
     assert _read_results(loaded) == _read_results(state)
     _assert_same_status(_read_status(loaded), _read_status(state))
-    _assert_same_settings(_read_settings(loaded), _read_settings(state))
 
 
 def test_status_block_exposes_basic_diagnostics_and_roundtrips() -> None:
@@ -63,14 +59,7 @@ def test_status_block_exposes_basic_diagnostics_and_roundtrips() -> None:
     assert initial_status["scale_global"] == pytest.approx(1.5)
     assert initial_status["batch_progress"] == pytest.approx(0.0)
     assert initial_status["batch_size"] == 4
-
-    initial_settings = _read_settings(optimizer.save())
-    assert initial_settings["batch_size"] == 4
-    assert initial_settings["seed"] == _TEST_SEED
-    assert initial_settings["minimize"] is None
-    assert initial_settings["eta_mean"] is None
-    assert initial_settings["eta_scale_global"] is None
-    assert initial_settings["eta_scale_shape"] is None
+    assert "settings" not in optimizer.save()
 
     params = optimizer.ask()
     optimizer.tell(-(params.alpha**2 + params.beta**2))
@@ -89,7 +78,6 @@ def test_status_block_exposes_basic_diagnostics_and_roundtrips() -> None:
     restored = _initialized_optimizer(schema, batch_size=4)
     restored.load(progressed_state)
     _assert_same_status(_read_status(restored.save()), progressed_status)
-    _assert_same_settings(_read_settings(restored.save()), _read_settings(progressed_state))
 
 
 def test_load_rejects_nonfinite_mean() -> None:
@@ -194,115 +182,30 @@ def test_load_discards_unsaved_local_progress_at_idle_boundary() -> None:
     assert np.allclose(_read_batch(restored_state), _read_batch(initial_state))
 
 
-def test_persisted_settings_become_baseline_when_no_runtime_override_is_supplied() -> None:
+def test_runtime_batch_size_and_seed_do_not_roundtrip_through_state() -> None:
     schema = _make_identity_schema("RuntimeConfig", x=(4.0, 2.0))
-    opt_a = _optimizer(
-        schema,
-        batch_size=14,
-        seed=101,
-        minimize=True,
-        eta_mean=0.9,
-        eta_scale_global=0.7,
-        eta_scale_shape=0.2,
-    )
+    baseline = _optimizer(schema, batch_size=6, seed=101)
 
-    for _ in range(20):
-        params = opt_a.ask()
-        opt_a.tell(params.x**2)
+    for _ in range(4):
+        params = baseline.ask()
+        baseline.tell(-(params.x**2))
 
-    state = opt_a.save()
-    assert isinstance(state, dict)
-    assert _read_settings(state) == {
-        "batch_size": 14,
-        "seed": 101,
-        "minimize": True,
-        "eta_mean": 0.9,
-        "eta_scale_global": 0.7,
-        "eta_scale_shape": 0.2,
-    }
-
-    opt_b = Optimizer(schema)
-    opt_b.load(state)
-    assert opt_b.settings == OptimizerSettings(
-        batch_size=14,
-        seed=101,
-        minimize=True,
-        eta_mean=0.9,
-        eta_scale_global=0.7,
-        eta_scale_shape=0.2,
-    )
-    assert _read_settings(opt_b.save()) == _read_settings(state)
-
-
-def test_runtime_settings_override_persisted_baseline_and_rewrites_it() -> None:
-    schema = _make_identity_schema("RuntimeOverrides", x=(4.0, 2.0))
-    baseline = _optimizer(
-        schema,
-        batch_size=14,
-        seed=101,
-        minimize=True,
-        eta_mean=0.9,
-        eta_scale_global=0.7,
-        eta_scale_shape=0.2,
-    )
     state = baseline.save()
+    assert isinstance(state, dict)
+    assert "settings" not in state
+    assert _read_status(state)["batch_size"] == 6
 
-    overridden = Optimizer(
-        schema,
-        settings=OptimizerSettings(
-            batch_size=4,
-            seed=202,
-            minimize=False,
-            eta_scale_global=0.3,
-        ),
-    )
-    overridden.load(state)
+    restored = Optimizer(schema, batch_size=4, seed=202)
+    restored.load(state)
+    assert restored.batch_size == 4
+    assert restored.seed == 202
+    assert _read_status(restored.save())["batch_size"] == 6
 
-    assert overridden.settings == OptimizerSettings(
-        batch_size=4,
-        seed=202,
-        minimize=False,
-        eta_mean=0.9,
-        eta_scale_global=0.3,
-        eta_scale_shape=0.2,
-    )
-    assert _read_settings(overridden.save()) == {
-        "batch_size": 4,
-        "seed": 202,
-        "minimize": False,
-        "eta_mean": 0.9,
-        "eta_scale_global": 0.3,
-        "eta_scale_shape": 0.2,
-    }
+    for _ in range(2):
+        params = restored.ask()
+        restored.tell(-(params.x**2))
 
-    restored = Optimizer(schema)
-    restored.load(overridden.save())
-    assert restored.settings == overridden.settings
-
-
-def test_load_allows_switching_optimization_direction_mid_batch() -> None:
-    schema = _make_identity_schema("SwitchDirection", x=(0.0, 1.0))
-    base = _optimizer(schema, batch_size=4, minimize=True)
-
-    first_params = base.ask()
-    base.tell(first_params.x)
-    state = base.save()
-    saved_results = _read_results(state)
-    assert [idx for idx, result in enumerate(saved_results) if result is not None] == [0]
-    assert saved_results[0] == pytest.approx((first_params.x,))
-
-    minimizing = _optimizer(schema, batch_size=4, minimize=True)
-    maximizing = _optimizer(schema, batch_size=4, minimize=False)
-    minimizing.load(state)
-    maximizing.load(state)
-
-    for optimizer in (minimizing, maximizing):
-        for _ in range(3):
-            params = optimizer.ask()
-            optimizer.tell(params.x)
-
-    assert minimizing.mean.x < 0.0
-    assert maximizing.mean.x > 0.0
+    assert _read_status(restored.save())["batch_size"] == 4
 
 
 def test_save_load_preserves_optimizer_state() -> None:
