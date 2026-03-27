@@ -7,7 +7,7 @@
   <em>Tune your magic numbers with stochastic optimization.</em>
 </p>
 
-`leitwerk` is a schema-based evolutionary optimizer for long-running training loops. It comes with:
+`leitwerk` is a schema-based evolutionary optimizer for long-running training loops. It offers:
 
 - parameters as plain dataclasses in your code
 - JSON checkpoints you can inspect and resume
