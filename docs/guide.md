@@ -79,7 +79,7 @@ If you are using other means of persistence, you can optionally restore it from 
 schema_diff = opt.load(state)
 ```
 
-Both `Optimizer` and `OptimizerSession` accept `batch_size` and `seed` directly:
+Both `Optimizer` and `OptimizerSession` accept additional constructor arguments:
 
 ```py
 from leitwerk import Optimizer
@@ -87,10 +87,10 @@ from leitwerk import Optimizer
 opt = Optimizer(MyParams, batch_size=10, seed=1234)
 ```
 
-Available constructor arguments:
+Available settings:
 
 - `batch_size`: number of samples per batch / optimizer step
-- `seed`: root seed used to deterministically derive future batches
+- `seed`: for reproducible runs
 
 ## 3. Sample a Candidate
 
