@@ -127,6 +127,22 @@ def test_xnes_linear_invariance_with_stress_values() -> None:
         assert np.allclose(xnes_y.scale, transform @ xnes_x.scale, rtol=1e-10, atol=1e-12)
 
 
+def test_xnes_converges_in_one_dimension_on_quadratic_objective() -> None:
+    xnes = XNES(np.array([5.0]), np.array([[4.0]]))
+    rng = np.random.default_rng(7)
+
+    for _ in range(40):
+        z = xnes.sample(12, rng)
+        x = xnes.transform(z)
+        ranking = _ranking(-(x[0] ** 2))
+        status = xnes.update(z, ranking)
+        assert status is XNESStatus.OK
+
+    assert abs(float(xnes.mean[0])) < 1e-3
+    assert float(xnes.scale_global) < 1e-2
+    assert np.isclose(float(xnes.scale[0, 0]), float(xnes.scale_global))
+
+
 def test_xnes_eta_scale_shape_scales_dimension_dependent_shape_rate() -> None:
     xnes = XNES(np.zeros(3), np.eye(3))
 

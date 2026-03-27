@@ -126,8 +126,8 @@ class XNES:
         samples: np.ndarray,
         ranking: list[int],
         eta_mean: float = 1.0,
-        eta_scale_global: float = 0.5,
-        eta_scale_shape: float = 0.25,
+        eta_scale_global: float = 1.0,
+        eta_scale_shape: float = 1.0,
         eps: float = 1e-10,
     ) -> XNESStatus:
         """Apply one xNES update from ranked standardized samples.

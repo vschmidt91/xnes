@@ -33,60 +33,51 @@ For a development setup with tests, docs, benchmarks and `python-sc2`:
 pip install -e .[dev,docs,benchmark]
 ```
 
-For the StarCraft II example, the game itself or Docker is required additionally.
+## Minimal Example
 
-## Example - Function Minimization
-
-The core API of `leitwerk` is an ask/tell black-box optimizer:
+At base level, `leitwerk` is a sequential ask/tell function maximizer:
 
 ```py
-from dataclasses import dataclass
-from typing import Annotated
-
 from leitwerk import Optimizer, Parameter
 
-@dataclass
-class Params:
-    a: Annotated[float, Parameter()]
-    b: Annotated[float, Parameter()]
-
-opt = Optimizer(Params)
-for _ in range(1000):
-    x = opt.ask()
-    fx = -(x.a - 1) ** 2 - (x.b - 2) ** 2
+opt = Optimizer({"x": Parameter()})
+for _ in range(100):
+    x = opt.ask()["x"]
+    fx = -(x - 1)**2
     opt.tell(fx)
 ```
 
 ```pycon
 >>> opt.mean
-Params(a=1.00000000015942, b=2.000000000284411)
+{'x': 1.0007710964577097}
 ```
+
+What happens between `ask` and `tell` is a black box for `leitwerk` - it can be a simple one-liner or a complex simulation.
 
 ## Example - StarCraft II Bot
 
 For a real training loop with file persistence, see: [examples/train_sc2_bot.py](examples/train_sc2_bot.py)
 
-What it does:
+- a simple worker rush bot with parameters `simulation_time` and `retreat_threshold`
+- runs games continually against the built-in AI
+- scores each game using win/loss and a combat heuristic
+- persists state with `OptimizerSession` and plot results
 
-- set up a simple worker rush bot with parameters `simulation_time` and `retreat_threshold`
-- run games continually against the built-in AI
-- score each game using win/loss and a combat heuristic
-- persist state with `OptimizerSession` and plot results
-
-Run it directly if you want to observe the games:
+Run it directly if you have StarCraft II installed and want to observe the games:
 
 ```sh
 python examples/train_sc2_bot.py
 ```
 
-Alternatively, the headless docker setup runs a bit faster:
+Alternatively, use the headless docker setup:
 
 ```sh
 cd examples
 docker compose up --build
 ```
 
-On the first run, this will download a 3.8GB installation of SC2 for Linux, so it can take a few while.
+On the first run, this will download a 3.8GB installation of SC2 into the container.
+Afterward, it will run significantly faster than the rendered game on the host.
 
 ### Training Results
 
@@ -100,8 +91,8 @@ The example saves progress in `examples/data` after each game:
   <img src="docs/example_plot.png" alt="Leitwerk">
 </p>
 
-Initially, it explores samples from a wide range with a winrate of about 50-80%.
-After about 100 games, the optimizer settles on stable values with perfect winrate.
+Initially, it explores a wide range of values before narrowing the search.
+After about 100 games, it achieves a perfect winrate again the ingame AI.
 
 ## Developer Commands
 
