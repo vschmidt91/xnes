@@ -210,7 +210,6 @@ __marimo__/
 /notebooks/exdata/
 /notebooks/ppdata/
 
-/data/
-/resources/*.pdf
+/examples/data/
 /ideas/
 AGENTS.md
