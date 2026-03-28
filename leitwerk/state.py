@@ -44,11 +44,11 @@ def serialize_optimizer_state(
     """Serialize optimizer state into a JSON-compatible mapping."""
     return {
         "status": dict(status),
-        "mean": mean.tolist(),
-        "scale": scale.tolist(),
-        "schema": {name: dict(spec) for name, spec in schema_state.items()},
         "results": _serialize_results(results),
         "pending_context_matches": dict(pending_context_matches),
+        "schema": {name: dict(spec) for name, spec in schema_state.items()},
+        "mean": mean.tolist(),
+        "scale": scale.tolist(),
         "batch": batch.tolist(),
     }
 
