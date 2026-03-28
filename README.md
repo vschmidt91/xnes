@@ -42,18 +42,24 @@ The StarCraft II example also requires the game itself or Docker to be installed
 At base level, `leitwerk` is a sequential ask/tell function maximizer:
 
 ```py
-from leitwerk import Optimizer, Parameter
+from dataclasses import dataclass
 
-opt = Optimizer({"x": Parameter()})
+from leitwerk import Optimizer, parameter
+
+@dataclass
+class Params:
+    x: float = parameter()
+
+opt = Optimizer(Params)
 for _ in range(100):
-    x = opt.ask()["x"]
+    x = opt.ask().x
     fx = -(x - 1)**2
     opt.tell(fx)
 ```
 
 ```pycon
 >>> opt.mean
-{'x': 1.0007710964577097}
+Params(x=1.0000396079866551)
 ```
 
 Everything else is wrapping for easier representation, bounds, typing and persistence.
