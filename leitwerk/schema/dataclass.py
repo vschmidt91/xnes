@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import fields, is_dataclass
+from dataclasses import Field, fields, is_dataclass
 from typing import Annotated, Any, cast, get_args, get_origin, get_type_hints
 
-from .parameter import Parameter
+from .parameter import PARAMETER_METADATA_KEY, Parameter
 from .parser import build_field_spec, build_scalar_builder, path_name
 from .spec import BuildFn, FieldSpec, SchemaPath, SchemaSpec, T
 
@@ -30,8 +30,8 @@ def _parse_dataclass_type(model_type: type[Any], prefix: SchemaPath) -> tuple[tu
     parsed_fields = tuple(
         _parse_dataclass_field(
             type_hints.get(field.name),
+            field,
             prefix + (field.name,),
-            field.init,
         )
         for field in dataclass_fields
     )
@@ -48,20 +48,38 @@ def _parse_dataclass_type(model_type: type[Any], prefix: SchemaPath) -> tuple[tu
     return field_specs, instantiate
 
 
-def _parse_dataclass_field(annotation: Any, path: SchemaPath, init: bool) -> tuple[tuple[FieldSpec, ...], BuildFn]:
+def _parse_dataclass_field(
+    annotation: Any,
+    dataclass_field: Field[Any],
+    path: SchemaPath,
+) -> tuple[tuple[FieldSpec, ...], BuildFn]:
     name = path_name(path)
-    if not init:
+    if not dataclass_field.init:
         msg = f"leitwerk schema field '{name}' must be init=True"
         raise TypeError(msg)
 
     if get_origin(annotation) is Annotated:
         return _parse_leaf_field(annotation, path)
 
+    field_parameter = _field_parameter(dataclass_field)
+    if field_parameter is not None:
+        return _parse_parameter_field(annotation, field_parameter, path)
+
     if isinstance(annotation, type) and is_dataclass(annotation):
         return _parse_dataclass_type(annotation, path)
 
-    msg = f"leitwerk schema field '{name}' must be annotated as Annotated[float, Parameter(...)] or be a dataclass type"
+    msg = (
+        f"leitwerk schema field '{name}' must be declared as float = parameter(...), "
+        "annotated as Annotated[float, Parameter(...)], or be a dataclass type"
+    )
     raise TypeError(msg)
+
+
+def _field_parameter(parameter_field: Field[Any]) -> Parameter | None:
+    value = parameter_field.metadata.get(PARAMETER_METADATA_KEY)
+    if isinstance(value, Parameter):
+        return value
+    return None
 
 
 def _parse_leaf_field(annotation: Any, path: SchemaPath) -> tuple[tuple[FieldSpec, ...], BuildFn]:
@@ -77,4 +95,18 @@ def _parse_leaf_field(annotation: Any, path: SchemaPath) -> tuple[tuple[FieldSpe
         raise TypeError(msg)
 
     field_spec = build_field_spec(path, parameters[0])
+    return (field_spec,), build_scalar_builder(path)
+
+
+def _parse_parameter_field(
+    annotation: Any,
+    field_parameter: Parameter,
+    path: SchemaPath,
+) -> tuple[tuple[FieldSpec, ...], BuildFn]:
+    name = path_name(path)
+    if annotation is not float:
+        msg = f"leitwerk schema field '{name}' must be annotated as float when using parameter(...)"
+        raise TypeError(msg)
+
+    field_spec = build_field_spec(path, field_parameter)
     return (field_spec,), build_scalar_builder(path)

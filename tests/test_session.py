@@ -3,11 +3,11 @@ from __future__ import annotations
 import json
 from dataclasses import make_dataclass
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Any
 
 import leitwerk.session as session_module
 import pytest
-from leitwerk import OptimizerSession, Parameter, SchemaDiff
+from leitwerk import OptimizerSession, SchemaDiff, parameter
 
 from ._optimizer_helpers import _TEST_SEED
 
@@ -15,10 +15,7 @@ from ._optimizer_helpers import _TEST_SEED
 def _make_schema(schema_name: str, **parameters: tuple[float, float]) -> type[Any]:
     return make_dataclass(
         schema_name,
-        [
-            (field_name, Annotated[float, Parameter(mean=mean, scale=scale)])
-            for field_name, (mean, scale) in parameters.items()
-        ],
+        [(field_name, float, parameter(mean=mean, scale=scale)) for field_name, (mean, scale) in parameters.items()],
         frozen=True,
         slots=True,
     )

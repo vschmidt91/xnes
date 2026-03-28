@@ -1,8 +1,7 @@
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated
 
-from leitwerk import OptimizerSession, Parameter
+from leitwerk import OptimizerSession, parameter
 from loguru import logger
 from sc2 import maps
 from sc2.bot_ai import BotAI
@@ -23,8 +22,8 @@ ENEMY_DIFFICULTY = Difficulty.VeryHard
 
 @dataclass
 class BotParams:
-    simulation_time: Annotated[float, Parameter(mean=1, min=0)]
-    retreat_threshold: Annotated[float, Parameter()]
+    simulation_time: float = parameter(mean=1, min=0)
+    retreat_threshold: float = parameter()
 
 
 class LearningBot(BotAI):

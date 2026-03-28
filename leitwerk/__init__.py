@@ -1,20 +1,19 @@
 """Public package interface for the schema-based xNES optimizer wrapper.
 
 Schemas may be dataclass trees whose optimized leaves are declared as
-`Annotated[float, Parameter(...)]`, or nested mappings whose leaves are
-`Parameter(...)` values.
+`float = parameter(...)` or `Annotated[float, Parameter(...)]`, or nested
+mappings whose leaves are `Parameter(...)` values.
 
 Example:
     ```python
     from dataclasses import dataclass
-    from typing import Annotated
 
-    from leitwerk import Optimizer, Parameter
+    from leitwerk import Optimizer, parameter
 
     @dataclass(frozen=True)
     class Params:
-        coeff: Annotated[float, Parameter(mean=1.0, scale=0.5, min=0.0)]
-        ratio: Annotated[float, Parameter(min=0.0, max=1.0)]
+        coeff: float = parameter(mean=1.0, scale=0.5, min=0.0)
+        ratio: float = parameter(min=0.0, max=1.0)
 
     opt = Optimizer(Params, batch_size=32)
 
@@ -29,7 +28,7 @@ Example:
 """
 
 from .optimizer import Optimizer, OptimizerReport
-from .schema import Parameter, SchemaDiff
+from .schema import Parameter, SchemaDiff, parameter
 from .session import OptimizerSession
 from .xnes import XNES, XNESStatus
 
@@ -39,6 +38,7 @@ __all__ = [
     "Parameter",
     "SchemaDiff",
     "OptimizerReport",
+    "parameter",
     "XNES",
     "XNESStatus",
 ]
